@@ -1,11 +1,11 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { File, Folder, FolderPlus, Pencil, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, FolderPlus, Pencil, Plus, Trash2 } from "lucide-react";
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes } from "react";
 import type { NodeApi } from "react-arborist";
 import { ListOuterElement, Tree } from "react-arborist";
 import { commands } from "../api";
-import type { AppSnapshot, ProjectDiagnostic, WorkspaceEntry } from "../types";
+import type { AppSnapshot, ProjectDiagnostic, WorkspaceEntry, WorkspaceLayoutState } from "../types";
 import { runSnapshotCommand } from "../store";
 import { THEME_LAYOUT, THEME_METRICS } from "../theme";
 
@@ -19,7 +19,7 @@ type TreeNode = {
 
 type ProjectFileKind = "default" | "project" | "setup" | "layout" | "fixture" | "patch" | "curve" | "gradient" | "effect" | "sequence" | "operator";
 
-export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
+export function ProjectTree({ snapshot, workspaceLayout, onWorkspaceLayoutChange }: { snapshot: AppSnapshot; workspaceLayout: WorkspaceLayoutState; onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void }) {
   const treeData = useMemo(
     () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
     [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]
@@ -29,7 +29,12 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
   const treeRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+  const workspaceLayoutRef = useRef(workspaceLayout);
   const [scrollbar, setScrollbar] = useState({ top: 0, height: 0, scrollable: false });
+
+  useEffect(() => {
+    workspaceLayoutRef.current = workspaceLayout;
+  }, [workspaceLayout]);
 
   const updateScrollbar = useCallback(() => {
     const tree = treeRef.current ?? treeShellRef.current?.querySelector<HTMLDivElement>(".project-tree-scroll-content") ?? null;
@@ -91,10 +96,20 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
           height={window.innerHeight - THEME_METRICS.projectTreeViewportInset}
           indent={THEME_METRICS.projectTreeIndent}
           rowHeight={THEME_METRICS.projectTreeRowHeight}
-          openByDefault
+          openByDefault={workspaceLayout.projectTreeExpandedPaths === null || workspaceLayout.projectTreeExpandedPaths === undefined}
+          initialOpenState={Object.fromEntries((workspaceLayout.projectTreeExpandedPaths ?? []).map((path) => [path, true]))}
           outerElementType={ProjectTreeScrollContent}
           onScroll={updateScrollbar}
-          onToggle={() => { window.requestAnimationFrame(updateScrollbar); }}
+          onToggle={(id) => {
+            const currentLayout = workspaceLayoutRef.current;
+            const expandedPaths = new Set(currentLayout.projectTreeExpandedPaths ?? treeDirectoryPaths(treeData));
+            if (expandedPaths.has(id)) expandedPaths.delete(id);
+            else expandedPaths.add(id);
+            const nextLayout = { ...currentLayout, projectTreeExpandedPaths: [...expandedPaths].sort() };
+            workspaceLayoutRef.current = nextLayout;
+            onWorkspaceLayoutChange(nextLayout);
+            window.requestAnimationFrame(updateScrollbar);
+          }}
           onActivate={(node) => {
             if (node.data.kind === "file") {
               void runSnapshotCommand(() => commands.openFile(node.data.id));
@@ -168,6 +183,15 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
   );
 }
 
+function treeDirectoryPaths(nodes: TreeNode[]): string[] {
+  const paths: string[] = [];
+  for (const node of nodes) {
+    if (node.kind !== "directory") continue;
+    paths.push(node.id, ...treeDirectoryPaths(node.children ?? []));
+  }
+  return paths;
+}
+
 const ProjectTreeScrollContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ProjectTreeScrollContent(
   { className, style, ...props },
   ref
@@ -194,12 +218,19 @@ function TreeRow({
           ref={dragHandle}
           className={treeRowClassName(node)}
           style={style}
-          onDoubleClick={() => {
-            if (node.data.kind === "directory") {
+          onClick={() => {
+            if (node.data.kind === "directory" && node.data.children?.length !== 0) {
               node.toggle();
             }
           }}
         >
+          <span className="tree-row-chevron" aria-hidden="true">
+            {node.data.kind === "directory" && node.data.children?.length !== 0
+              ? node.isOpen
+                ? <ChevronDown size={THEME_METRICS.iconSizeExtraSmall} />
+                : <ChevronRight size={THEME_METRICS.iconSizeExtraSmall} />
+              : null}
+          </span>
           <Icon size={THEME_METRICS.iconSizeCompact} />
           <span>{node.data.name}</span>
         </div>

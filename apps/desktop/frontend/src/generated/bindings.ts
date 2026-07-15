@@ -721,6 +721,7 @@ export type WorkspaceLayoutState = {
 	inspectorWidthPx: number,
 	projectTreeCollapsed: boolean,
 	inspectorCollapsed: boolean,
+	projectTreeExpandedPaths?: string[] | null,
 };
 
 /* Tauri Specta runtime */

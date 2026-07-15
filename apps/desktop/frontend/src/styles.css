@@ -656,6 +656,14 @@ button:focus-visible,
   font-size: var(--dawn-font-size-lg);
 }
 
+.tree-row-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dawn-icon-size-xs);
+  flex: 0 0 var(--dawn-icon-size-xs);
+}
+
 .tree-row:hover {
   background: var(--dawn-hover);
   color: var(--dawn-text-strong);

@@ -40,6 +40,8 @@ pub struct WorkspaceLayoutState {
     pub inspector_width_px: f64,
     pub project_tree_collapsed: bool,
     pub inspector_collapsed: bool,
+    #[serde(default)]
+    pub project_tree_expanded_paths: Option<Vec<String>>,
 }
 
 impl Default for WorkspaceLayoutState {
@@ -49,6 +51,7 @@ impl Default for WorkspaceLayoutState {
             inspector_width_px: 260.0,
             project_tree_collapsed: false,
             inspector_collapsed: false,
+            project_tree_expanded_paths: None,
         }
     }
 }

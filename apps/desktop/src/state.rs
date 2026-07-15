@@ -260,6 +260,7 @@ fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutStat
         inspector_width_px: clamp_f64(state.inspector_width_px, 240.0, 560.0),
         project_tree_collapsed: state.project_tree_collapsed,
         inspector_collapsed: state.inspector_collapsed,
+        project_tree_expanded_paths: state.project_tree_expanded_paths,
     }
 }
 

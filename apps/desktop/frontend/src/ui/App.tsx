@@ -81,6 +81,11 @@ function WorkspaceMain({ snapshot }: { snapshot: AppSnapshot }) {
     }, WORKSPACE_LAYOUT_SAVE_DELAY_MS);
   }, []);
 
+  const updateProjectTreeLayout = useCallback((next: WorkspaceLayoutState) => {
+    setWorkspaceLayout(next);
+    void runSnapshotCommand(() => commands.saveWorkspaceLayoutState(next));
+  }, []);
+
   const layout = workspaceLayout;
 
   return (
@@ -90,7 +95,7 @@ function WorkspaceMain({ snapshot }: { snapshot: AppSnapshot }) {
           className={`project-panel-shell ${layout.projectTreeCollapsed ? "collapsed" : ""}`}
           style={{ width: layout.projectTreeCollapsed ? THEME_METRICS.resizeHandleWidth : layout.projectTreeWidthPx }}
         >
-          {!layout.projectTreeCollapsed && <ProjectTree snapshot={snapshot} />}
+          {!layout.projectTreeCollapsed && <ProjectTree snapshot={snapshot} workspaceLayout={layout} onWorkspaceLayoutChange={updateProjectTreeLayout} />}
           <WorkspaceResizeHandle
             ariaLabel="Resize project tree"
             collapsed={layout.projectTreeCollapsed}

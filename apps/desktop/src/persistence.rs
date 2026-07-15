@@ -132,7 +132,7 @@ impl PersistenceService {
             return Ok(());
         }
         inner.store.workspace_layout = state;
-        inner.save_debounced()
+        inner.save_now()
     }
 
     pub fn record_snapshot(&self, snapshot: &AppSnapshot) -> Result<(), String> {
