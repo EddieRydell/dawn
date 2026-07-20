@@ -1,19 +1,34 @@
 imports:
-- from: ../layouts/outputs.layout.dawn
+- from:
+    documents:
+    - layouts/outputs.layout.dawn
   as: elements
-- from: ..\effects
+- from:
+    documents:
+    - effects/impact-burst.effect.dawn
+    - effects/mark-impact-burst.effect.dawn
+    - effects/scan-sweep.effect.dawn
+    - effects/shimmer-field.effect.dawn
+    - effects/sparkle-comet.effect.dawn
   as: effects
-- from: ..\operators
+- from:
+    documents:
+    - operators/gain.operator.dawn
+    - operators/time-warp.operator.dawn
   as: operators
-- from: ..\curves\basic_curves.curve.dawn
+- from:
+    documents:
+    - curves/basic_curves.curve.dawn
   as: curves
-- from: ..\gradients\basic_gradients.gradient.dawn
+- from:
+    documents:
+    - gradients/basic_gradients.gradient.dawn
   as: gradients
 layer_test:
   type: sequence
   duration: 249.753832s
   frame_rate: 60
-  audio: ..\audio\Babokon - All We Are.mp3
+  audio: audio/Babokon - All We Are.mp3
   mark_collections:
   - key: marks
     name: Marks

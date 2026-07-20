@@ -8,11 +8,15 @@ license = "MIT"
 
 [dependencies]
 camino.workspace = true
+dawn-package.workspace = true
 dawn-language.workspace = true
 indexmap.workspace = true
 marked-yaml.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 yaml_serde.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
+semver.workspace = true
 tempfile.workspace = true

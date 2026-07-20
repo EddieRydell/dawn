@@ -153,19 +153,20 @@ pub(super) fn write_source_reference(
     kind: SourceObjectKind,
     identity: &SourceIdentity,
 ) -> Result<String, ExportProjectError> {
-    if identity.document() == from_document {
+    let from_document_id = session.source.project_document(from_document.to_path_buf());
+    if identity.document_id() == &from_document_id {
         return Ok(identity.object().to_string());
     }
     let alias = session
         .source
         .documents
-        .get(from_document)
+        .get(&from_document_id)
         .into_iter()
         .flat_map(|document| &document.imports)
         .find(|edge| {
             edge.targets
                 .iter()
-                .any(|target| target == identity.document())
+                .any(|target| target == identity.document_id())
         })
         .map(|edge| edge.alias.clone())
         .ok_or_else(|| ExportProjectError::InvalidReference {

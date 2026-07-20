@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 camino.workspace = true
 indexmap.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

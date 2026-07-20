@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_project_io::{ProjectSession, check_project};
+use dawn_project_io::{ProjectSession, check_source_graph};
 
 use super::{
     DesktopState, FsEntryKind, absolute_project_path, lock_unpoisoned, path_matches_or_is_child,
@@ -130,10 +130,13 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return false;
         };
-        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        let report = check_project(&entrypoint);
+        let Some(entrypoint) = project.source.entrypoint.as_ref() else {
+            return false;
+        };
+        let entrypoint = entrypoint.path().to_string();
+        let report = check_source_graph(project.source.source_graph.clone());
         let refreshed = report.session.is_some();
-        self.apply_project_refresh_check(entrypoint.as_str(), report);
+        self.apply_project_refresh_check(&entrypoint, report);
         refreshed
     }
 
@@ -181,7 +184,7 @@ impl DesktopState {
                     affected_paths,
                 } => {
                     if self.project_session().as_ref().is_some_and(|project| {
-                        project.source.source_root == session.source.source_root
+                        project.source.project_root() == session.source.project_root()
                     }) {
                         self.refresh_saved_tabs(&affected_paths);
                     }

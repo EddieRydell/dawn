@@ -1793,8 +1793,8 @@ fn prepare_generated_child(
 ) -> Result<(), RenderError> {
     let effect_ref = match &child.definition {
         GeneratedEffectRef::Local(name) => {
-            EffectRef::Custom(EffectDefinitionId(SourceIdentity::new(
-                definition_source.document().to_path_buf(),
+            EffectRef::Custom(EffectDefinitionId(SourceIdentity::from_document(
+                definition_source.document_id().clone(),
                 name.as_str().to_string(),
             )))
         }

@@ -1,7 +1,11 @@
 imports:
-- from: ../layouts/outputs.layout.dawn
+- from:
+    documents:
+    - layouts/outputs.layout.dawn
   as: layouts
-- from: ../patches/outputs.patch.dawn
+- from:
+    documents:
+    - patches/outputs.patch.dawn
   as: patches
 main:
   type: setup

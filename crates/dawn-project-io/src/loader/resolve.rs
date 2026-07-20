@@ -6,22 +6,20 @@ pub(super) struct DomainResolver<'a> {
 impl DomainResolver<'_> {
     pub(super) fn resolve_setup(
         &mut self,
-        path: &Utf8Path,
+        source_document: &dawn_language::identity::DocumentId,
         id: &SetupId,
     ) -> Result<(), LoadProjectError> {
         if self.project.setups.contains_key(id) {
             return Ok(());
         }
-        let (document_path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::Setup(id.clone()))?;
+        let document_path = document_id.path().to_path_buf();
         let elements_ref = string_field(&document_path, &value, "elements")?;
         let preview_ref = string_field(&document_path, &value, "preview")?;
         let patch_ref = string_field(&document_path, &value, "patch")?;
-        let elements = match self
-            .loader
-            .resolve_reference(&document_path, elements_ref)?
-        {
+        let elements = match self.loader.resolve_reference(&document_id, elements_ref)? {
             ResolvedObject::ElementTree(elements) => elements,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -31,7 +29,7 @@ impl DomainResolver<'_> {
                 });
             }
         };
-        let preview = match self.loader.resolve_reference(&document_path, preview_ref)? {
+        let preview = match self.loader.resolve_reference(&document_id, preview_ref)? {
             ResolvedObject::PreviewLayout(preview) => preview,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -41,11 +39,11 @@ impl DomainResolver<'_> {
                 });
             }
         };
-        let patch = match self.loader.resolve_reference(&document_path, patch_ref)? {
+        let patch = match self.loader.resolve_reference(&document_id, patch_ref)? {
             ResolvedObject::Patch(patch) => patch,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
-                    path: path.to_path_buf(),
+                    path: source_document.path().to_path_buf(),
                     range: None,
                     reference: patch_ref.to_string(),
                 });
@@ -54,7 +52,7 @@ impl DomainResolver<'_> {
         let controllers = sequence_field(&document_path, &value, "controllers")?
             .iter()
             .map(
-                |reference| match self.loader.resolve_reference(&document_path, reference)? {
+                |reference| match self.loader.resolve_reference(&document_id, reference)? {
                     ResolvedObject::Controller(controller) => Ok(controller),
                     _ => Err(LoadProjectError::InvalidReference {
                         path: document_path.clone(),
@@ -87,9 +85,10 @@ impl DomainResolver<'_> {
         if self.project.controllers.contains_key(id) {
             return Ok(());
         }
-        let (path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::Controller(id.clone()))?;
+        let path = document_id.path().to_path_buf();
         let protocol_value = required_field(&path, &value, "protocol")?;
         let protocol = match string_field(&path, protocol_value, "type")? {
             "e131" => {
@@ -172,9 +171,10 @@ impl DomainResolver<'_> {
         if self.project.element_trees.contains_key(id) {
             return Ok(());
         }
-        let (document_path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::ElementTree(id.clone()))?;
+        let document_path = document_id.path().to_path_buf();
         let roots = sequence_values(&document_path, &value, "roots")?
             .iter()
             .map(|root| {
@@ -227,7 +227,7 @@ impl DomainResolver<'_> {
                 },
                 "fixture" => {
                     let reference = string_field(&document_path, node, "profile")?;
-                    let profile = match self.loader.resolve_reference(&document_path, reference)? {
+                    let profile = match self.loader.resolve_reference(&document_id, reference)? {
                         ResolvedObject::FixtureProfile(profile) => profile,
                         _ => {
                             return Err(LoadProjectError::InvalidReference {
@@ -265,13 +265,14 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_prop_instance(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<PropInstance, LoadProjectError> {
+        let path = document_id.path();
         let id = PropInstanceId(u32_field(path, value, "id")?);
         let name = string_field(path, value, "name")?.to_string();
         let prop_ref = string_field(path, value, "prop")?;
-        let definition = match self.loader.resolve_reference(path, prop_ref)? {
+        let definition = match self.loader.resolve_reference(document_id, prop_ref)? {
             ResolvedObject::PropDefinition(definition) => definition,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -315,9 +316,10 @@ impl DomainResolver<'_> {
         {
             return Ok(());
         }
-        let (path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::FixtureProfile(id.clone()))?;
+        let path = document_id.path().to_path_buf();
         let profile = self.parse_fixture_profile(&path, id.clone(), &value)?;
         profile
             .validate()
@@ -337,11 +339,12 @@ impl DomainResolver<'_> {
         if self.project.preview_layouts.contains_key(id) {
             return Ok(());
         }
-        let (path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::PreviewLayout(id.clone()))?;
+        let path = document_id.path().to_path_buf();
         let tree_ref = string_field(&path, &value, "element_tree")?;
-        let element_tree = match self.loader.resolve_reference(&path, tree_ref)? {
+        let element_tree = match self.loader.resolve_reference(&document_id, tree_ref)? {
             ResolvedObject::ElementTree(tree) => tree,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -354,7 +357,7 @@ impl DomainResolver<'_> {
         self.resolve_element_tree(&element_tree)?;
         let props = sequence_values(&path, &value, "props")?
             .iter()
-            .map(|prop| self.parse_prop_instance(&path, prop))
+            .map(|prop| self.parse_prop_instance(&document_id, prop))
             .collect::<Result<Vec<_>, _>>()?;
         self.project.preview_layouts.insert(
             id.clone(),
@@ -371,28 +374,28 @@ impl DomainResolver<'_> {
         if self.project.patches.contains_key(id) {
             return Ok(());
         }
-        let (document_path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::Patch(id.clone()))?;
+        let document_path = document_id.path().to_path_buf();
         let mut nodes = IndexMap::new();
         for node in sequence_values(&document_path, &value, "nodes")? {
             let node_id = PatchNodeId(u32_field(&document_path, node, "id")?);
             let parsed = match string_field(&document_path, node, "type")? {
-                "source" => PatchNode::Source(self.parse_patch_source(&document_path, node)?),
-                "filter" => PatchNode::Filter(self.parse_filter(&document_path, node)?),
+                "source" => PatchNode::Source(self.parse_patch_source(&document_id, node)?),
+                "filter" => PatchNode::Filter(self.parse_filter(&document_id, node)?),
                 "sink" => {
                     let reference = string_field(&document_path, node, "controller")?;
-                    let controller =
-                        match self.loader.resolve_reference(&document_path, reference)? {
-                            ResolvedObject::Controller(controller) => controller,
-                            _ => {
-                                return Err(LoadProjectError::InvalidReference {
-                                    path: document_path.clone(),
-                                    range: None,
-                                    reference: reference.to_string(),
-                                });
-                            }
-                        };
+                    let controller = match self.loader.resolve_reference(&document_id, reference)? {
+                        ResolvedObject::Controller(controller) => controller,
+                        _ => {
+                            return Err(LoadProjectError::InvalidReference {
+                                path: document_path.clone(),
+                                range: None,
+                                reference: reference.to_string(),
+                            });
+                        }
+                    };
                     self.resolve_controller(&controller)?;
                     PatchNode::Sink(PatchSink {
                         controller,
@@ -449,11 +452,12 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_patch_source(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<PatchSource, LoadProjectError> {
+        let path = document_id.path();
         let selection =
-            self.parse_element_selection(path, required_field(path, value, "selection")?)?;
+            self.parse_element_selection(document_id, required_field(path, value, "selection")?)?;
         let width = usize_field(path, value, "width")?;
         let output = match string_field(path, value, "output")? {
             "color" => PatchValueType::Color { width },
@@ -461,7 +465,7 @@ impl DomainResolver<'_> {
             "indexed" => PatchValueType::Indexed { width },
             "fixture_state" => {
                 let reference = string_field(path, value, "profile")?;
-                let profile = match self.loader.resolve_reference(path, reference)? {
+                let profile = match self.loader.resolve_reference(document_id, reference)? {
                     ResolvedObject::FixtureProfile(profile) => profile,
                     _ => {
                         return Err(LoadProjectError::InvalidReference {
@@ -485,11 +489,12 @@ impl DomainResolver<'_> {
 
     fn parse_element_selection(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<ElementSelection, LoadProjectError> {
+        let path = document_id.path();
         let reference = string_field(path, value, "tree")?;
-        let tree = match self.loader.resolve_reference(path, reference)? {
+        let tree = match self.loader.resolve_reference(document_id, reference)? {
             ResolvedObject::ElementTree(tree) => tree,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -559,9 +564,10 @@ impl DomainResolver<'_> {
 
     fn parse_filter(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<FilterDefinition, LoadProjectError> {
+        let path = document_id.path();
         Ok(match string_field(path, value, "filter")? {
             "color_breakdown" => FilterDefinition::ColorBreakdown {
                 capability: self
@@ -621,7 +627,7 @@ impl DomainResolver<'_> {
             },
             "fixture_profile_encoding" => {
                 let reference = string_field(path, value, "profile")?;
-                let profile = match self.loader.resolve_reference(path, reference)? {
+                let profile = match self.loader.resolve_reference(document_id, reference)? {
                     ResolvedObject::FixtureProfile(profile) => profile,
                     _ => {
                         return Err(LoadProjectError::InvalidReference {
@@ -774,9 +780,10 @@ impl DomainResolver<'_> {
         if self.project.sequences.contains_key(id) {
             return Ok(());
         }
-        let (document_path, _, value) = self
+        let (document_id, _, value) = self
             .loader
             .object_value(&ResolvedObject::Sequence(id.clone()))?;
+        let document_path = document_id.path().to_path_buf();
         let duration =
             parse_duration(string_field(&document_path, &value, "duration")?).map_err(|error| {
                 with_yaml_location(
@@ -785,7 +792,7 @@ impl DomainResolver<'_> {
                     source_range_for_field_value(&document_path, &value, "duration"),
                 )
             })?;
-        let audio = self.parse_audio(&document_path, &value)?;
+        let audio = self.parse_audio(&document_id, &value)?;
         let mark_collections = optional_sequence(&value, "mark_collections")
             .into_iter()
             .flatten()
@@ -797,10 +804,10 @@ impl DomainResolver<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         let effects = sequence_values(&document_path, &value, "effects")?
             .iter()
-            .map(|effect| self.parse_sequence_effect(&document_path, effect))
+            .map(|effect| self.parse_sequence_effect(&document_id, effect))
             .collect::<Result<Vec<_>, _>>()?;
         let composition_graph = self.parse_composition_graph(
-            &document_path,
+            &document_id,
             required_field(&document_path, &value, "composition_graph")?,
         )?;
         let automation_clips = optional_sequence(&value, "automation_clips")
@@ -826,7 +833,7 @@ impl DomainResolver<'_> {
         let control_clips = optional_sequence(&value, "control_clips")
             .into_iter()
             .flatten()
-            .map(|clip| self.parse_control_clip(&document_path, clip))
+            .map(|clip| self.parse_control_clip(&document_id, clip))
             .collect::<Result<Vec<_>, _>>()?;
         self.project.sequences.insert(
             id.clone(),
@@ -848,9 +855,10 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_audio(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<SequenceAudio, LoadProjectError> {
+        let path = document_id.path();
         let Some(audio) = optional_field(value, "audio") else {
             return Ok(SequenceAudio::None);
         };
@@ -864,54 +872,63 @@ impl DomainResolver<'_> {
                 message: "audio must be null or a path string".to_string(),
             });
         };
-        let document_absolute = self.loader.source_root.join(path);
-        let document_dir = document_absolute
-            .parent()
-            .unwrap_or(&self.loader.source_root);
-        let absolute = document_dir
-            .join(audio_path)
-            .canonicalize_utf8()
-            .map_err(|source| LoadProjectError::Io {
-                path: document_dir.join(audio_path),
-                source,
+        let module = self
+            .loader
+            .source_graph
+            .module(document_id.module_id())
+            .map_err(|error| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: error.to_string(),
             })?;
-        if !absolute.is_file() {
+        if !module.manifest.assets.contains_key(audio_path) {
             return Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
                 range: None,
-                message: format!("audio asset does not exist: {audio_path}"),
+                message: format!("audio asset `{audio_path}` is not declared in dawn-package.json"),
             });
         }
-        let relative = match relative_path(&self.loader.source_root, &absolute) {
-            Ok(relative) => relative,
-            Err(_) if !Utf8Path::new(audio_path).is_absolute() => Utf8PathBuf::from(audio_path),
-            Err(error) => return Err(error),
-        };
-        if let Some(existing) = self
-            .loader
-            .referenced_assets
-            .iter()
-            .find(|asset| asset.relative_path == relative)
-        {
+        let unresolved = module.root.join(audio_path);
+        let absolute = unresolved
+            .canonicalize_utf8()
+            .map_err(|source| LoadProjectError::Io {
+                path: unresolved,
+                source,
+            })?;
+        if !absolute.is_file() || !absolute.starts_with(&module.root) {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: format!("audio asset does not exist inside its module: {audio_path}"),
+            });
+        }
+        let relative = Utf8PathBuf::from(audio_path);
+        if let Some(existing) = self.loader.referenced_assets.iter_mut().find(|asset| {
+            asset.module_id == document_id.module_id() && asset.relative_path == relative
+        }) {
+            existing.referenced_by.insert(document_id.clone());
             return Ok(SequenceAudio::Asset(existing.id.clone()));
         }
         let id = AssetId(self.loader.next_asset_id);
         self.loader.next_asset_id += 1;
         self.loader.referenced_assets.push(ReferencedAsset {
             id: id.clone(),
+            module_id: document_id.module_id(),
             relative_path: relative,
             absolute_path: absolute,
+            referenced_by: std::collections::BTreeSet::from([document_id.clone()]),
         });
         Ok(SequenceAudio::Asset(id))
     }
 
     pub(super) fn parse_sequence_effect(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<EffectInst, LoadProjectError> {
-        let definition = self.parse_effect_definition(path, value)?;
-        let param_overrides = self.parse_param_overrides(path, value)?;
+        let path = document_id.path();
+        let definition = self.parse_effect_definition(document_id, value)?;
+        let param_overrides = self.parse_param_overrides(document_id, value)?;
         Ok(EffectInst {
             id: EffectInstId(u32_field(path, value, "id")?),
             layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
@@ -931,7 +948,8 @@ impl DomainResolver<'_> {
                     source_range_for_field_value(path, value, "duration"),
                 )
             })?,
-            target: self.parse_element_selection(path, required_field(path, value, "target")?)?,
+            target: self
+                .parse_element_selection(document_id, required_field(path, value, "target")?)?,
             scope: parse_effect_scope(path, value)?,
             definition,
             param_overrides,
@@ -940,41 +958,47 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_composition_graph(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<SequenceCompositionGraph, LoadProjectError> {
+        let path = document_id.path();
         let graph = SequenceCompositionGraph {
             nodes: sequence_values(path, value, "nodes")?
                 .iter()
-                .map(|node| self.parse_composition_graph_node(path, node))
+                .map(|node| self.parse_composition_graph_node(document_id, node))
                 .collect::<Result<Vec<_>, _>>()?,
             edges: sequence_values(path, value, "edges")?
                 .iter()
                 .map(|edge| parse_graph_edge(path, edge))
                 .collect::<Result<Vec<_>, _>>()?,
         };
-        validate_composition_graph(&graph, &self.project.definitions.operators).map_err(
-            |error| LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message: error.message,
-            },
-        )?;
+        let defer_validation = self.loader.operator_reconciliation.is_some()
+            && document_id.module_id() == self.loader.source_graph.project_module_id();
+        if !defer_validation {
+            validate_composition_graph(&graph, &self.project.definitions.operators).map_err(
+                |error| LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: None,
+                    message: error.message,
+                },
+            )?;
+        }
         Ok(graph)
     }
 
     pub(super) fn parse_composition_graph_node(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<CompositionGraphNode, LoadProjectError> {
+        let path = document_id.path();
         let kind = match string_field(path, value, "type")? {
             "layer" => CompositionGraphNodeKind::Layer {
                 layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
             },
             "operator" => CompositionGraphNodeKind::Operator(GraphOperatorNode {
-                operator: self.parse_graph_operator_ref(path, value)?,
-                params: self.parse_graph_operator_params(path, value)?,
+                operator: self.parse_graph_operator_ref(document_id, value)?,
+                params: self.parse_graph_operator_params(document_id, value)?,
             }),
             "output" => CompositionGraphNodeKind::Output,
             other => {
@@ -994,9 +1018,10 @@ impl DomainResolver<'_> {
 
     fn parse_effect_definition(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<EffectRef, LoadProjectError> {
+        let path = document_id.path();
         let effect_ref = string_field(path, value, "effect")?;
         if let Some(name) = effect_ref.strip_prefix("builtins.") {
             return BuiltinEffect::from_source_name(name)
@@ -1007,7 +1032,7 @@ impl DomainResolver<'_> {
                     reference: effect_ref.to_string(),
                 });
         }
-        let definition = match self.loader.resolve_reference(path, effect_ref)? {
+        let definition = match self.loader.resolve_reference(document_id, effect_ref)? {
             ResolvedObject::EffectDefinition(definition) => definition,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
@@ -1023,9 +1048,10 @@ impl DomainResolver<'_> {
 
     fn parse_param_overrides(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
+        let path = document_id.path();
         Ok(optional_mapping(value, "params")
             .map(|mapping| {
                 mapping
@@ -1045,7 +1071,7 @@ impl DomainResolver<'_> {
                                 message: format!("invalid parameter name `{key}`"),
                             }
                         })?;
-                        Ok((identifier, self.parse_effect_param(path, value)?))
+                        Ok((identifier, self.parse_effect_param(document_id, value)?))
                     })
                     .collect::<Result<IndexMap<_, _>, LoadProjectError>>()
             })
@@ -1055,22 +1081,23 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_graph_operator_params(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
-        self.parse_param_overrides(path, value)
+        self.parse_param_overrides(document_id, value)
     }
 
     pub(super) fn parse_graph_operator_ref(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<OperatorRef, LoadProjectError> {
+        let path = document_id.path();
         let name = string_field(path, value, "operator")?;
         if let Some(builtin) = BuiltinOperator::from_source_name(name) {
             return Ok(OperatorRef::Builtin(builtin));
         }
-        match self.loader.resolve_reference(path, name)? {
+        match self.loader.resolve_reference(document_id, name)? {
             ResolvedObject::OperatorDefinition(id) => Ok(OperatorRef::Custom(id)),
             _ => Err(LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
@@ -1092,7 +1119,7 @@ impl DomainResolver<'_> {
             .contains_key(id)
         {
             return Err(LoadProjectError::InvalidReference {
-                path: self.loader.entrypoint.clone(),
+                path: id.0.document().to_path_buf(),
                 range: None,
                 reference: id.0.object().to_string(),
             });
@@ -1102,9 +1129,10 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_effect_param(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<EffectParamValue, LoadProjectError> {
+        let path = document_id.path();
         match string_field(path, value, "type")? {
             "integer" => Ok(EffectParamValue::Int(i64_field(path, value, "value")?)),
             "float" => Ok(EffectParamValue::Float(f64_field(path, value, "value")?)),
@@ -1130,16 +1158,18 @@ impl DomainResolver<'_> {
             "marks" => Ok(EffectParamValue::Marks(MarkCollectionKey {
                 name: string_field(path, value, "key")?.to_string(),
             })),
-            "curve" => Ok(EffectParamValue::Curve(
-                self.parse_curve_source(path, required_field(path, value, "curve")?)?,
-            )),
-            "gradient" => Ok(EffectParamValue::Gradient(
-                self.parse_gradient_source(path, required_field(path, value, "gradient")?)?,
-            )),
+            "curve" => Ok(EffectParamValue::Curve(self.parse_curve_source(
+                document_id,
+                required_field(path, value, "curve")?,
+            )?)),
+            "gradient" => Ok(EffectParamValue::Gradient(self.parse_gradient_source(
+                document_id,
+                required_field(path, value, "gradient")?,
+            )?)),
             "array" => {
                 let values = sequence_values(path, value, "values")?
                     .iter()
-                    .map(|item| self.parse_array_item(path, item))
+                    .map(|item| self.parse_array_item(document_id, item))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(EffectParamValue::Array(values))
             }
@@ -1153,30 +1183,32 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_array_item(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<EffectParamValue, LoadProjectError> {
+        let path = document_id.path();
         if optional_field(value, "type").is_some() {
-            return self.parse_effect_param(path, value);
+            return self.parse_effect_param(document_id, value);
         }
         if let Some(curve) = optional_field(value, "curve") {
             return Ok(EffectParamValue::Curve(
-                self.parse_curve_source(path, curve)?,
+                self.parse_curve_source(document_id, curve)?,
             ));
         }
         let gradient = required_field(path, value, "gradient")?;
         Ok(EffectParamValue::Gradient(
-            self.parse_gradient_source(path, gradient)?,
+            self.parse_gradient_source(document_id, gradient)?,
         ))
     }
 
     pub(super) fn parse_curve_source(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<CurveSource, LoadProjectError> {
+        let path = document_id.path();
         if let Some(reference) = value.as_str() {
-            let id = match self.loader.resolve_reference(path, reference)? {
+            let id = match self.loader.resolve_reference(document_id, reference)? {
                 ResolvedObject::Curve(curve) => curve,
                 _ => {
                     return Err(LoadProjectError::InvalidReference {
@@ -1190,7 +1222,7 @@ impl DomainResolver<'_> {
             return Ok(CurveSource::Reference(id));
         }
         if let Some(curve_value) = optional_field(value, "curve") {
-            return self.parse_curve_source(path, curve_value);
+            return self.parse_curve_source(document_id, curve_value);
         }
         Ok(CurveSource::Inline(parse_curve(path, value)?))
     }
@@ -1212,11 +1244,12 @@ impl DomainResolver<'_> {
 
     pub(super) fn parse_gradient_source(
         &mut self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<GradientSource, LoadProjectError> {
+        let path = document_id.path();
         if let Some(reference) = value.as_str() {
-            let id = match self.loader.resolve_reference(path, reference)? {
+            let id = match self.loader.resolve_reference(document_id, reference)? {
                 ResolvedObject::Gradient(gradient) => gradient,
                 _ => {
                     return Err(LoadProjectError::InvalidReference {
@@ -1242,7 +1275,7 @@ impl DomainResolver<'_> {
             return Ok(GradientSource::Reference(id));
         }
         if let Some(gradient) = optional_field(value, "gradient") {
-            return self.parse_gradient_source(path, gradient);
+            return self.parse_gradient_source(document_id, gradient);
         }
         Ok(GradientSource::Inline(parse_gradient(path, value)?))
     }
@@ -1303,11 +1336,12 @@ impl DomainResolver<'_> {
 
     fn parse_control_clip(
         &self,
-        path: &Utf8Path,
+        document_id: &dawn_language::identity::DocumentId,
         value: &Value,
     ) -> Result<ControlClip, LoadProjectError> {
+        let path = document_id.path();
         let selection =
-            self.parse_element_selection(path, required_field(path, value, "selection")?)?;
+            self.parse_element_selection(document_id, required_field(path, value, "selection")?)?;
         let target = match string_field(path, value, "target_type")? {
             "scalar" => ControlTarget::Scalar(selection),
             "indexed" => ControlTarget::Indexed(selection),
@@ -1485,8 +1519,8 @@ use super::parse::{
     parse_color, parse_curve, parse_detached_automation_binding, parse_duration,
     parse_duration_as_time, parse_effect_scope, parse_gradient, parse_graph_edge,
     parse_graph_position, parse_mark_collection, parse_point3, parse_rotation3, parse_scale3,
-    parse_sequence_layer, relative_path, required_field, sequence_field, sequence_values,
-    string_field, u32_field, usize_field,
+    parse_sequence_layer, required_field, sequence_field, sequence_values, string_field, u32_field,
+    usize_field,
 };
 use crate::LoadProjectError;
 use crate::diagnostics::{

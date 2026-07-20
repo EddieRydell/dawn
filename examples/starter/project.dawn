@@ -1,7 +1,12 @@
 imports:
-- from: setups/main.setup.dawn
+- from:
+    documents:
+    - setups/main.setup.dawn
   as: setups
-- from: sequences
+- from:
+    documents:
+    - sequences/empty.sequence.dawn
+    - sequences/layer_test.sequence.dawn
   as: sequences
 starter:
   type: project

@@ -25,6 +25,7 @@ That makes the project useful as a technical showcase for:
 - Preview effect rasters and sequence output in the desktop UI.
 - Transmit live E1.31 or Art-Net output with blackout and stream lifecycle handling.
 - Generate TypeScript bindings from Rust command and data types.
+- Resolve, cache, inspect, pack, publish, fork, and template Dawn packages.
 - Benchmark effect VM and render performance with Criterion.
 
 ## Tech Stack
@@ -49,11 +50,13 @@ apps/desktop/src/gui_geometry.rs Read-only preview-prop geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
 apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
 crates/dawn-language/         Core Dawn model, sequence types, effect DSL, compiler, VM
+crates/dawn-package/          Manifest v2, resolution, locks, cache, registry protocol, packing
 crates/dawn-project-io/       Dawn project loading, diagnostics, source ownership, save/export
 crates/dawn-project-io/src/loader/  Project loading, import resolution, and document parsing
 crates/dawn-project-io/src/serialization/  Domain-specific Dawn document serialization
 crates/dawn-runtime/          Prepared sequence and effect rendering
 crates/dawn-output/           E1.31 and Art-Net socket/codec lifecycle
+crates/dawn-cli/              Standalone `dawn` package and project CLI
 examples/                     Example Dawn projects and props
 docs/                         Performance and regression tracking notes
 tools/                        Repository tooling
@@ -86,10 +89,10 @@ This starts the Vite frontend through Tauri and opens the Dawn desktop app.
 
 ### Try An Example Project
 
-After the app opens, load one of the example project entrypoints:
+After the app opens, load the example package manifest:
 
 ```text
-examples/starter/project.dawn
+examples/starter/dawn-package.json
 ```
 
 `examples/starter` is the complete 30-output starter project, including example effects, gradients, curves, operators, sequences, and audio assets.
@@ -126,9 +129,43 @@ pnpm bench:effect-vm
 
 Runs the full Criterion benchmark set.
 
+## Package and CLI workflow
+
+Every project and module starts at `dawn-package.json`. The manifest owns the
+stable UUID module identity, exact language version, Dawn compatibility range,
+optional project entrypoint, explicit exports, alias-keyed dependencies, and
+audio declarations. `dawn.lock` pins the registry, exact release versions,
+archive hashes, module identities, dependency edges, and path-dependency
+content hashes. Opening a project is offline and deterministic; use Sync
+explicitly when its lock or cache is missing.
+
+Run the standalone client from the workspace with:
+
+```bash
+cargo run -p dawn-cli -- --help
+```
+
+It provides `init`, `check`, `add`, `remove`, `sync`, `update`, `tree`, `pack`,
+`publish`, `login`, `logout`, `whoami`, `fork`, and `new --from`. Login uses
+browser device approval and OS credential storage. Registry artifacts are
+downloaded to a content-addressed cache, structurally inspected, compiler
+validated in temporary storage, and atomically installed. Desktop package
+operations use the same service layer.
+
+`dawn fork <alias>` copies that direct registry dependency into
+`modules/<package-name>/`, assigns the copy a new module ID, clears its
+publication identity, and replaces the registry requirement with a path
+dependency under the same alias. The copied package keeps its own exports,
+assets, local imports, and transitive dependencies; project dependency imports
+therefore continue to resolve through the same alias and export groups.
+
 ## How A Dawn Project Works
 
-A Dawn project starts at a `project.dawn` entrypoint. That file imports the rest of the show definition: setups, element trees, preview layouts and props, fixture profiles, patch graphs, controllers, curves, effects, sequences, and assets.
+The manifest's `project.entrypoint` imports the rest of the show definition:
+setups, element trees, preview layouts and props, fixture profiles, patch
+graphs, controllers, curves, effects, sequences, and assets. Imports are
+structured as module-local document lists or dependency alias/export-group
+references; dependency deep imports and root escapes are rejected.
 
 Project IO loads reachable source files, validates imports and references, tracks source locations for diagnostics, compiles DSL definitions, and builds the authoritative typed `DawnProject`. `SourceProject` retains document ownership, import, original-source, and asset metadata; it is not a second editable project model. GUI commands make one private mutable candidate from the current immutable project snapshot; accepted snapshots are shared by state, history, save, and render work. Project IO serializes typed state directly without reparsing or synchronizing a YAML model.
 

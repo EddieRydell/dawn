@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use dawn_language::effect::EffectInst;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::sequence::SequenceId;
-use dawn_project_io::{ProjectSession, SourceObjectKind, is_project_owned_path};
+use dawn_project_io::{ProjectSession, SourceObjectKind};
 
 use crate::dto::{
     DiagnosticSeverity, DocumentViewId, GuiDocument, GuiDocumentRequest, GuiEditCommand,
@@ -48,7 +48,10 @@ pub fn project_gui_document(
             );
         }
     };
-    if !is_project_owned_path(resolved.identity.document()) {
+    if !session
+        .source
+        .is_project_owned(resolved.identity.document_id())
+    {
         return blocked(
             "Imported dependency documents are read-only.",
             vec![gui_diagnostic(
@@ -79,14 +82,14 @@ pub fn affected_paths(
     request: &GuiDocumentRequest,
 ) -> Result<BTreeSet<String>, GuiMutationError> {
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    ensure_owned_gui_document(&resolved)?;
+    ensure_owned_gui_document(session, &resolved)?;
     if matches!(request.view, DocumentViewId::Setup) {
         return Ok(session
             .source
             .documents
             .keys()
-            .filter(|path| is_project_owned_path(path))
-            .map(ToString::to_string)
+            .filter(|document| session.source.is_project_owned(document))
+            .map(|document| document.path().to_string())
             .collect());
     }
     Ok(BTreeSet::from([resolved.identity.document().to_string()]))
@@ -98,14 +101,11 @@ pub fn apply_edit(
     edit: GuiEditCommand,
 ) -> Result<(), GuiMutationError> {
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    ensure_owned_gui_document(&resolved)?;
+    ensure_owned_gui_document(session, &resolved)?;
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
             edit_sequence(session, &resolved, edit)?;
-            let sequence_id = SequenceId(SourceIdentity::new(
-                resolved.identity.document().to_path_buf(),
-                resolved.identity.object().to_string(),
-            ));
+            let sequence_id = SequenceId(resolved.identity.clone());
             crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
             dawn_language::validation::validate_project(&session.project)
                 .map_err(|error| GuiMutationError::Invalid(format!("{error:?}")))?;
@@ -163,10 +163,7 @@ pub(crate) fn apply_sequence_selection_edit(
     let result =
         apply_sequence_selection_edit_inner(session, request, edit, &mut candidate_clipboard)?;
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
     *clipboard = candidate_clipboard;
     Ok(result)
@@ -184,11 +181,8 @@ fn apply_sequence_selection_edit_inner(
         ));
     }
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    ensure_owned_gui_document(&resolved)?;
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    ensure_owned_gui_document(session, &resolved)?;
+    let sequence_id = SequenceId(resolved.identity.clone());
     match edit {
         SequenceSelectionEdit::Copy { selection } => {
             let (next_clipboard, copied_count, skipped_count) =
@@ -269,6 +263,7 @@ struct ResolvedGuiObject {
 impl ResolvedGuiObject {
     fn source_ref(&self) -> GuiObjectRef {
         GuiObjectRef {
+            module_id: self.identity.module_id().to_string(),
             path: self.identity.document().to_string(),
             object_key: self.identity.object().to_string(),
             kind: ObjectKind::from(&self.kind),
@@ -277,8 +272,14 @@ impl ResolvedGuiObject {
     }
 }
 
-fn ensure_owned_gui_document(resolved: &ResolvedGuiObject) -> Result<(), GuiMutationError> {
-    if is_project_owned_path(resolved.identity.document()) {
+fn ensure_owned_gui_document(
+    session: &ProjectSession,
+    resolved: &ResolvedGuiObject,
+) -> Result<(), GuiMutationError> {
+    if session
+        .source
+        .is_project_owned(resolved.identity.document_id())
+    {
         Ok(())
     } else {
         Err(GuiMutationError::Blocked(
@@ -294,11 +295,17 @@ fn resolve_request(
     let path = Utf8Path::new(&request.path);
     let kind = source_kind_for_view(&request.view)?;
     let requested_key = request.object_key.as_deref();
-    let document = session
+    let mut documents = session
         .source
         .documents
-        .get(path)
-        .ok_or_else(|| "No matching GUI document was found for this request.".to_string())?;
+        .iter()
+        .filter(|(document_id, _)| document_id.path() == path);
+    let Some((document_id, document)) = documents.next() else {
+        return Err("No matching GUI document was found for this request.".to_string());
+    };
+    if documents.next().is_some() {
+        return Err("The document path is ambiguous across package modules.".to_string());
+    }
     let mut matches = document
         .objects()
         .iter()
@@ -311,7 +318,7 @@ fn resolve_request(
         return Err("GUI request must include an object key for this document.".to_string());
     }
     Ok(ResolvedGuiObject {
-        identity: SourceIdentity::new(path.to_path_buf(), source_id.id().to_string()),
+        identity: SourceIdentity::from_document(document_id.clone(), source_id.id().to_string()),
         kind: source_id.kind().clone(),
     })
 }

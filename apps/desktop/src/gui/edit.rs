@@ -3,10 +3,7 @@ pub(super) fn edit_layout(
     resolved: &ResolvedGuiObject,
     edit: PreviewGuiEdit,
 ) -> Result<(), GuiMutationError> {
-    let layout_id = PreviewLayoutId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let layout_id = PreviewLayoutId(resolved.identity.clone());
     let layout = session
         .project
         .preview_layouts
@@ -94,10 +91,7 @@ pub(super) fn edit_sequence(
         ),
         _ => None,
     };
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     let element_tree = session
         .project
         .setups
@@ -167,8 +161,11 @@ pub(super) fn edit_sequence(
         SequenceGuiEdit::SetAudio { import_path } => {
             let audio = match import_path {
                 Some(import_path) => {
-                    let document = resolved.identity.document().to_path_buf();
-                    let id = register_sequence_audio_asset(session, &document, &import_path)?;
+                    let id = register_sequence_audio_asset(
+                        session,
+                        resolved.identity.document_id(),
+                        &import_path,
+                    )?;
                     DomainSequenceAudio::Asset(id)
                 }
                 None => DomainSequenceAudio::None,
@@ -329,7 +326,7 @@ pub(super) fn edit_sequence(
             start_seconds,
             mark_collection_key,
         } => {
-            let definition = effect_ref_from_gui(effect_reference)?;
+            let definition = effect_ref_from_gui(session, effect_reference)?;
             let Some(effect_definition) = session.project.definitions.effects.resolve(&definition)
             else {
                 return Err(GuiMutationError::Invalid(
@@ -340,7 +337,7 @@ pub(super) fn edit_sequence(
             if let EffectRef::Custom(definition) = &definition {
                 ensure_document_can_reference_source(
                     session,
-                    resolved.identity.document(),
+                    resolved.identity.document_id(),
                     SourceObjectKind::EffectDefinition,
                     &definition.0,
                 )
@@ -493,7 +490,7 @@ pub(super) fn edit_sequence(
             id,
             effect: effect_reference,
         } => {
-            let definition = effect_ref_from_gui(effect_reference)?;
+            let definition = effect_ref_from_gui(session, effect_reference)?;
             let Some(effect_definition) = session.project.definitions.effects.resolve(&definition)
             else {
                 return Err(GuiMutationError::Invalid(
@@ -514,7 +511,7 @@ pub(super) fn edit_sequence(
             if let EffectRef::Custom(definition) = &definition {
                 ensure_document_can_reference_source(
                     session,
-                    resolved.identity.document(),
+                    resolved.identity.document_id(),
                     SourceObjectKind::EffectDefinition,
                     &definition.0,
                 )
@@ -533,10 +530,12 @@ pub(super) fn edit_sequence(
         SequenceGuiEdit::LinkEffectCurve {
             id,
             name,
+            source_module_id,
             source_path,
             object_key,
         } => {
-            let value = linked_curve_value(session, resolved, source_path, object_key)?;
+            let value =
+                linked_curve_value(session, resolved, source_module_id, source_path, object_key)?;
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
                 .insert(identifier(&name)?, value);
@@ -552,10 +551,17 @@ pub(super) fn edit_sequence(
         SequenceGuiEdit::LinkEffectGradient {
             id,
             name,
+            source_module_id,
             source_path,
             object_key,
         } => {
-            let value = linked_gradient_value(session, resolved, source_path, object_key)?;
+            let value = linked_gradient_value(
+                session,
+                resolved,
+                source_module_id,
+                source_path,
+                object_key,
+            )?;
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
                 .insert(identifier(&name)?, value);
@@ -569,7 +575,7 @@ pub(super) fn edit_sequence(
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddGraphOperatorNode { operator, x, y } => {
-            let operator = graph_operator_from_gui(&operator)?;
+            let operator = graph_operator_from_gui(session, &operator)?;
             let definition = session
                 .project
                 .definitions
@@ -582,7 +588,7 @@ pub(super) fn edit_sequence(
             if let OperatorRef::Custom(id) = &operator {
                 ensure_document_can_reference_source(
                     session,
-                    resolved.identity.document(),
+                    resolved.identity.document_id(),
                     SourceObjectKind::OperatorDefinition,
                     &id.0,
                 )
@@ -741,10 +747,12 @@ pub(super) fn edit_sequence(
         SequenceGuiEdit::LinkGraphOperatorCurve {
             node_id,
             name,
+            source_module_id,
             source_path,
             object_key,
         } => {
-            let value = linked_curve_value(session, resolved, source_path, object_key)?;
+            let value =
+                linked_curve_value(session, resolved, source_module_id, source_path, object_key)?;
             let node_id = parse_graph_node_id(&node_id)?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let node = composition_graph_node_mut(sequence, &node_id)?;
@@ -774,10 +782,17 @@ pub(super) fn edit_sequence(
         SequenceGuiEdit::LinkGraphOperatorGradient {
             node_id,
             name,
+            source_module_id,
             source_path,
             object_key,
         } => {
-            let value = linked_gradient_value(session, resolved, source_path, object_key)?;
+            let value = linked_gradient_value(
+                session,
+                resolved,
+                source_module_id,
+                source_path,
+                object_key,
+            )?;
             let node_id = parse_graph_node_id(&node_id)?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let node = composition_graph_node_mut(sequence, &node_id)?;
@@ -1095,13 +1110,15 @@ fn ensure_automation_target_available(
 fn linked_curve_value(
     session: &mut ProjectSession,
     resolved: &ResolvedGuiObject,
+    source_module_id: String,
     source_path: String,
     object_key: String,
 ) -> Result<EffectParamValue, GuiMutationError> {
-    let id = CurveId(SourceIdentity::new(
-        Utf8PathBuf::from(source_path),
-        object_key,
-    ));
+    let id = CurveId(source_identity_from_gui(
+        &source_module_id,
+        &source_path,
+        &object_key,
+    )?);
     if !session
         .project
         .definitions
@@ -1115,7 +1132,7 @@ fn linked_curve_value(
     }
     ensure_document_can_reference_source(
         session,
-        resolved.identity.document(),
+        resolved.identity.document_id(),
         SourceObjectKind::Curve,
         &id.0,
     )
@@ -1126,13 +1143,15 @@ fn linked_curve_value(
 fn linked_gradient_value(
     session: &mut ProjectSession,
     resolved: &ResolvedGuiObject,
+    source_module_id: String,
     source_path: String,
     object_key: String,
 ) -> Result<EffectParamValue, GuiMutationError> {
-    let id = GradientId(SourceIdentity::new(
-        Utf8PathBuf::from(source_path),
-        object_key,
-    ));
+    let id = GradientId(source_identity_from_gui(
+        &source_module_id,
+        &source_path,
+        &object_key,
+    )?);
     if !session
         .project
         .definitions
@@ -1146,14 +1165,17 @@ fn linked_gradient_value(
     }
     ensure_document_can_reference_source(
         session,
-        resolved.identity.document(),
+        resolved.identity.document_id(),
         SourceObjectKind::Gradient,
         &id.0,
     )
     .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
     Ok(EffectParamValue::Gradient(GradientSource::Reference(id)))
 }
-fn effect_ref_from_gui(reference: SequenceEffectReference) -> Result<EffectRef, GuiMutationError> {
+fn effect_ref_from_gui(
+    session: &ProjectSession,
+    reference: SequenceEffectReference,
+) -> Result<EffectRef, GuiMutationError> {
     Ok(match reference {
         SequenceEffectReference::Builtin { effect } => EffectRef::Builtin(match effect {
             SequenceBuiltinEffect::Pulse => BuiltinEffect::Pulse,
@@ -1162,15 +1184,24 @@ fn effect_ref_from_gui(reference: SequenceEffectReference) -> Result<EffectRef, 
             SequenceBuiltinEffect::MarkPulse => BuiltinEffect::MarkPulse,
             SequenceBuiltinEffect::MarkChase => BuiltinEffect::MarkChase,
         }),
-        SequenceEffectReference::Custom { path, effect_name } => EffectRef::Custom(
-            EffectDefinitionId(SourceIdentity::new(Utf8PathBuf::from(path), effect_name)),
-        ),
+        SequenceEffectReference::Custom {
+            module_id,
+            path,
+            effect_name,
+        } => {
+            let identity = source_identity_from_gui(&module_id, &path, &effect_name)?;
+            if session.source.module(identity.module_id()).is_none() {
+                return Err(GuiMutationError::Invalid(
+                    "Effect source module was not found.".to_string(),
+                ));
+            }
+            EffectRef::Custom(EffectDefinitionId(identity))
+        }
     })
 }
 
 use std::collections::BTreeSet;
 
-use camino::Utf8PathBuf;
 use dawn_language::effect::{
     BuiltinEffect, CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId,
     EffectParamValue, EffectRef, GradientId, GradientSource,
@@ -1197,7 +1228,7 @@ use super::model::{
     ensure_graph_node_exists, fixture_definition_mut, graph_input_cardinality,
     graph_operator_from_gui, identifier, layout_target_to_effect_target, mark_collection_mut,
     next_composition_node_id, parse_color, parse_graph_node_id, register_sequence_audio_asset,
-    rotation3_degrees, scale3, sequence_mut,
+    rotation3_degrees, scale3, sequence_mut, source_identity_from_gui,
 };
 use super::selection::{
     current_effect_curve_value, current_effect_gradient_value, current_graph_curve_value,

@@ -121,7 +121,8 @@ mod tests {
 
     use artnet_protocol::ArtCommand;
     use dawn_language::controller::{ArtNetMode, ControllerPort, ControllerPortAddress};
-    use dawn_language::identity::SourceIdentity;
+    use dawn_language::identity::{DocumentId, SourceIdentity};
+    use uuid::Uuid;
 
     use super::*;
 
@@ -132,8 +133,8 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
         let destination = receiver.local_addr().unwrap();
-        let id = ControllerId(SourceIdentity::new(
-            "controller.dawn".into(),
+        let id = ControllerId(SourceIdentity::from_document(
+            DocumentId::new(Uuid::new_v4(), "controller.dawn".into()),
             "artnet".to_string(),
         ));
         let config = ArtNetConfig {

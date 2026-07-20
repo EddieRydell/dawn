@@ -216,6 +216,7 @@ fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
             },
         },
         OperatorRef::Custom(id) => SequenceGraphOperator::Custom {
+            module_id: id.0.module_id().to_string(),
             path: id.0.document().to_string(),
             object_key: id.0.object().to_string(),
         },
@@ -302,6 +303,7 @@ pub(in crate::gui) fn curve_library(session: &ProjectSession) -> Vec<SequenceCur
         .definitions
         .iter()
         .map(|(id, definition)| SequenceCurveLibraryItem {
+            module_id: id.0.module_id().to_string(),
             path: id.0.document().to_string(),
             object_key: id.0.object().to_string(),
             display_name: id.0.object().to_string(),
@@ -320,6 +322,7 @@ pub(in crate::gui) fn gradient_library(
         .definitions
         .iter()
         .map(|(id, definition)| SequenceGradientLibraryItem {
+            module_id: id.0.module_id().to_string(),
             path: id.0.document().to_string(),
             object_key: id.0.object().to_string(),
             display_name: id.0.object().to_string(),
@@ -330,6 +333,7 @@ pub(in crate::gui) fn gradient_library(
 
 pub(in crate::gui) fn fixture_source_ref(id: &PropDefinitionId) -> Option<GuiObjectRef> {
     Some(GuiObjectRef {
+        module_id: id.0.module_id().to_string(),
         path: id.0.document().to_string(),
         object_key: id.0.object().to_string(),
         kind: ObjectKind::Prop,
@@ -471,6 +475,7 @@ fn curve_source(value: &EffectParamValue) -> Option<SequenceCurveSource> {
         EffectParamValue::Curve(CurveSource::Inline(_)) => Some(SequenceCurveSource::Inline),
         EffectParamValue::Curve(CurveSource::Reference(id)) => Some(SequenceCurveSource::Library {
             reference: id.0.object().to_string(),
+            module_id: Some(id.0.module_id().to_string()),
             path: Some(id.0.document().to_string()),
             object_key: Some(id.0.object().to_string()),
             display_name: Some(id.0.object().to_string()),
@@ -487,6 +492,7 @@ fn gradient_source(value: &EffectParamValue) -> Option<SequenceGradientSource> {
         EffectParamValue::Gradient(GradientSource::Reference(id)) => {
             Some(SequenceGradientSource::Library {
                 reference: id.0.object().to_string(),
+                module_id: Some(id.0.module_id().to_string()),
                 path: Some(id.0.document().to_string()),
                 object_key: Some(id.0.object().to_string()),
                 display_name: Some(id.0.object().to_string()),

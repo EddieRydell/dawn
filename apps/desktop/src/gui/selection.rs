@@ -4,10 +4,7 @@ pub(super) fn current_effect_curve_value(
     effect_id: u32,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     let sequence = session
         .project
         .sequences
@@ -61,10 +58,7 @@ pub(super) fn current_effect_gradient_value(
     effect_id: u32,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     let sequence = session
         .project
         .sequences
@@ -116,10 +110,7 @@ pub(super) fn current_graph_curve_value(
     node_id: &str,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     let sequence = session
         .project
         .sequences
@@ -180,10 +171,7 @@ pub(super) fn current_graph_gradient_value(
     node_id: &str,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let sequence_id = SequenceId(resolved.identity.clone());
     let sequence = session
         .project
         .sequences
@@ -684,11 +672,18 @@ pub(super) fn mark_param_names(
             SequenceBuiltinEffect::MarkPulse => BuiltinEffect::MarkPulse,
             SequenceBuiltinEffect::MarkChase => BuiltinEffect::MarkChase,
         }),
-        SequenceEffectReference::Custom { path, effect_name } => {
-            EffectRef::Custom(EffectDefinitionId(SourceIdentity::new(
-                Utf8PathBuf::from(path),
-                effect_name.clone(),
-            )))
+        SequenceEffectReference::Custom {
+            module_id,
+            path,
+            effect_name,
+        } => {
+            let identity = source_identity_from_gui(module_id, path, effect_name)?;
+            if session.source.module(identity.module_id()).is_none() {
+                return Err(GuiMutationError::Invalid(
+                    "Effect source module was not found.".to_string(),
+                ));
+            }
+            EffectRef::Custom(EffectDefinitionId(identity))
         }
     };
     let definition = session
@@ -706,20 +701,20 @@ pub(super) fn mark_param_names(
 }
 use std::collections::BTreeMap;
 
-use camino::Utf8PathBuf;
 use dawn_language::dsl::Type;
 use dawn_language::effect::{
     BuiltinEffect, EffectDefinitionId, EffectInstId, EffectParamValue, EffectRef,
 };
 use dawn_language::element::ElementSelection;
-use dawn_language::identity::SourceIdentity;
 use dawn_language::sequence::{
     AutomationDetachmentReason, AutomationTarget, CompositionGraphNodeKind, SequenceId,
 };
 use dawn_language::values::{DawnDuration, DawnTime};
 use dawn_project_io::ProjectSession;
 
-use super::model::{effect_mut, mark_collection_mut, parse_graph_node_id, sequence_mut};
+use super::model::{
+    effect_mut, mark_collection_mut, parse_graph_node_id, sequence_mut, source_identity_from_gui,
+};
 use super::projection::{active_element_tree, default_param_value, effect_param_value};
 use super::{
     ClipboardEffect, ClipboardMark, GuiMutationError, ResolvedGuiObject, SequenceClipboard,

@@ -1,51 +1,3 @@
-pub(crate) fn discover_reachable_files(
-    path: &Utf8Path,
-) -> Result<(Utf8PathBuf, Vec<Utf8PathBuf>), LoadProjectError> {
-    let loader = Loader::new(path)?;
-    let mut discovered = IndexSet::new();
-    discover_reachable_file(&loader.source_root, &loader.entrypoint, &mut discovered)?;
-    Ok((loader.source_root, discovered.into_iter().collect()))
-}
-
-pub(crate) fn discover_reachable_file(
-    source_root: &Utf8Path,
-    relative: &Utf8Path,
-    discovered: &mut IndexSet<Utf8PathBuf>,
-) -> Result<(), LoadProjectError> {
-    if !discovered.insert(relative.to_path_buf()) {
-        return Ok(());
-    }
-
-    let absolute = source_root.join(relative);
-    let text = fs::read_to_string(&absolute).map_err(|source| LoadProjectError::Io {
-        path: absolute.clone(),
-        source,
-    })?;
-    if relative.file_name().is_some_and(|file_name| {
-        file_name.ends_with(".effect.dawn") || file_name.ends_with(".operator.dawn")
-    }) {
-        return Ok(());
-    }
-
-    let value = parse_yaml_value(relative, &text)?;
-    let Some(map) = mapping(&value) else {
-        return Ok(());
-    };
-    for import in parse_imports(relative, map)? {
-        let importer_dir = relative.parent().unwrap_or_else(|| Utf8Path::new(""));
-        let target_relative = normalize_relative(importer_dir.join(&import.from));
-        let target_absolute = source_root.join(&target_relative);
-        if target_absolute.is_dir() {
-            for child in sorted_dawn_children(source_root, &target_absolute)? {
-                discover_reachable_file(source_root, &child, discovered)?;
-            }
-        } else if target_absolute.is_file() {
-            discover_reachable_file(source_root, &target_relative, discovered)?;
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn parse_yaml_value(path: &Utf8Path, text: &str) -> Result<Value, LoadProjectError> {
     let node = marked_yaml::parse_yaml_with_options(
         0,
@@ -70,54 +22,6 @@ pub(crate) fn parse_yaml_value(path: &Utf8Path, text: &str) -> Result<Value, Loa
             .insert(path.to_path_buf(), source_index);
     });
     Ok(value)
-}
-
-pub(crate) fn sorted_dawn_children(
-    source_root: &Utf8Path,
-    absolute: &Utf8Path,
-) -> Result<Vec<Utf8PathBuf>, LoadProjectError> {
-    let mut children = Vec::new();
-    for entry in fs::read_dir(absolute).map_err(|source| LoadProjectError::Io {
-        path: absolute.to_path_buf(),
-        source,
-    })? {
-        let entry = entry.map_err(|source| LoadProjectError::Io {
-            path: absolute.to_path_buf(),
-            source,
-        })?;
-        let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|path| {
-            LoadProjectError::InvalidDocument {
-                path: absolute.to_path_buf(),
-                range: None,
-                message: format!("non-utf8 import child path `{}`", path.display()),
-            }
-        })?;
-        if path.is_file() && path.file_name().is_some_and(|name| name.ends_with(".dawn")) {
-            children.push(relative_path(source_root, &path)?);
-        }
-    }
-    children.sort();
-    Ok(children)
-}
-
-pub(crate) fn check_absolute_document(
-    source_root: &Utf8Path,
-    relative: &Utf8Path,
-) -> Vec<IoDiagnostic> {
-    let path = source_root.join(relative);
-    match fs::read_to_string(&path) {
-        Ok(text) => {
-            let diagnostic_path = relative.to_path_buf();
-            check_document_text(&diagnostic_path, &text)
-        }
-        Err(source) => vec![IoDiagnostic {
-            path: relative.to_path_buf(),
-            range: None,
-            severity: IoDiagnosticSeverity::Error,
-            code: IoDiagnosticCode::IoRead,
-            message: source.to_string(),
-        }],
-    }
 }
 
 pub(crate) fn effect_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
@@ -425,16 +329,12 @@ pub(crate) fn byte_position(text: &str, byte_offset: usize) -> TextPosition {
         character: text[line_start..clamped].chars().count() as u32,
     }
 }
-use std::fs;
-
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use dawn_language::dsl::{Diagnostic as DslDiagnostic, compile_effects, compile_operators};
-use indexmap::IndexSet;
 use marked_yaml::{LoadError as MarkedYamlError, Marker, Node};
 use yaml_serde::Value;
 
-use crate::loader::{Loader, mapping, normalize_relative, parse_imports, relative_path};
 use crate::{
     IoDiagnostic, IoDiagnosticCode, IoDiagnosticSeverity, LoadProjectError, TextPosition,
-    TextRange, YAML_SOURCE_INDICES, YamlSourceIndex, check_document_text,
+    TextRange, YAML_SOURCE_INDICES, YamlSourceIndex,
 };

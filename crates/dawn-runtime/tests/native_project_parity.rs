@@ -1,22 +1,24 @@
 use dawn_language::dsl::compile_effects;
 use dawn_language::effect::{EffectDefinition, EffectDefinitionId, EffectRef};
-use dawn_language::identity::SourceIdentity;
-use dawn_project_io::load_project;
+use dawn_language::identity::{DocumentId, SourceIdentity};
+use dawn_project_io::load_package;
 use dawn_runtime::PreparedSequenceRenderer;
 
 #[test]
 fn native_effects_match_reference_dsl_in_real_project_frames() {
-    let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/starter/project.dawn");
-    let session = load_project(&root).unwrap();
+    let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/starter");
+    let session = load_package(&root).unwrap().session;
     let mut reference_project = session.project.clone();
-    let document = camino::Utf8PathBuf::from("tests/native-effect-reference.effect.dawn");
+    let document = DocumentId::new(
+        session.source.project_module_id(),
+        "tests/native-effect-reference.effect.dawn".into(),
+    );
     for compiled in compile_effects(include_str!(
         "../../dawn-language/tests/fixtures/native_effect_reference.effect.dawn"
     ))
     .unwrap()
     {
-        let id = EffectDefinitionId(SourceIdentity::new(
+        let id = EffectDefinitionId(SourceIdentity::from_document(
             document.clone(),
             compiled.name().as_str().to_string(),
         ));
@@ -37,10 +39,9 @@ fn native_effects_match_reference_dsl_in_real_project_frames() {
                 dawn_language::effect::BuiltinEffect::MarkPulse => "MarkPulse",
                 dawn_language::effect::BuiltinEffect::MarkChase => "MarkChase",
             };
-            effect.definition = EffectRef::Custom(EffectDefinitionId(SourceIdentity::new(
-                document.clone(),
-                name.to_string(),
-            )));
+            effect.definition = EffectRef::Custom(EffectDefinitionId(
+                SourceIdentity::from_document(document.clone(), name.to_string()),
+            ));
         }
     }
     let setup = &session.project.root.setup;

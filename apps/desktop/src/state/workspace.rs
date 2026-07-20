@@ -3,13 +3,13 @@ use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    check_document_text, check_project, check_project_document_text, save_project,
+    check_document_text, check_package, check_project_document_text, save_project,
 };
 
 use super::{
-    DesktopState, FsEntryKind, absolute_project_path, document_descriptor, editor_buffer_for_path,
-    empty_document_descriptor, lock_unpoisoned, normalize_project_entrypoint, project_diagnostic,
-    project_path_is_structural, upsert_tab, valid_child_name,
+    DesktopState, FsEntryKind, PendingOperatorRewriteKind, absolute_project_path,
+    document_descriptor, editor_buffer_for_path, empty_document_descriptor, lock_unpoisoned,
+    project_diagnostic, project_path_is_structural, upsert_tab, valid_child_name,
 };
 use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
 use crate::persistence::{
@@ -19,8 +19,19 @@ use crate::project_templates::{new_project_files, write_new_project_files};
 
 impl DesktopState {
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
-        let entrypoint = normalize_project_entrypoint(path);
-        self.apply_project_open_check(entrypoint.as_str(), check_project(&entrypoint))
+        let candidate = Utf8Path::new(path);
+        let root = if candidate.is_dir() {
+            candidate
+        } else if candidate.file_name() == Some(dawn_package::MANIFEST_FILE) {
+            candidate.parent().unwrap_or(candidate)
+        } else {
+            return self.snapshot_with_error(
+                "project.open",
+                path,
+                "Open a project by selecting its dawn-package.json manifest.",
+            );
+        };
+        self.apply_project_open_check(root.as_str(), check_package(root))
     }
 
     pub fn save_editor_view_state(&self, update: PersistedEditorViewStateUpdate) -> AppSnapshot {
@@ -81,7 +92,7 @@ impl DesktopState {
         let descriptor = project
             .source
             .documents
-            .get(&relative_path)
+            .get(&project.source.project_document(relative_path.clone()))
             .map(|document| document_descriptor(&relative_path, document))
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
         self.update_snapshot(|snapshot| {
@@ -114,7 +125,7 @@ impl DesktopState {
         let descriptor = project
             .source
             .documents
-            .get(&relative_path)
+            .get(&project.source.project_document(relative_path.clone()))
             .map(|document| document_descriptor(&relative_path, document))
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
         self.update_snapshot(|snapshot| {
@@ -148,7 +159,11 @@ impl DesktopState {
                     project
                         .source
                         .documents
-                        .get(Utf8Path::new(&next.path))
+                        .get(
+                            &project
+                                .source
+                                .project_document(Utf8PathBuf::from(&next.path)),
+                        )
                         .map(|document| document_descriptor(Utf8Path::new(&next.path), document))
                 });
                 snapshot.active_buffer = Some(next);
@@ -175,8 +190,8 @@ impl DesktopState {
                     || check_document_text(Utf8Path::new(path), &text),
                     |project| {
                         check_project_document_text(
-                            &project.source.source_root.join(&project.source.entrypoint),
-                            Utf8Path::new(path),
+                            &project,
+                            &project.source.project_document(Utf8PathBuf::from(path)),
                             &text,
                         )
                     },
@@ -210,7 +225,15 @@ impl DesktopState {
         }
         let pending_matches = lock_unpoisoned(&self.pending_operator_rewrite)
             .as_ref()
-            .is_some_and(|pending| pending.path == Utf8Path::new(path));
+            .is_some_and(|pending| {
+                matches!(
+                    &pending.kind,
+                    PendingOperatorRewriteKind::Document {
+                        path: pending_path,
+                        ..
+                    } if pending_path == Utf8Path::new(path)
+                )
+            });
         if pending_matches
             && self
                 .snapshot()
@@ -237,8 +260,8 @@ impl DesktopState {
         };
         fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
         self.after_file_saved(&buffer.path);
-        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        Ok(self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint)))
+        let root = project.source.project_root();
+        Ok(self.apply_project_refresh_check(root.as_str(), check_package(root)))
     }
 
     pub fn set_editor_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
@@ -273,8 +296,8 @@ impl DesktopState {
         match fs::write(&path, &buffer.text) {
             Ok(()) => {
                 self.after_file_saved(&buffer.path);
-                let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-                self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
+                let root = project.source.project_root();
+                self.apply_project_refresh_check(root.as_str(), check_package(root))
             }
             Err(error) => self.snapshot_with_error("file.save", &buffer.path, &error.to_string()),
         }
@@ -320,14 +343,16 @@ impl DesktopState {
                 "Project folder already exists",
             );
         }
-        let files = new_project_files(directory_name);
+        let files = match new_project_files(directory_name) {
+            Ok(files) => files,
+            Err(error) => {
+                return self.snapshot_with_error("project.create", root.as_str(), &error);
+            }
+        };
         if let Err(error) = write_new_project_files(&root, &files) {
             return self.snapshot_with_error("project.create", root.as_str(), &error);
         }
-        self.apply_project_open_check(
-            root.join("project.dawn").as_str(),
-            check_project(&root.join("project.dawn")),
-        )
+        self.apply_project_open_check(root.as_str(), check_package(&root))
     }
 
     pub fn create_sequence(&self, request: NewSequenceRequest) -> AppSnapshot {
@@ -342,7 +367,7 @@ impl DesktopState {
                 "Sequence duration is outside the supported range",
             );
         };
-        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+        let root = project.source.project_root().to_path_buf();
         let mut edited = (*project).clone();
         if let Err(error) = dawn_project_io::insert_sequence(
             &mut edited,
@@ -359,8 +384,7 @@ impl DesktopState {
                 &error.to_string(),
             );
         }
-        let refreshed =
-            self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
+        let refreshed = self.apply_project_refresh_check(root.as_str(), check_package(&root));
         if refreshed
             .diagnostics
             .iter()
@@ -448,8 +472,8 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
-        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
+        let root = project.source.project_root();
+        self.apply_project_refresh_check(root.as_str(), check_package(root))
     }
 }
 

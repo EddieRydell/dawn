@@ -1,14 +1,14 @@
 use crate::dsl::{Identifier, Type};
+use crate::identity::DocumentId;
 use crate::model::DawnProject;
 use crate::operator::{
     OperatorDefinition, OperatorDefinitionId, OperatorDefinitionStore, OperatorRef,
 };
 use crate::sequence::{CompositionGraphNodeId, CompositionGraphNodeKind, SequenceId};
-use camino::Utf8Path;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OperatorRewriteAnalysis {
-    pub source_path: camino::Utf8PathBuf,
+    pub source_document: DocumentId,
     pub definitions: Vec<OperatorDefinitionRewrite>,
     pub breaking: bool,
 }
@@ -34,8 +34,9 @@ pub struct OperatorUsage {
 
 pub fn analyze_operator_rewrite(
     project: &DawnProject,
-    source_path: &Utf8Path,
+    source_document: &DocumentId,
     candidate: &OperatorDefinitionStore,
+    editable_module_id: uuid::Uuid,
 ) -> OperatorRewriteAnalysis {
     let candidates = candidate.definitions.values().collect::<Vec<_>>();
     let definitions = project
@@ -43,11 +44,13 @@ pub fn analyze_operator_rewrite(
         .operators
         .definitions
         .iter()
-        .filter(|(id, _)| id.0.document() == source_path)
-        .map(|(old_id, old)| analyze_definition(project, old_id, old, &candidates))
+        .filter(|(id, _)| id.0.document_id() == source_document)
+        .map(|(old_id, old)| {
+            analyze_definition(project, old_id, old, &candidates, editable_module_id)
+        })
         .collect::<Vec<_>>();
     OperatorRewriteAnalysis {
-        source_path: source_path.to_path_buf(),
+        source_document: source_document.clone(),
         breaking: definitions.iter().any(|definition| definition.breaking),
         definitions,
     }
@@ -58,13 +61,14 @@ fn analyze_definition(
     old_id: &OperatorDefinitionId,
     old: &OperatorDefinition,
     candidates: &[&OperatorDefinition],
+    editable_module_id: uuid::Uuid,
 ) -> OperatorDefinitionRewrite {
     let exact = candidates
         .iter()
         .copied()
         .find(|candidate| candidate.declaration_name == old.declaration_name);
     let replacement = exact;
-    let usages = operator_usages(project, old_id);
+    let usages = operator_usages(project, old_id, editable_module_id);
     let changes = replacement
         .map(|replacement| schema_changes(old, replacement))
         .unwrap_or_else(|| SchemaChanges {
@@ -207,10 +211,15 @@ fn schema_changes(old: &OperatorDefinition, new: &OperatorDefinition) -> SchemaC
     }
 }
 
-fn operator_usages(project: &DawnProject, id: &OperatorDefinitionId) -> Vec<OperatorUsage> {
+fn operator_usages(
+    project: &DawnProject,
+    id: &OperatorDefinitionId,
+    editable_module_id: uuid::Uuid,
+) -> Vec<OperatorUsage> {
     project
         .sequences
         .iter()
+        .filter(|(sequence_id, _)| sequence_id.0.module_id() == editable_module_id)
         .flat_map(|(sequence_id, sequence)| {
             sequence.composition_graph.nodes.iter().filter_map(|node| {
                 let CompositionGraphNodeKind::Operator(operator) = &node.kind else {

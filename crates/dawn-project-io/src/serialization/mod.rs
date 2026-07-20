@@ -14,10 +14,11 @@ pub(super) fn write_source_documents(
     output_root: &Utf8Path,
 ) -> Result<Vec<Utf8PathBuf>, ExportProjectError> {
     let mut prepared = Vec::new();
-    for (relative_path, document) in &session.source.documents {
-        if !is_project_owned_path(relative_path) {
+    for (document_id, document) in &session.source.documents {
+        if !session.source.is_project_owned(document_id) {
             continue;
         }
+        let relative_path = document_id.path();
         let output_path = output_root.join(relative_path);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).map_err(|source| ExportProjectError::Io {
@@ -44,7 +45,7 @@ pub(super) fn write_source_documents(
         } else {
             None
         };
-        prepared.push((relative_path.clone(), output_path, text, previous));
+        prepared.push((relative_path.to_path_buf(), output_path, text, previous));
     }
     let mut written = 0usize;
     while written < prepared.len() {
@@ -239,9 +240,14 @@ pub(super) fn qualified_identity(
     session
         .source
         .documents
-        .get(document)
+        .get(&session.source.project_document(document.to_path_buf()))
         .is_some_and(|document| document.objects.contains(id))
-        .then(|| SourceIdentity::new(document.to_path_buf(), id.id.clone()))
+        .then(|| {
+            SourceIdentity::from_document(
+                session.source.project_document(document.to_path_buf()),
+                id.id.clone(),
+            )
+        })
 }
 
 pub(super) fn serialize_source_object(
@@ -383,7 +389,28 @@ pub(super) fn import_decls_value(imports: &[ImportEdge]) -> Value {
             .iter()
             .map(|import| {
                 let mut value = Mapping::new();
-                value.insert(string_value("from"), Value::String(import.from.to_string()));
+                let mut from = Mapping::new();
+                match &import.source {
+                    ImportSource::LocalDocuments { documents } => {
+                        from.insert(
+                            string_value("documents"),
+                            Value::Sequence(
+                                documents
+                                    .iter()
+                                    .map(|path| Value::String(path.to_string()))
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    ImportSource::DependencyExport { dependency, export } => {
+                        from.insert(
+                            string_value("dependency"),
+                            Value::String(dependency.clone()),
+                        );
+                        from.insert(string_value("export"), Value::String(export.clone()));
+                    }
+                };
+                value.insert(string_value("from"), Value::Mapping(from));
                 value.insert(string_value("as"), Value::String(import.alias.clone()));
                 Value::Mapping(value)
             })
@@ -446,6 +473,6 @@ use yaml_serde::{Mapping, Value};
 use crate::ExportProjectError;
 use crate::loader::mapping;
 use crate::source::{
-    ImportEdge, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId,
-    SourceObjectKind, is_project_owned_path,
+    ImportEdge, ImportSource, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId,
+    SourceObjectKind,
 };

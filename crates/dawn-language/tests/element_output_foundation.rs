@@ -4,7 +4,7 @@ use dawn_language::element::{
     ElementSelection, ElementTree, ElementTreeId, ElementTreeValidationError,
 };
 use dawn_language::fixture_profile::FixtureProfileStore;
-use dawn_language::identity::SourceIdentity;
+use dawn_language::identity::{DocumentId, SourceIdentity};
 use dawn_language::patch::{
     ByteOrder, FilterDefinition, PatchEdge, PatchGraph, PatchId, PatchNode, PatchNodeId,
     PatchPortId, PatchSink, PatchSource, PatchValidationError, PatchValue, PatchValueType,
@@ -14,7 +14,13 @@ use dawn_language::values::Color;
 use indexmap::IndexMap;
 
 fn identity(object: &str) -> SourceIdentity {
-    SourceIdentity::new("foundation.dawn".into(), object.to_string())
+    SourceIdentity::from_document(
+        DocumentId::new(
+            uuid::Uuid::from_u128(0x00000000000040008000000000000002),
+            "foundation.dawn".into(),
+        ),
+        object.to_string(),
+    )
 }
 
 #[test]

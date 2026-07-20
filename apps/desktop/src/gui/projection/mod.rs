@@ -10,10 +10,7 @@ pub(super) fn project_sequence(
     session: &ProjectSession,
     resolved: &ResolvedGuiObject,
 ) -> GuiDocument {
-    let id = SequenceId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let id = SequenceId(resolved.identity.clone());
     let Some(sequence) = session.project.sequences.get(&id) else {
         return blocked(
             "Sequence is not available in the checked project model.",
@@ -152,7 +149,7 @@ pub(super) fn project_sequence(
             object_key: resolved.identity.object().to_string(),
             duration_seconds: sequence.duration.as_seconds_f64(),
             frame_rate: sequence.frame_rate as f64,
-            audio: sequence_audio(session, resolved.identity.document(), &sequence.audio),
+            audio: sequence_audio(session, resolved.identity.document_id(), &sequence.audio),
             mark_collections: sequence
                 .mark_collections
                 .iter()
@@ -262,10 +259,7 @@ pub(super) fn project_layout(
     session: &ProjectSession,
     resolved: &ResolvedGuiObject,
 ) -> GuiDocument {
-    let id = PreviewLayoutId(SourceIdentity::new(
-        resolved.identity.document().to_path_buf(),
-        resolved.identity.object().to_string(),
-    ));
+    let id = PreviewLayoutId(resolved.identity.clone());
     let Some(layout) = session.project.preview_layouts.get(&id) else {
         return blocked(
             "Layout is not available in the checked project model.",
@@ -298,6 +292,7 @@ pub(super) fn project_layout(
                 .unwrap_or_else(empty_resolved_fixture);
             PreviewPropPlacement {
                 source_ref: GuiObjectRef {
+                    module_id: resolved.identity.module_id().to_string(),
                     path: resolved.identity.document().to_string(),
                     object_key: resolved.identity.object().to_string(),
                     kind: ObjectKind::Prop,
@@ -342,13 +337,13 @@ pub(super) fn project_fixture(
     let fixtures = session
         .source
         .documents
-        .get(resolved.identity.document())
+        .get(resolved.identity.document_id())
         .into_iter()
         .flat_map(|document| document.objects())
         .filter(|object| object.kind() == &SourceObjectKind::PropDefinition)
         .filter_map(|object| {
-            let definition_id = PropDefinitionId(SourceIdentity::new(
-                resolved.identity.document().to_path_buf(),
+            let definition_id = PropDefinitionId(SourceIdentity::from_document(
+                resolved.identity.document_id().clone(),
                 object.id().to_string(),
             ));
             let definition = session
@@ -358,6 +353,7 @@ pub(super) fn project_fixture(
                 .definitions
                 .get(&definition_id)?;
             let source_ref = GuiObjectRef {
+                module_id: resolved.identity.module_id().to_string(),
                 path: resolved.identity.document().to_string(),
                 object_key: object.id().to_string(),
                 kind: ObjectKind::Prop,
@@ -395,7 +391,7 @@ pub(super) fn active_element_tree(session: &ProjectSession) -> Option<&ElementTr
 
 fn sequence_audio(
     session: &ProjectSession,
-    document: &Utf8Path,
+    document: &dawn_language::identity::DocumentId,
     audio: &dawn_language::sequence::SequenceAudio,
 ) -> Option<SequenceAudio> {
     let dawn_language::sequence::SequenceAudio::Asset(id) = audio else {
@@ -405,9 +401,9 @@ fn sequence_audio(
         .source
         .referenced_assets
         .iter()
-        .find(|asset| asset.id == *id)
+        .find(|asset| asset.id == *id && asset.module_id == document.module_id())
         .map(|asset| SequenceAudio {
-            import_path: relative_path_from_document(document, &asset.relative_path).to_string(),
+            import_path: asset.relative_path.to_string(),
             resolved_path: asset.absolute_path.to_string(),
             file_name: asset
                 .relative_path
@@ -460,6 +456,7 @@ fn effect_ref_to_gui(reference: &EffectRef) -> SequenceEffectReference {
             effect: builtin_effect_to_gui(*effect),
         },
         EffectRef::Custom(id) => SequenceEffectReference::Custom {
+            module_id: id.0.module_id().to_string(),
             path: id.0.document().to_string(),
             effect_name: id.0.object().to_string(),
         },
@@ -533,7 +530,6 @@ fn effect_definitions(session: &ProjectSession) -> Vec<SequenceEffectDefinition>
         )
         .collect()
 }
-use camino::Utf8Path;
 use dawn_language::dsl::EffectKind;
 use dawn_language::effect::{BuiltinEffect, EffectRef, EffectScope};
 use dawn_language::element::{ElementNodeId, ElementNodeKind, ElementSelection, ElementTree};
@@ -541,7 +537,7 @@ use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{BuiltinOperator, OperatorRef};
 use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::{AutomationDetachmentReason, AutomationTarget, SequenceId};
-use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_document};
+use dawn_project_io::{ProjectSession, SourceObjectKind};
 
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
 use crate::dto::{

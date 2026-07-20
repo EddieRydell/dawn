@@ -45,11 +45,15 @@ function effectReferencesEqual(left: SequenceEffectDefinition["effect"], right: 
   if (left.type !== right.type) return false;
   return left.type === "builtin"
     ? left.effect === (right.type === "builtin" ? right.effect : undefined)
-    : left.path === (right.type === "custom" ? right.path : undefined) && left.effectName === (right.type === "custom" ? right.effectName : undefined);
+    : left.moduleId === (right.type === "custom" ? right.moduleId : undefined)
+      && left.path === (right.type === "custom" ? right.path : undefined)
+      && left.effectName === (right.type === "custom" ? right.effectName : undefined);
 }
 
 function effectReferenceKey(reference: SequenceEffectDefinition["effect"]) {
-  return reference.type === "builtin" ? `builtin:${reference.effect}` : `${reference.path}:${reference.effectName}`;
+  return reference.type === "builtin"
+    ? `builtin:${reference.effect}`
+    : `${reference.moduleId}:${reference.path}:${reference.effectName}`;
 }
 
 function defaultLayerColor(index: number) {
@@ -428,6 +432,7 @@ function EffectInspectorPanel({
                         type: "linkEffectCurve",
                         id: effect.id,
                         name,
+                        sourceModuleId: curve.moduleId,
                         sourcePath: curve.path,
                         objectKey: curve.objectKey
                       })
@@ -448,6 +453,7 @@ function EffectInspectorPanel({
                         type: "linkEffectGradient",
                         id: effect.id,
                         name,
+                        sourceModuleId: gradient.moduleId,
                         sourcePath: gradient.path,
                         objectKey: gradient.objectKey
                       })

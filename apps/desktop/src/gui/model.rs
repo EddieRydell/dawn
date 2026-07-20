@@ -11,48 +11,39 @@ pub(super) fn sequence_mut<'a>(
 
 pub(super) fn register_sequence_audio_asset(
     session: &mut ProjectSession,
-    document: &Utf8Path,
+    document: &dawn_language::identity::DocumentId,
     import_path: &str,
 ) -> Result<AssetId, GuiMutationError> {
-    if let Some(asset) = session
-        .source
-        .referenced_assets
-        .iter()
-        .find(|asset| asset.relative_path.as_str() == import_path)
-    {
+    if let Some(asset) = session.source.referenced_assets.iter_mut().find(|asset| {
+        asset.module_id == document.module_id() && asset.relative_path.as_str() == import_path
+    }) {
+        asset.referenced_by.insert(document.clone());
         return Ok(asset.id.clone());
     }
 
-    let document_path = session.source.source_root.join(document);
-    let document_dir = document_path
-        .parent()
-        .unwrap_or(&session.source.source_root)
-        .to_path_buf();
-    let selected_path = document_dir.join(import_path);
+    let module = session
+        .source
+        .module(document.module_id())
+        .ok_or_else(|| GuiMutationError::Invalid("Source module was not found.".to_string()))?;
+    let selected_path = module.root.join(import_path);
     let absolute_path = fs::canonicalize(&selected_path)
         .map_err(|error| GuiMutationError::Invalid(format!("Audio file was not found: {error}")))?;
     let absolute_path = Utf8PathBuf::from_path_buf(absolute_path).map_err(|path| {
         GuiMutationError::Invalid(format!("Audio path is not valid UTF-8: {}", path.display()))
     })?;
-    if !absolute_path.is_file() {
+    if !absolute_path.is_file() || !absolute_path.starts_with(&module.root) {
         return Err(GuiMutationError::Invalid(
-            "Selected audio path is not a file.".to_string(),
+            "Selected audio path is not a file inside the project module.".to_string(),
         ));
     }
 
-    if let Some(asset) = session
-        .source
-        .referenced_assets
-        .iter()
-        .find(|asset| asset.absolute_path == absolute_path)
-    {
+    if let Some(asset) = session.source.referenced_assets.iter().find(|asset| {
+        asset.module_id == document.module_id() && asset.absolute_path == absolute_path
+    }) {
         return Ok(asset.id.clone());
     }
 
-    let relative_path = absolute_path
-        .strip_prefix(&session.source.source_root)
-        .map(Utf8Path::to_path_buf)
-        .unwrap_or_else(|_| Utf8PathBuf::from(import_path));
+    let relative_path = Utf8PathBuf::from(import_path);
     let next_id = session
         .source
         .referenced_assets
@@ -64,8 +55,10 @@ pub(super) fn register_sequence_audio_asset(
     let id = AssetId(next_id);
     session.source.referenced_assets.push(ReferencedAsset {
         id: id.clone(),
+        module_id: document.module_id(),
         relative_path,
         absolute_path,
+        referenced_by: std::collections::BTreeSet::from([document.clone()]),
     });
     Ok(id)
 }
@@ -78,14 +71,17 @@ pub(super) fn fixture_definition_mut<'a>(
     let id = session
         .source
         .documents
-        .get(document_path)
+        .get(&session.source.project_document(document_path.to_path_buf()))
         .into_iter()
         .flat_map(|document| document.objects())
         .find_map(|object| {
             (object.kind() == &SourceObjectKind::PropDefinition && object.id() == object_key).then(
                 || {
-                    PropDefinitionId(SourceIdentity::new(
-                        document_path.to_path_buf(),
+                    PropDefinitionId(SourceIdentity::from_document(
+                        dawn_language::identity::DocumentId::new(
+                            session.source.project_module_id(),
+                            document_path.to_path_buf(),
+                        ),
                         object.id().to_string(),
                     ))
                 },
@@ -240,6 +236,7 @@ pub(super) fn create_sequence_layer(
 }
 
 pub(super) fn graph_operator_from_gui(
+    session: &ProjectSession,
     operator: &SequenceGraphOperator,
 ) -> Result<OperatorRef, GuiMutationError> {
     Ok(match operator {
@@ -254,13 +251,34 @@ pub(super) fn graph_operator_from_gui(
             SequenceBuiltinOperator::Delay => BuiltinOperator::Delay,
             SequenceBuiltinOperator::Echo => BuiltinOperator::Echo,
         }),
-        SequenceGraphOperator::Custom { path, object_key } => {
-            OperatorRef::Custom(OperatorDefinitionId(SourceIdentity::new(
-                Utf8PathBuf::from(path),
-                identifier(object_key)?.as_str().to_string(),
-            )))
+        SequenceGraphOperator::Custom {
+            module_id,
+            path,
+            object_key,
+        } => {
+            let identity =
+                source_identity_from_gui(module_id, path, identifier(object_key)?.as_str())?;
+            if session.source.module(identity.module_id()).is_none() {
+                return Err(GuiMutationError::Invalid(
+                    "Operator source module was not found.".to_string(),
+                ));
+            }
+            OperatorRef::Custom(OperatorDefinitionId(identity))
         }
     })
+}
+
+pub(super) fn source_identity_from_gui(
+    module_id: &str,
+    path: &str,
+    object: &str,
+) -> Result<SourceIdentity, GuiMutationError> {
+    let module_id = uuid::Uuid::parse_str(module_id)
+        .map_err(|_| GuiMutationError::Invalid("Source module ID is invalid.".to_string()))?;
+    Ok(SourceIdentity::from_document(
+        dawn_language::identity::DocumentId::new(module_id, Utf8PathBuf::from(path)),
+        object.to_string(),
+    ))
 }
 
 pub(super) fn mark_collection_mut<'a>(

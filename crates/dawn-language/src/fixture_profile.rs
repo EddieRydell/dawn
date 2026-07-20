@@ -456,6 +456,8 @@ pub fn indexed_option_to_fixture_entry(option: IndexedOptionId) -> FixtureEntryI
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::DocumentId;
+    use uuid::Uuid;
 
     fn color(red: u8, green: u8, blue: u8) -> Color {
         Color { red, green, blue }
@@ -464,8 +466,8 @@ mod tests {
     fn color_wheel_profile(behavior_rules: Vec<FixtureBehaviorRule>) -> FixtureProfile {
         let function = FixtureFunctionId(1);
         FixtureProfile {
-            id: FixtureProfileId(SourceIdentity::new(
-                "fixtures/profile.fixture.dawn".into(),
+            id: FixtureProfileId(SourceIdentity::from_document(
+                DocumentId::new(Uuid::new_v4(), "fixtures/profile.fixture.dawn".into()),
                 "profile".to_string(),
             )),
             functions: IndexMap::from([(

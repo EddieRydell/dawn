@@ -32,34 +32,488 @@ thread_local! {
         RefCell::new(IndexMap::new());
 }
 
+mod package_update;
 mod source;
+pub use package_update::{
+    PackageCompatibilityIssue, PackageCompatibilityIssueKind, PackageCompatibilityReport,
+    analyze_package_candidate,
+};
 pub use source::{
-    ExportReport, ImportEdge, ProjectSession, ReferencedAsset, SaveReport, SourceDocument,
-    SourceDocumentKind, SourceObjectId, SourceObjectKind, SourceProject, is_project_owned_path,
-    relative_path_from_document, source_file_list,
+    ExportReport, ImportEdge, ImportSource, ProjectSession, ReferencedAsset, SaveReport,
+    SourceDocument, SourceDocumentKind, SourceObjectId, SourceObjectKind, SourceOwnership,
+    SourceProject, source_file_list,
 };
 
-pub fn load_project(path: &Utf8Path) -> Result<ProjectSession, LoadProjectError> {
-    Loader::new(path)?.load()
+/// A package-resolved project. The compiler still receives the same typed
+/// `ProjectSession`; package metadata and lock validation stay at the IO
+/// boundary and never leak into runtime rendering.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadedPackageProject {
+    pub manifest: dawn_package::PackageManifest,
+    pub lockfile: dawn_package::Lockfile,
+    pub session: ProjectSession,
 }
 
-pub fn check_project(path: &Utf8Path) -> ProjectCheckReport {
-    let mut diagnostics = Vec::new();
-    let (source_root, mut reachable_files) = match discover_reachable_files(path) {
-        Ok(discovered) => discovered,
-        Err(error) => {
-            push_diagnostic(&mut diagnostics, load_error_diagnostic(error));
-            (Utf8PathBuf::new(), Vec::new())
-        }
-    };
-    reachable_files.sort();
-    reachable_files.dedup();
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledSourceGraph {
+    pub source: SourceProject,
+    pub project: Option<dawn_language::model::DawnProject>,
+    pub definitions: dawn_language::model::ProjectDefinitionStores,
+}
 
-    for file in &reachable_files {
-        diagnostics.extend(check_absolute_document(&source_root, file));
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledPackage {
+    pub manifest: dawn_package::PackageManifest,
+    pub lockfile: dawn_package::Lockfile,
+    pub graph: CompiledSourceGraph,
+}
+
+#[derive(Debug)]
+pub enum PackageLoadError {
+    Package(dawn_package::PackageError),
+    Project(LoadProjectError),
+}
+
+impl std::fmt::Display for PackageLoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Package(error) => write!(formatter, "package error: {error}"),
+            Self::Project(error) => write!(formatter, "project error: {error:?}"),
+        }
+    }
+}
+
+impl std::error::Error for PackageLoadError {}
+
+impl From<dawn_package::PackageError> for PackageLoadError {
+    fn from(error: dawn_package::PackageError) -> Self {
+        Self::Package(error)
+    }
+}
+
+impl From<LoadProjectError> for PackageLoadError {
+    fn from(error: LoadProjectError) -> Self {
+        Self::Project(error)
+    }
+}
+
+pub fn load_package(root: &Utf8Path) -> Result<LoadedPackageProject, PackageLoadError> {
+    let manifest = dawn_package::PackageManifest::read(root)?;
+    let lockfile = dawn_package::Lockfile::read(root)?;
+    let cache = package_cache_for_lock(root, &lockfile)?;
+    load_package_with_cache(root, manifest, lockfile, &cache)
+}
+
+pub fn compile_package(root: &Utf8Path) -> Result<CompiledPackage, PackageLoadError> {
+    let manifest = dawn_package::PackageManifest::read(root)?;
+    let lockfile = dawn_package::Lockfile::read(root)?;
+    let cache = package_cache_for_lock(root, &lockfile)?;
+    compile_package_with_cache(root, manifest, lockfile, &cache)
+}
+
+pub fn compile_package_with_cache(
+    root: &Utf8Path,
+    manifest: dawn_package::PackageManifest,
+    lockfile: dawn_package::Lockfile,
+    cache: &dawn_package::CacheStore,
+) -> Result<CompiledPackage, PackageLoadError> {
+    let source_graph =
+        dawn_package::ResolvedSourceGraph::from_lock(root, manifest.clone(), &lockfile, cache)?;
+    let graph = compile_source_graph(source_graph)?;
+    Ok(CompiledPackage {
+        manifest,
+        lockfile,
+        graph,
+    })
+}
+
+pub fn validate_registry_package_artifact(
+    package_root: &Utf8Path,
+    package: &dawn_package::PackageId,
+    locked: &dawn_package::LockedPackage,
+    global_lock: &dawn_package::Lockfile,
+    cache: &dawn_package::CacheStore,
+) -> Result<(), dawn_package::PackageError> {
+    if global_lock.packages.get(package) != Some(locked) {
+        return Err(dawn_package::PackageError::Invalid(format!(
+            "artifact validation received a lock entry that does not match `{package}`"
+        )));
     }
 
-    match load_project(path) {
+    let manifest = dawn_package::PackageManifest::read(package_root)?;
+    let publication = manifest.publication.as_ref().ok_or_else(|| {
+        dawn_package::PackageError::Invalid(format!(
+            "cached package `{package}@{}` has no publication identity",
+            locked.version
+        ))
+    })?;
+    if publication.package != *package
+        || publication.version != locked.version
+        || manifest.module_id != locked.module_id
+    {
+        return Err(dawn_package::PackageError::Invalid(format!(
+            "cached package `{package}@{}` does not match dawn.lock",
+            locked.version
+        )));
+    }
+
+    let declared_dependencies = manifest
+        .dependencies
+        .iter()
+        .map(|(alias, dependency)| match dependency {
+            dawn_package::Dependency::Registry {
+                package: dependency,
+                version,
+            } => {
+                let selected = global_lock.packages.get(dependency).ok_or_else(|| {
+                    dawn_package::PackageError::Invalid(format!(
+                        "cached package `{package}` points to unlocked dependency `{dependency}`"
+                    ))
+                })?;
+                if !version.matches(&selected.version) {
+                    return Err(dawn_package::PackageError::Invalid(format!(
+                        "locked `{dependency}@{}` does not satisfy `{version}` required by `{package}`",
+                        selected.version
+                    )));
+                }
+                Ok((alias.clone(), dependency.clone()))
+            }
+            dawn_package::Dependency::Path { .. } => {
+                Err(dawn_package::PackageError::Invalid(format!(
+                    "cached registry package `{package}` contains a path dependency"
+                )))
+            }
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>()?;
+    if declared_dependencies != locked.dependencies {
+        return Err(dawn_package::PackageError::Invalid(format!(
+            "cached package `{package}@{}` dependency edges do not match dawn.lock",
+            locked.version
+        )));
+    }
+
+    let mut visiting = vec![package.clone()];
+    let mut closure = std::collections::BTreeSet::new();
+    for dependency in locked.dependencies.values() {
+        collect_registry_package_closure(dependency, global_lock, &mut visiting, &mut closure)?;
+    }
+    let packages = closure
+        .into_iter()
+        .map(|dependency| {
+            let locked_dependency =
+                global_lock
+                    .packages
+                    .get(&dependency)
+                    .cloned()
+                    .ok_or_else(|| {
+                        dawn_package::PackageError::Invalid(format!(
+                            "locked package graph points to missing package `{dependency}`"
+                        ))
+                    })?;
+            Ok((dependency, locked_dependency))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, dawn_package::PackageError>>()?;
+    let artifact_lock = dawn_package::Lockfile {
+        lock_version: global_lock.lock_version,
+        manifest_sha256: dawn_package::manifest_hash(&manifest)?,
+        registry: global_lock.registry.clone(),
+        packages,
+        path_dependencies: std::collections::BTreeMap::new(),
+    };
+
+    let compiled = compile_package_with_cache(package_root, manifest, artifact_lock, cache)
+        .map_err(|error| {
+            dawn_package::PackageError::Invalid(format!(
+                "package `{package}@{}` failed compiler validation: {error}",
+                locked.version
+            ))
+        })?;
+    let receipt = fs::read(package_root.join("dawn-release.json"))?;
+    let receipt = serde_json::from_slice::<dawn_package::ReleaseReceipt>(&receipt)?;
+    let compiled_exports = release_export_index(&compiled).map_err(|error| {
+        dawn_package::PackageError::Invalid(format!(
+            "package `{package}@{}` failed compiler export validation: {error}",
+            locked.version
+        ))
+    })?;
+    if receipt.exports != compiled_exports {
+        return Err(dawn_package::PackageError::Invalid(format!(
+            "package `{package}@{}` release export index does not match compiler output",
+            locked.version
+        )));
+    }
+    Ok(())
+}
+
+fn collect_registry_package_closure(
+    package: &dawn_package::PackageId,
+    lockfile: &dawn_package::Lockfile,
+    visiting: &mut Vec<dawn_package::PackageId>,
+    closure: &mut std::collections::BTreeSet<dawn_package::PackageId>,
+) -> Result<(), dawn_package::PackageError> {
+    if closure.contains(package) {
+        return Ok(());
+    }
+    if let Some(index) = visiting.iter().position(|entry| entry == package) {
+        let mut cycle = visiting[index..]
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        cycle.push(package.to_string());
+        return Err(dawn_package::PackageError::Invalid(format!(
+            "package dependency cycle while validating artifacts: {}",
+            cycle.join(" -> ")
+        )));
+    }
+    let locked = lockfile.packages.get(package).ok_or_else(|| {
+        dawn_package::PackageError::Invalid(format!(
+            "locked package graph points to missing package `{package}`"
+        ))
+    })?;
+    visiting.push(package.clone());
+    for dependency in locked.dependencies.values() {
+        collect_registry_package_closure(dependency, lockfile, visiting, closure)?;
+    }
+    let _ = visiting.pop();
+    closure.insert(package.clone());
+    Ok(())
+}
+
+pub fn pack_package(root: &Utf8Path) -> Result<dawn_package::PackedRelease, PackageLoadError> {
+    let compiled = compile_package(root)?;
+    if compiled
+        .graph
+        .source
+        .source_graph
+        .modules()
+        .values()
+        .any(|module| {
+            module
+                .manifest
+                .dependencies
+                .values()
+                .any(|dependency| matches!(dependency, dawn_package::Dependency::Path { .. }))
+        })
+    {
+        return Err(dawn_package::PackageError::Invalid(
+            "published dependency closure cannot contain path dependencies".to_string(),
+        )
+        .into());
+    }
+    let plan = release_archive_plan(&compiled)?;
+    dawn_package::pack_directory_with_plan(root, &plan).map_err(Into::into)
+}
+
+fn release_archive_plan(
+    compiled: &CompiledPackage,
+) -> Result<dawn_package::ReleaseArchivePlan, PackageLoadError> {
+    let project_module_id = compiled.manifest.module_id;
+    let mut pending = std::collections::BTreeSet::new();
+    for export in compiled.manifest.exports.values() {
+        for document in &export.documents {
+            pending.insert(dawn_language::identity::DocumentId::new(
+                project_module_id,
+                Utf8PathBuf::from(document),
+            ));
+        }
+    }
+    if let Some(project) = &compiled.manifest.project {
+        pending.insert(dawn_language::identity::DocumentId::new(
+            project_module_id,
+            Utf8PathBuf::from(&project.entrypoint),
+        ));
+    }
+    let mut reachable = std::collections::BTreeSet::new();
+    while let Some(document_id) = pending.pop_first() {
+        if document_id.module_id() != project_module_id
+            || !reachable.insert(document_id.path().to_string())
+        {
+            continue;
+        }
+        let document = compiled
+            .graph
+            .source
+            .documents
+            .get(&document_id)
+            .ok_or_else(|| {
+                dawn_package::PackageError::Invalid(format!(
+                    "release root `{}` was not compiled",
+                    document_id.path()
+                ))
+            })?;
+        for import in document.imports() {
+            for target in import.targets() {
+                if target.module_id() == project_module_id
+                    && !reachable.contains(target.path().as_str())
+                {
+                    pending.insert(target.clone());
+                }
+            }
+        }
+    }
+    reachable.insert(dawn_package::MANIFEST_FILE.to_string());
+    reachable.extend(compiled.manifest.assets.keys().cloned());
+    for metadata_path in ["README.md", "RELEASE_NOTES.md", "LICENSE"] {
+        if compiled
+            .graph
+            .source
+            .project_root()
+            .join(metadata_path)
+            .is_file()
+        {
+            reachable.insert(metadata_path.to_string());
+        }
+    }
+    if compiled
+        .manifest
+        .publication
+        .as_ref()
+        .is_some_and(|publication| publication.license == "LicenseRef-Custom")
+        && !reachable.contains("LICENSE")
+    {
+        return Err(dawn_package::PackageError::Invalid(
+            "LicenseRef-Custom requires a root LICENSE file".to_string(),
+        )
+        .into());
+    }
+
+    Ok(dawn_package::ReleaseArchivePlan {
+        files: reachable,
+        exports: release_export_index(compiled)?,
+    })
+}
+
+fn release_export_index(
+    compiled: &CompiledPackage,
+) -> Result<std::collections::BTreeMap<String, dawn_package::ReleaseExportGroup>, PackageLoadError>
+{
+    let project_module_id = compiled.manifest.module_id;
+    let mut exports = std::collections::BTreeMap::new();
+    for (group_name, group) in &compiled.manifest.exports {
+        let mut objects = Vec::new();
+        let mut object_names = std::collections::BTreeMap::new();
+        for document in &group.documents {
+            let document_id = dawn_language::identity::DocumentId::new(
+                project_module_id,
+                Utf8PathBuf::from(document),
+            );
+            let source = compiled
+                .graph
+                .source
+                .documents
+                .get(&document_id)
+                .ok_or_else(|| {
+                    dawn_package::PackageError::Invalid(format!(
+                        "export document `{document}` was not compiled"
+                    ))
+                })?;
+            for object in source.objects() {
+                if let Some(previous_document) =
+                    object_names.insert(object.id().to_string(), document.clone())
+                {
+                    return Err(dawn_package::PackageError::Invalid(format!(
+                        "export group `{group_name}` exposes object `{}` from both `{previous_document}` and `{document}`",
+                        object.id()
+                    ))
+                    .into());
+                }
+                objects.push(dawn_package::ReleaseExportObject {
+                    document: document.clone(),
+                    name: object.id().to_string(),
+                    kind: release_object_kind(object.kind())?,
+                });
+            }
+        }
+        objects.sort();
+        exports.insert(
+            group_name.clone(),
+            dawn_package::ReleaseExportGroup {
+                documents: group.documents.clone(),
+                objects,
+            },
+        );
+    }
+    Ok(exports)
+}
+
+fn release_object_kind(
+    kind: &SourceObjectKind,
+) -> Result<dawn_package::ExportObjectKind, PackageLoadError> {
+    Ok(match kind {
+        SourceObjectKind::Project => dawn_package::ExportObjectKind::Project,
+        SourceObjectKind::Setup => dawn_package::ExportObjectKind::Setup,
+        SourceObjectKind::Controller => dawn_package::ExportObjectKind::Controller,
+        SourceObjectKind::ElementTree => dawn_package::ExportObjectKind::ElementTree,
+        SourceObjectKind::PreviewLayout => dawn_package::ExportObjectKind::PreviewLayout,
+        SourceObjectKind::Patch => dawn_package::ExportObjectKind::Patch,
+        SourceObjectKind::PropDefinition => dawn_package::ExportObjectKind::PropDefinition,
+        SourceObjectKind::FixtureProfile => dawn_package::ExportObjectKind::FixtureProfile,
+        SourceObjectKind::Curve => dawn_package::ExportObjectKind::Curve,
+        SourceObjectKind::Gradient => dawn_package::ExportObjectKind::Gradient,
+        SourceObjectKind::Sequence => dawn_package::ExportObjectKind::Sequence,
+        SourceObjectKind::EffectDefinition => dawn_package::ExportObjectKind::EffectDefinition,
+        SourceObjectKind::OperatorDefinition => dawn_package::ExportObjectKind::OperatorDefinition,
+        SourceObjectKind::EffectInstance => {
+            return Err(dawn_package::PackageError::Invalid(
+                "effect instances cannot be package exports".to_string(),
+            )
+            .into());
+        }
+    })
+}
+
+pub fn load_package_with_cache(
+    root: &Utf8Path,
+    manifest: dawn_package::PackageManifest,
+    lockfile: dawn_package::Lockfile,
+    cache: &dawn_package::CacheStore,
+) -> Result<LoadedPackageProject, PackageLoadError> {
+    let source_graph =
+        dawn_package::ResolvedSourceGraph::from_lock(root, manifest.clone(), &lockfile, cache)?;
+    let session = load_source_graph(source_graph)?;
+    Ok(LoadedPackageProject {
+        manifest,
+        lockfile,
+        session,
+    })
+}
+
+/// Loads a package candidate while deferring composition-graph validation for
+/// project-owned sequences. Prior operator identities are available only as
+/// parsing references, so removed or renamed dependency operators can be
+/// reconciled against the candidate definition store before acceptance.
+pub fn load_package_for_operator_reconciliation_with_cache(
+    root: &Utf8Path,
+    manifest: dawn_package::PackageManifest,
+    lockfile: dawn_package::Lockfile,
+    cache: &dawn_package::CacheStore,
+    previous_operators: &dawn_language::operator::OperatorDefinitionStore,
+) -> Result<LoadedPackageProject, PackageLoadError> {
+    let source_graph =
+        dawn_package::ResolvedSourceGraph::from_lock(root, manifest.clone(), &lockfile, cache)?;
+    let session = Loader::for_operator_reconciliation(source_graph, previous_operators)?.load()?;
+    Ok(LoadedPackageProject {
+        manifest,
+        lockfile,
+        session,
+    })
+}
+
+pub fn load_source_graph(
+    source_graph: dawn_package::ResolvedSourceGraph,
+) -> Result<ProjectSession, LoadProjectError> {
+    Loader::new(source_graph)?.load()
+}
+
+pub fn compile_source_graph(
+    source_graph: dawn_package::ResolvedSourceGraph,
+) -> Result<CompiledSourceGraph, LoadProjectError> {
+    Loader::new(source_graph)?.compile()
+}
+
+pub fn check_source_graph(source_graph: dawn_package::ResolvedSourceGraph) -> ProjectCheckReport {
+    let mut diagnostics = Vec::new();
+    match load_source_graph(source_graph) {
         Ok(session) => ProjectCheckReport {
             session: Some(session),
             diagnostics,
@@ -71,6 +525,61 @@ pub fn check_project(path: &Utf8Path) -> ProjectCheckReport {
                 diagnostics,
             }
         }
+    }
+}
+
+pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
+    let manifest = match dawn_package::PackageManifest::read(root) {
+        Ok(manifest) => manifest,
+        Err(error) => return package_check_error(root, error),
+    };
+    let lockfile = match dawn_package::Lockfile::read(root) {
+        Ok(lockfile) => lockfile,
+        Err(error) => return package_check_error(root, error),
+    };
+    let cache = match package_cache_for_lock(root, &lockfile) {
+        Ok(cache) => cache,
+        Err(error) => return package_check_error(root, error),
+    };
+    check_package_with_cache(root, manifest, lockfile, &cache)
+}
+
+pub fn check_package_with_cache(
+    root: &Utf8Path,
+    manifest: dawn_package::PackageManifest,
+    lockfile: dawn_package::Lockfile,
+    cache: &dawn_package::CacheStore,
+) -> ProjectCheckReport {
+    let source_graph =
+        match dawn_package::ResolvedSourceGraph::from_lock(root, manifest, &lockfile, cache) {
+            Ok(source_graph) => source_graph,
+            Err(error) => return package_check_error(root, error),
+        };
+    check_source_graph(source_graph)
+}
+
+fn package_cache_for_lock(
+    root: &Utf8Path,
+    lockfile: &dawn_package::Lockfile,
+) -> Result<dawn_package::CacheStore, dawn_package::PackageError> {
+    if lockfile.packages.is_empty() {
+        return Ok(dawn_package::CacheStore::new(
+            root.join(".dawn-unused-cache"),
+        ));
+    }
+    Ok(dawn_package::DawnDirectories::discover()?.package_cache())
+}
+
+fn package_check_error(root: &Utf8Path, error: dawn_package::PackageError) -> ProjectCheckReport {
+    ProjectCheckReport {
+        session: None,
+        diagnostics: vec![IoDiagnostic {
+            path: root.join(dawn_package::MANIFEST_FILE),
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnLoad,
+            message: error.to_string(),
+        }],
     }
 }
 
@@ -102,15 +611,15 @@ pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
 }
 
 pub fn check_project_document_text(
-    entrypoint: &Utf8Path,
-    document: &Utf8Path,
+    session: &ProjectSession,
+    document: &dawn_language::identity::DocumentId,
     text: &str,
 ) -> Vec<IoDiagnostic> {
-    let loader = match Loader::new(entrypoint) {
+    let loader = match Loader::new(session.source.source_graph.clone()) {
         Ok(mut loader) => {
             loader
                 .source_overrides
-                .insert(normalize_relative(document.to_path_buf()), text.to_string());
+                .insert(document.clone(), text.to_string());
             loader
         }
         Err(error) => return vec![load_error_diagnostic(error)],
@@ -127,15 +636,16 @@ pub fn check_project_document_text(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CompiledOperatorDocument {
-    pub path: Utf8PathBuf,
+    pub document_id: dawn_language::identity::DocumentId,
     pub definitions: dawn_language::operator::OperatorDefinitionStore,
     document: SourceDocument,
 }
 
 pub fn compile_operator_document(
-    path: &Utf8Path,
+    document_id: &dawn_language::identity::DocumentId,
     text: &str,
 ) -> Result<CompiledOperatorDocument, Vec<IoDiagnostic>> {
+    let path = document_id.path();
     let compiled = dawn_language::dsl::compile_operators(text).map_err(|diagnostics| {
         diagnostics
             .into_iter()
@@ -153,8 +663,8 @@ pub fn compile_operator_document(
     let mut objects = Vec::new();
     for operator in compiled {
         let name = operator.name().as_str().to_string();
-        let id = dawn_language::operator::OperatorDefinitionId(SourceIdentity::new(
-            path.to_path_buf(),
+        let id = dawn_language::operator::OperatorDefinitionId(SourceIdentity::from_document(
+            document_id.clone(),
             name.clone(),
         ));
         definitions.insert(
@@ -190,7 +700,7 @@ pub fn compile_operator_document(
         }]
     })?;
     Ok(CompiledOperatorDocument {
-        path: path.to_path_buf(),
+        document_id: document_id.clone(),
         definitions,
         document,
     })
@@ -205,14 +715,14 @@ pub fn apply_compiled_operator_document(
         .definitions
         .operators
         .definitions
-        .retain(|id, _| id.0.document() != compiled.path);
+        .retain(|id, _| id.0.document_id() != &compiled.document_id);
     for (id, definition) in compiled.definitions.definitions {
         session.project.definitions.operators.insert(id, definition);
     }
     session
         .source
         .documents
-        .insert(compiled.path, compiled.document);
+        .insert(compiled.document_id, compiled.document);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -411,17 +921,9 @@ pub fn export_project(
     // Export alone clones the session because external asset paths are rewritten
     // for the destination. Normal saves serialize the shared session directly.
     let mut synced = session.clone();
-    for path in synced.source.documents.keys() {
-        if !is_project_owned_path(path) {
-            return Err(ExportProjectError::InvalidReference {
-                path: path.clone(),
-                reference: path.to_string(),
-                message: "external imported documents must be vendored before export".to_string(),
-            });
-        }
-    }
+    let project_module_id = synced.source.project_module_id();
     for asset in &mut synced.source.referenced_assets {
-        if !is_project_owned_path(&asset.relative_path) {
+        if asset.module_id != project_module_id {
             let file_name = asset.absolute_path.file_name().ok_or_else(|| {
                 ExportProjectError::InvalidReference {
                     path: asset.absolute_path.clone(),
@@ -432,6 +934,7 @@ pub fn export_project(
             asset.relative_path = Utf8PathBuf::from("assets")
                 .join(asset.id.0.to_string())
                 .join(file_name);
+            asset.module_id = project_module_id;
         }
     }
     let written_files = write_source_documents(&synced, output_root)?;
@@ -466,30 +969,32 @@ pub fn export_project(
 }
 
 pub fn save_project(session: &ProjectSession) -> Result<SaveReport, ExportProjectError> {
-    let written_files = write_source_documents(session, &session.source.source_root)?;
+    let project_root = session.source.project_root();
+    let written_files = write_source_documents(session, project_root)?;
     Ok(SaveReport { written_files })
 }
 
 pub fn source_document_text(
     session: &ProjectSession,
-    relative_path: &Utf8Path,
+    document_id: &dawn_language::identity::DocumentId,
 ) -> Result<Option<String>, ExportProjectError> {
-    let Some(document) = session.source.documents.get(relative_path) else {
+    let Some(document) = session.source.documents.get(document_id) else {
         return Ok(None);
     };
-    document_text(session, relative_path, document).map(Some)
+    document_text(session, document_id.path(), document).map(Some)
 }
 
 fn ensure_document_imports_target(
     session: &mut ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &dawn_language::identity::DocumentId,
     kind: &SourceObjectKind,
     reference: &str,
-    target_document: Utf8PathBuf,
+    target_document: dawn_language::identity::DocumentId,
 ) -> Result<(), ExportProjectError> {
+    let from_path = from_document.path();
     let alias_base =
         canonical_reference_alias(kind).ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_path.to_path_buf(),
             reference: reference.to_string(),
             message: format!("no canonical import alias exists for {kind:?} references"),
         })?;
@@ -498,7 +1003,7 @@ fn ensure_document_imports_target(
         .documents
         .get_mut(from_document)
         .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_path.to_path_buf(),
             reference: reference.to_string(),
             message: "source document is missing from the source project".to_string(),
         })?;
@@ -511,15 +1016,25 @@ fn ensure_document_imports_target(
     }
     let alias = available_import_alias(document, alias_base).ok_or_else(|| {
         ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_path.to_path_buf(),
             reference: reference.to_string(),
             message: format!("no import alias remains for `{alias_base}`"),
         }
     })?;
-    let import_from = relative_path_from_document(from_document, &target_document);
+    if target_document.module_id() != from_document.module_id() {
+        return Err(ExportProjectError::InvalidReference {
+            path: from_path.to_path_buf(),
+            reference: reference.to_string(),
+            message:
+                "dependency objects must be exposed through an explicitly declared export import"
+                    .to_string(),
+        });
+    }
     document.imports.push(ImportEdge {
-        from: import_from.clone(),
         alias: alias.clone(),
+        source: ImportSource::LocalDocuments {
+            documents: vec![target_document.path().to_path_buf()],
+        },
         targets: vec![target_document],
     });
     Ok(())
@@ -527,14 +1042,14 @@ fn ensure_document_imports_target(
 
 pub fn ensure_document_can_reference_source(
     session: &mut ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &dawn_language::identity::DocumentId,
     kind: SourceObjectKind,
     identity: &SourceIdentity,
 ) -> Result<(), ExportProjectError> {
     session
         .source
         .documents
-        .get(identity.document())
+        .get(identity.document_id())
         .and_then(|document| {
             document
                 .objects
@@ -542,7 +1057,7 @@ pub fn ensure_document_can_reference_source(
                 .find(|object| object.kind == kind && object.id == identity.object())
         })
         .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_document.path().to_path_buf(),
             reference: identity.object().to_string(),
             message: "target is missing from its source document".to_string(),
         })?;
@@ -551,7 +1066,7 @@ pub fn ensure_document_can_reference_source(
         from_document,
         &kind,
         identity.object(),
-        identity.document().to_path_buf(),
+        identity.document_id().clone(),
     )
 }
 
@@ -562,7 +1077,7 @@ pub fn insert_sequence(
     duration: DawnDuration,
     frame_rate: u32,
 ) -> Result<SequenceId, ExportProjectError> {
-    if !is_project_owned_path(&path)
+    if !is_module_relative_path(&path)
         || !path.starts_with("sequences")
         || !path
             .file_name()
@@ -586,16 +1101,16 @@ pub fn insert_sequence(
             message: "sequence identity, duration, or frame rate is invalid".to_string(),
         });
     }
-    if session.source.documents.contains_key(&path)
-        || session.source.source_root.join(&path).exists()
-    {
+    let document_id = session.source.project_document(path.clone());
+    let project_root = session.source.project_root();
+    if session.source.documents.contains_key(&document_id) || project_root.join(&path).exists() {
         return Err(ExportProjectError::InvalidReference {
             path,
             reference: object_key,
             message: "source document already exists".to_string(),
         });
     }
-    let identity = SourceIdentity::new(path.clone(), object_key.clone());
+    let identity = SourceIdentity::from_document(document_id.clone(), object_key.clone());
     let id = SequenceId(identity.clone());
     if session.project.sequences.contains_key(&id) {
         return Err(ExportProjectError::InvalidReference {
@@ -674,10 +1189,19 @@ pub fn insert_sequence(
     session
         .source
         .documents
-        .insert(path.clone(), source_document);
+        .insert(document_id, source_document);
     session.project.sequences.insert(id.clone(), sequence);
     session.project.root.sequences.push(id.clone());
-    let entrypoint = session.source.entrypoint.clone();
+    let entrypoint =
+        session
+            .source
+            .entrypoint
+            .clone()
+            .ok_or_else(|| ExportProjectError::InvalidReference {
+                path: path.clone(),
+                reference: object_key.clone(),
+                message: "active project has no manifest entrypoint".to_string(),
+            })?;
     ensure_document_can_reference_source(
         session,
         &entrypoint,
@@ -687,12 +1211,21 @@ pub fn insert_sequence(
     Ok(id)
 }
 
+fn is_module_relative_path(path: &Utf8Path) -> bool {
+    !path.as_str().is_empty()
+        && !path.is_absolute()
+        && !path.as_str().contains('\\')
+        && path
+            .components()
+            .all(|component| matches!(component, camino::Utf8Component::Normal(_)))
+}
+
 fn available_import_alias(document: &SourceDocument, base: &str) -> Option<String> {
     if document.imports.iter().all(|import| import.alias != base) {
         return Some(base.to_string());
     }
     (2_u32..)
-        .map(|suffix| format!("{base}_{suffix}"))
+        .map(|suffix| format!("{base}-{suffix}"))
         .find(|candidate| {
             document
                 .imports
@@ -808,8 +1341,7 @@ impl std::error::Error for LoadProjectError {}
 
 mod diagnostics;
 use diagnostics::{
-    check_absolute_document, discover_reachable_files, effect_diagnostics, load_error_diagnostic,
-    node_range, operator_diagnostics, parse_yaml_value, push_diagnostic,
+    effect_diagnostics, load_error_diagnostic, node_range, operator_diagnostics, parse_yaml_value,
     push_load_error_diagnostics,
 };
 
@@ -837,4 +1369,4 @@ mod serialization;
 use serialization::{document_text, write_source_documents};
 
 mod loader;
-use loader::{Loader, normalize_relative};
+use loader::Loader;

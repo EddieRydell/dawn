@@ -1,11 +1,15 @@
+mod common;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::values::DawnDuration;
-use dawn_project_io::{export_project, load_project, save_project};
+use dawn_project_io::{export_project, load_package, save_project};
 use std::fs;
 use std::time::Duration;
 
+use common::{load_project_package, write_project_package};
+
 #[test]
-fn external_audio_does_not_expand_project_ownership_and_exports_inside_destination() {
+fn audio_reference_cannot_escape_its_module() {
     let temp = tempfile::tempdir().unwrap();
     let temp_root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let project_root = temp_root.join("project");
@@ -13,12 +17,12 @@ fn external_audio_does_not_expand_project_ownership_and_exports_inside_destinati
     fs::write(temp_root.join("external.wav"), b"audio").unwrap();
     fs::write(
         project_root.join("project.dawn"),
-        "imports:\n- from: setup.dawn\n  as: setups\n- from: sequence.dawn\n  as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
+        "imports:\n- from:\n    documents:\n    - setup.dawn\n  as: setups\n- from:\n    documents:\n    - sequence.dawn\n  as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
     )
     .unwrap();
     fs::write(
         project_root.join("setup.dawn"),
-        "imports:\n- from: display.dawn\n  as: display\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n- from:\n    documents:\n    - display.dawn\n  as: display\n- from:\n    documents:\n    - patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
     fs::write(
@@ -36,25 +40,9 @@ fn external_audio_does_not_expand_project_ownership_and_exports_inside_destinati
         "main:\n  type: sequence\n  duration: 1s\n  frame_rate: 30\n  audio: ../external.wav\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: { x: 0, y: 0 }\n      type: output\n    edges: []\n  automation_clips: []\n",
     )
     .unwrap();
+    write_project_package(&project_root);
 
-    let session = load_project(&project_root.join("project.dawn")).unwrap();
-    assert_eq!(
-        session.source.source_root,
-        project_root.canonicalize_utf8().unwrap()
-    );
-    assert_eq!(
-        session.source.referenced_assets[0].relative_path,
-        Utf8Path::new("../external.wav")
-    );
-
-    let export_root = temp_root.join("export");
-    let report = export_project(&session, &export_root).unwrap();
-    assert_eq!(
-        report.copied_assets,
-        vec![Utf8PathBuf::from("assets/1/external.wav")]
-    );
-    assert!(export_root.join("assets/1/external.wav").is_file());
-    load_project(&export_root.join("project.dawn")).unwrap();
+    assert!(load_package(&project_root).is_err());
 }
 
 #[test]
@@ -63,10 +51,11 @@ fn same_named_definitions_in_different_documents_keep_distinct_identities() {
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    let starter = load_project(&workspace_root.join("examples/starter/project.dawn")).unwrap();
+    let starter = load_project_package(&workspace_root.join("examples/starter"));
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     export_project(&starter, &root).unwrap();
+    write_project_package(&root);
 
     fs::create_dir_all(root.join("identity-a")).unwrap();
     fs::create_dir_all(root.join("identity-b")).unwrap();
@@ -85,13 +74,13 @@ fn same_named_definitions_in_different_documents_keep_distinct_identities() {
     fs::write(
         &entrypoint,
         format!(
-            "imports:\n- from: identity-a/shared.effect.dawn\n  as: identity_a\n- from: identity-b/shared.effect.dawn\n  as: identity_b\n{}",
+            "imports:\n- from:\n    documents:\n    - identity-a/shared.effect.dawn\n  as: identity-a\n- from:\n    documents:\n    - identity-b/shared.effect.dawn\n  as: identity-b\n{}",
             project_text.strip_prefix("imports:\n").unwrap()
         ),
     )
     .unwrap();
 
-    let loaded = load_project(&entrypoint).unwrap();
+    let loaded = load_project_package(&root);
     let identities = loaded
         .project
         .definitions
@@ -118,12 +107,12 @@ fn typed_sequence_insertion_roundtrips_nested_paths() {
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    let starter = load_project(&workspace_root.join("examples/starter/project.dawn")).unwrap();
+    let starter = load_project_package(&workspace_root.join("examples/starter"));
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     export_project(&starter, &root).unwrap();
-    let entrypoint = root.join("project.dawn");
-    let mut session = load_project(&entrypoint).unwrap();
+    write_project_package(&root);
+    let mut session = load_project_package(&root);
 
     let id = dawn_project_io::insert_sequence(
         &mut session,
@@ -135,23 +124,24 @@ fn typed_sequence_insertion_roundtrips_nested_paths() {
     .unwrap();
     save_project(&session).unwrap();
 
-    let reloaded = load_project(&entrypoint).unwrap();
+    let reloaded = load_project_package(&root);
     assert!(reloaded.project.sequences.contains_key(&id));
     assert!(reloaded.project.root.sequences.contains(&id));
     assert!(root.join(id.0.document()).is_file());
 }
 
 #[test]
-fn external_source_documents_remain_dependencies_and_cannot_escape_export() {
+fn local_document_import_cannot_escape_module() {
     let workspace_root = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    let starter = load_project(&workspace_root.join("examples/starter/project.dawn")).unwrap();
+    let starter = load_project_package(&workspace_root.join("examples/starter"));
     let temp = tempfile::tempdir().unwrap();
     let temp_root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let root = temp_root.join("project");
     export_project(&starter, &root).unwrap();
+    write_project_package(&root);
     fs::write(
         temp_root.join("dependency.effect.dawn"),
         "effect Dependency { color sample() { return #ffffff; } }",
@@ -162,26 +152,22 @@ fn external_source_documents_remain_dependencies_and_cannot_escape_export() {
     fs::write(
         &entrypoint,
         format!(
-            "imports:\n- from: ../dependency.effect.dawn\n  as: dependency\n{}",
+            "imports:\n- from:\n    documents:\n    - ../dependency.effect.dawn\n  as: dependency\n{}",
             project_text.strip_prefix("imports:\n").unwrap()
         ),
     )
     .unwrap();
 
-    let loaded = load_project(&entrypoint).unwrap();
-    let dependency_path = Utf8Path::new("../dependency.effect.dawn");
-    assert!(loaded.source.documents.contains_key(dependency_path));
-    assert!(!dawn_project_io::is_project_owned_path(dependency_path));
-    assert!(export_project(&loaded, &temp_root.join("export")).is_err());
+    assert!(load_package(&root).is_err());
 }
 
 #[test]
 fn fixture_behavior_rules_roundtrip() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-    let entrypoint = write_fixture_profile_project(&root, "behavior_rules");
+    write_fixture_profile_project(&root, "behavior_rules");
 
-    let loaded = load_project(&entrypoint).unwrap();
+    let loaded = load_project_package(&root);
     assert_eq!(
         loaded
             .project
@@ -199,7 +185,7 @@ fn fixture_behavior_rules_roundtrip() {
 
     let saved_profile = fs::read_to_string(root.join("profile.dawn")).unwrap();
     assert!(saved_profile.contains("behavior_rules:"));
-    let reloaded = load_project(&entrypoint).unwrap();
+    let reloaded = load_project_package(&root);
     assert_eq!(loaded.project, reloaded.project);
 }
 
@@ -208,25 +194,25 @@ fn legacy_fixture_rule_field_is_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let legacy_field = ["auto", "mation"].concat();
-    let entrypoint = write_fixture_profile_project(&root, &legacy_field);
+    write_fixture_profile_project(&root, &legacy_field);
 
-    assert!(load_project(&entrypoint).is_err());
+    assert!(load_package(&root).is_err());
 }
 
-fn write_fixture_profile_project(root: &Utf8Path, rule_field: &str) -> Utf8PathBuf {
+fn write_fixture_profile_project(root: &Utf8Path, rule_field: &str) {
     fs::write(
         root.join("project.dawn"),
-        "imports:\n- from: setup.dawn\n  as: setups\n- from: sequence.dawn\n  as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
+        "imports:\n- from:\n    documents:\n    - setup.dawn\n  as: setups\n- from:\n    documents:\n    - sequence.dawn\n  as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
     )
     .unwrap();
     fs::write(
         root.join("setup.dawn"),
-        "imports:\n- from: layout.dawn\n  as: layouts\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: layouts.elements\n  preview: layouts.preview\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n- from:\n    documents:\n    - layout.dawn\n  as: layouts\n- from:\n    documents:\n    - patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: layouts.elements\n  preview: layouts.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
     fs::write(
         root.join("layout.dawn"),
-        "imports:\n- from: profile.dawn\n  as: profiles\nelements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Fixture\n    type: fixture\n    profile: profiles.basic\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n",
+        "imports:\n- from:\n    documents:\n    - profile.dawn\n  as: profiles\nelements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Fixture\n    type: fixture\n    profile: profiles.basic\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n",
     )
     .unwrap();
     fs::write(
@@ -246,5 +232,5 @@ fn write_fixture_profile_project(root: &Utf8Path, rule_field: &str) -> Utf8PathB
         ),
     )
     .unwrap();
-    root.join("project.dawn")
+    write_project_package(root);
 }

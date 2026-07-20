@@ -1,0 +1,36 @@
+{
+  "manifestVersion": 2,
+  "moduleId": "11111111-1111-4111-8111-111111111111",
+  "languageVersion": "0.1",
+  "requiresDawn": ">=0.1.0, <1.0.0",
+  "project": {
+    "entrypoint": "main.dawn"
+  },
+  "publication": {
+    "package": "dawn/protocol-example",
+    "version": "1.2.3",
+    "displayName": "Protocol example",
+    "summary": "Shared Dawn registry protocol fixture.",
+    "license": "MIT",
+    "tags": ["fixture", "protocol"]
+  },
+  "exports": {
+    "effects": {
+      "documents": ["effects/pulse.effect.dawn"]
+    },
+    "project": {
+      "documents": ["main.dawn"]
+    }
+  },
+  "dependencies": {
+    "foundation": {
+      "package": "dawn/foundation",
+      "version": "^1.2.0"
+    }
+  },
+  "assets": {
+    "audio/click.wav": {
+      "kind": "audio"
+    }
+  }
+}

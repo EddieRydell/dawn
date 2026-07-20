@@ -5,8 +5,8 @@ use camino::Utf8Path;
 use dawn_project_io::{ProjectCheckReport, ProjectSession, SourceObjectKind};
 
 use super::{
-    DesktopState, descriptor_for_path, editor_buffer, lock_unpoisoned, project_diagnostics,
-    refresh_clean_buffers, restored_active_buffers, workspace_entries,
+    DesktopState, descriptor_for_path, editor_buffer, lock_unpoisoned, package_status,
+    project_diagnostics, refresh_clean_buffers, restored_active_buffers, workspace_entries,
 };
 use crate::dto::{
     AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic,
@@ -25,6 +25,9 @@ impl DesktopState {
         match report.session {
             Some(session) => self.replace_project(session, diagnostics),
             None => self.update_snapshot(|snapshot| {
+                let root = Utf8Path::new(entrypoint);
+                snapshot.project_root = Some(entrypoint.to_string());
+                snapshot.package = package_status(root, None);
                 snapshot.diagnostics = diagnostics;
                 snapshot.status = format!("Failed to open project {entrypoint}");
             }),
@@ -53,10 +56,17 @@ impl DesktopState {
         session: ProjectSession,
         diagnostics: Vec<ProjectDiagnostic>,
     ) -> AppSnapshot {
+        let Some(entrypoint) = session.source.entrypoint.clone() else {
+            return self.snapshot_with_error(
+                "project.open",
+                session.source.project_root().as_str(),
+                "Active project manifest has no project entrypoint",
+            );
+        };
         self.suspend_live_output();
         let entries = workspace_entries(&session);
-        let root = session.source.source_root.to_string();
-        let entrypoint = session.source.entrypoint.clone();
+        let root = session.source.project_root().to_string();
+        let package = package_status(Utf8Path::new(&root), Some(&session));
         let valid_paths = entries
             .iter()
             .filter(|entry| matches!(entry.kind, WorkspaceEntryKind::File))
@@ -70,7 +80,7 @@ impl DesktopState {
                     .documents
                     .get(&entrypoint)
                     .and_then(|_document| {
-                        let buffer = editor_buffer(&session, &entrypoint)?;
+                        let buffer = editor_buffer(&session, entrypoint.path())?;
                         Some((vec![buffer.clone()], buffer.path))
                     })
             });
@@ -82,6 +92,7 @@ impl DesktopState {
         self.update_snapshot(|snapshot| {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
+            snapshot.package = package;
             snapshot.project_tree_visible = restore
                 .as_ref()
                 .map(|restore| restore.session.project_tree_visible)
@@ -106,10 +117,11 @@ impl DesktopState {
             snapshot.active_document_descriptor = active_descriptor;
             snapshot.diagnostics = diagnostics;
             snapshot.status = if snapshot.diagnostics.is_empty() {
-                format!("Opened project {entrypoint}")
+                format!("Opened project {}", entrypoint.path())
             } else {
                 format!(
-                    "Opened project {entrypoint} with {} diagnostics",
+                    "Opened project {} with {} diagnostics",
+                    entrypoint.path(),
                     snapshot.diagnostics.len()
                 )
             };
@@ -149,7 +161,8 @@ impl DesktopState {
         // reload editor text or reset user-owned editor state; only full project
         // opens are allowed to replace tabs, buffers, GUI state, or transport.
         let entries = workspace_entries(&session);
-        let root = session.source.source_root.to_string();
+        let root = session.source.project_root().to_string();
+        let package = package_status(Utf8Path::new(&root), Some(&session));
         let render_error = self.refresh_render_session(&session.project);
         let render_ready = render_error.is_none();
         let active_descriptor = self
@@ -161,6 +174,7 @@ impl DesktopState {
         let snapshot = self.update_snapshot(|snapshot| {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
+            snapshot.package = package;
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {
                 snapshot.active_document_descriptor = active_descriptor;
@@ -195,7 +209,7 @@ impl DesktopState {
         *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         self.suspend_live_output();
         let entries = workspace_entries(&session);
-        let root = session.source.source_root.to_string();
+        let root = session.source.project_root().to_string();
         let active_descriptor = self
             .snapshot()
             .active_file
@@ -269,7 +283,7 @@ impl DesktopState {
         project
             .source
             .documents
-            .get(path)?
+            .get(&project.source.project_document(path.to_path_buf()))?
             .objects()
             .iter()
             .find(|object| {
@@ -280,10 +294,12 @@ impl DesktopState {
                         .is_none_or(|key| object.id() == key)
             })
             .map(|object| {
-                dawn_language::sequence::SequenceId(dawn_language::identity::SourceIdentity::new(
-                    path.to_path_buf(),
-                    object.id().to_string(),
-                ))
+                dawn_language::sequence::SequenceId(
+                    dawn_language::identity::SourceIdentity::from_document(
+                        project.source.project_document(path.to_path_buf()),
+                        object.id().to_string(),
+                    ),
+                )
             })
     }
 }

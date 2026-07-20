@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop", "crates/dawn-language", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-runtime"]
+members = ["apps/desktop", "crates/dawn-language", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-runtime", "crates/dawn-package", "crates/dawn-cli"]
 resolver = "2"
 
 [workspace.package]
@@ -11,24 +11,38 @@ version = "0.1.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 artnet_protocol = "0.4.4"
 camino = "1.2.4"
+clap = { version = "4.5.40", features = ["derive"] }
 criterion = "0.8.2"
+directories = "6.0.0"
+dawn-package = { path = "crates/dawn-package" }
 dawn-language = { path = "crates/dawn-language" }
 dawn-output = { path = "crates/dawn-output" }
 dawn-project-io = { path = "crates/dawn-project-io" }
 dawn-runtime = { path = "crates/dawn-runtime" }
 glam = "0.33.2"
+fs4 = "1.1.0"
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 indexmap = "2.14.0"
 kira = "0.12.1"
 marked-yaml = "0.8.0"
+pubgrub = "0.4.0"
 sacn = "0.11.1"
 rfd = "0.17.2"
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10.9"
+spdx = "0.13.4"
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "0.0.12"
 tauri = { version = "2.11.3", features = ["protocol-asset", "unstable"] }
 tauri-build = "2.6.3"
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 tempfile = "3.27.0"
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
+url = { version = "2.5.7", features = ["serde"] }
+webbrowser = "1.0.5"
+zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 wgpu = { version = "29.0.3", default-features = false, features = ["std", "parking_lot", "metal", "gles", "vulkan", "wgsl", "webgpu"] }
 yaml_serde = "0.10.4"

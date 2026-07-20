@@ -253,6 +253,7 @@
   --dawn-diagnostics-tooltip-max-height: 260px;
   --dawn-project-panel-min-width: 220px;
   --dawn-project-panel-max-width: 520px;
+  --dawn-package-panel-max-height: 46vh;
   --dawn-inspector-min-width: 240px;
   --dawn-inspector-max-width: 560px;
   --dawn-dialog-max-width: 520px;
@@ -657,6 +658,269 @@ button:focus-visible,
   padding-right: var(--dawn-space-6);
   color: var(--dawn-text-secondary);
   font-size: var(--dawn-font-size-lg);
+}
+
+.package-panel {
+  display: grid;
+  gap: var(--dawn-space-4);
+  box-sizing: border-box;
+  max-height: var(--dawn-package-panel-max-height);
+  padding: var(--dawn-space-5) var(--dawn-space-6);
+  border-bottom: var(--dawn-border-width) solid var(--dawn-border);
+  color: var(--dawn-text-secondary);
+  font-size: var(--dawn-font-size-sm);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.package-panel-heading,
+.package-panel-status,
+.package-dependency-summary,
+.package-dependency-state,
+.package-dependency-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dawn-space-4);
+}
+
+.package-panel-heading {
+  align-items: flex-start;
+  color: var(--dawn-text-muted);
+  font-size: var(--dawn-font-size-md);
+  text-transform: var(--dawn-text-transform-label);
+}
+
+.package-panel-actions,
+.package-dependency-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--dawn-space-2);
+}
+
+.package-panel-heading button,
+.package-dependency-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--dawn-control-height-sm);
+  gap: var(--dawn-space-2);
+  padding: var(--dawn-space-1) var(--dawn-space-4);
+  border: var(--dawn-border-width) solid var(--dawn-border);
+  border-radius: var(--dawn-radius-sm);
+  background: transparent;
+  color: var(--dawn-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  text-transform: none;
+}
+
+.package-panel-heading button:hover:not(:disabled),
+.package-dependency-actions button:hover:not(:disabled) {
+  background: var(--dawn-hover);
+  color: var(--dawn-text-strong);
+}
+
+.package-panel-heading button:disabled,
+.package-dependency-actions button:disabled {
+  cursor: default;
+  opacity: var(--dawn-opacity-disabled);
+}
+
+.package-panel-status {
+  min-width: 0;
+}
+
+.package-panel-status small {
+  min-width: 0;
+  color: var(--dawn-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-panel-message {
+  margin: 0;
+  padding: var(--dawn-space-3) var(--dawn-space-4);
+  border-left: var(--dawn-border-width-accent) solid var(--dawn-warning);
+  background: var(--dawn-warning-surface);
+  color: var(--dawn-text-secondary);
+  line-height: var(--dawn-line-height-normal);
+}
+
+.package-dependency-list {
+  display: grid;
+  gap: var(--dawn-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.package-dependency-card {
+  display: grid;
+  gap: var(--dawn-space-3);
+  padding: var(--dawn-space-4);
+  border: var(--dawn-border-width) solid var(--dawn-border-soft);
+  border-radius: var(--dawn-radius-sm);
+  background: color-mix(in srgb, var(--dawn-surface-control) 55%, transparent);
+}
+
+.package-dependency-summary {
+  align-items: flex-start;
+}
+
+.package-dependency-name,
+.package-dependency-version {
+  display: grid;
+  min-width: 0;
+  gap: var(--dawn-space-1);
+}
+
+.package-dependency-name {
+  flex: 1 1 auto;
+}
+
+.package-dependency-name > span,
+.package-dependency-name > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-dependency-name > span {
+  color: var(--dawn-text-strong);
+  font-weight: var(--dawn-font-weight-medium);
+}
+
+.package-dependency-version {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.package-dependency-state {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--dawn-text-muted);
+}
+
+.package-dependency-actions {
+  justify-content: flex-start;
+}
+
+.package-dependency-actions .package-danger-action {
+  border-color: var(--dawn-border-danger-subtle);
+  color: var(--dawn-danger-soft);
+}
+
+.package-warning-list,
+.package-compatibility-list {
+  display: grid;
+  gap: var(--dawn-space-2);
+  margin: 0;
+  padding: 0;
+  color: var(--dawn-warning);
+  line-height: var(--dawn-line-height-normal);
+  list-style: none;
+}
+
+.package-warning-list li {
+  padding-left: var(--dawn-space-4);
+  border-left: var(--dawn-border-width-strong) solid var(--dawn-warning);
+}
+
+.package-compatibility-list > li {
+  display: grid;
+  gap: var(--dawn-space-1);
+  padding: var(--dawn-space-3) var(--dawn-space-4);
+  border-left: var(--dawn-border-width-strong) solid var(--dawn-warning);
+  background: var(--dawn-warning-surface);
+}
+
+.package-compatibility-list > li.breaking {
+  border-left-color: var(--dawn-danger);
+  background: var(--dawn-danger-surface);
+  color: var(--dawn-danger-soft);
+}
+
+.package-compatibility-list small {
+  color: var(--dawn-text-secondary);
+}
+
+.package-module-tree {
+  border-top: var(--dawn-border-width) solid var(--dawn-border-soft);
+  padding-top: var(--dawn-space-3);
+}
+
+.package-module-tree summary {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--dawn-space-3);
+  color: var(--dawn-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.package-module-tree summary::-webkit-details-marker {
+  display: none;
+}
+
+.package-module-tree summary::before {
+  width: var(--dawn-icon-size-xs);
+  flex: 0 0 var(--dawn-icon-size-xs);
+  color: var(--dawn-text-muted);
+  content: "›";
+  text-align: center;
+  transform: rotate(0deg);
+  transition: var(--dawn-transition-transform);
+}
+
+.package-module-tree details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.package-module-tree summary > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-module-tree summary > small {
+  flex: 0 0 auto;
+  color: var(--dawn-text-muted);
+}
+
+.package-module-tree ul {
+  display: grid;
+  gap: var(--dawn-space-2);
+  margin: var(--dawn-space-2) 0 0;
+  padding: 0 0 0 var(--dawn-space-8);
+  list-style: none;
+}
+
+.package-document-list li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--dawn-space-3);
+  color: var(--dawn-text-muted);
+}
+
+.package-document-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.package-status-muted,
+.package-dependency-list small,
+.package-panel-empty {
+  color: var(--dawn-text-muted);
 }
 
 .tree-row-chevron {

@@ -1,0 +1,14 @@
+{
+  "lockVersion": 1,
+  "manifestSha256": "ffd01b9d77fb5eae64f19b24e101da281bda908220b5d168833dbe73ccb7a770",
+  "registry": "https://dawn.eddierydell.com",
+  "packages": {
+    "dawn/foundation": {
+      "version": "1.4.0",
+      "archiveSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "moduleId": "22222222-2222-4222-8222-222222222222",
+      "dependencies": {}
+    }
+  },
+  "pathDependencies": {}
+}

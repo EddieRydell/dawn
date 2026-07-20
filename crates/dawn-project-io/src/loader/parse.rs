@@ -231,8 +231,14 @@ pub(crate) struct SourceObjectValue<'a> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedImport {
-    pub(crate) from: Utf8PathBuf,
+    pub(crate) source: ParsedImportSource,
     pub(crate) alias: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ParsedImportSource {
+    LocalDocuments { documents: Vec<Utf8PathBuf> },
+    DependencyExport { dependency: String, export: String },
 }
 
 pub(crate) fn parse_imports(
@@ -252,12 +258,190 @@ pub(crate) fn parse_imports(
     imports
         .iter()
         .map(|import| {
+            let import_mapping =
+                import
+                    .as_mapping()
+                    .ok_or_else(|| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "import must be a mapping".to_string(),
+                    })?;
+            require_exact_mapping_keys(path, import_mapping, &["from", "as"], "import")?;
+            let from_value = import_mapping
+                .get(Value::String("from".to_string()))
+                .ok_or_else(|| LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: None,
+                    message: "import is missing `from`".to_string(),
+                })?;
+            let from_mapping =
+                from_value
+                    .as_mapping()
+                    .ok_or_else(|| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "import `from` must be a structured mapping".to_string(),
+                    })?;
+            let source = if let Some(documents_value) =
+                from_mapping.get(Value::String("documents".to_string()))
+            {
+                require_exact_mapping_keys(
+                    path,
+                    from_mapping,
+                    &["documents"],
+                    "local import source",
+                )?;
+                let raw_documents = documents_value.as_sequence().ok_or_else(|| {
+                    LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "local import `documents` must be a non-empty sequence"
+                            .to_string(),
+                    }
+                })?;
+                if raw_documents.is_empty() {
+                    return Err(LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "local import `documents` must be a non-empty sequence"
+                            .to_string(),
+                    });
+                }
+                let mut documents = Vec::new();
+                let mut unique = IndexSet::new();
+                for raw_document in raw_documents {
+                    let value =
+                        raw_document
+                            .as_str()
+                            .ok_or_else(|| LoadProjectError::InvalidDocument {
+                                path: path.to_path_buf(),
+                                range: None,
+                                message: "local import `documents` must contain document paths"
+                                    .to_string(),
+                            })?;
+                    validate_import_document_path(path, value)?;
+                    if !unique.insert(value.to_string()) {
+                        return Err(LoadProjectError::InvalidDocument {
+                            path: path.to_path_buf(),
+                            range: None,
+                            message: format!(
+                                "local import lists document `{value}` more than once"
+                            ),
+                        });
+                    }
+                    documents.push(Utf8PathBuf::from(value));
+                }
+                ParsedImportSource::LocalDocuments { documents }
+            } else {
+                require_exact_mapping_keys(
+                    path,
+                    from_mapping,
+                    &["dependency", "export"],
+                    "dependency import source",
+                )?;
+                let dependency = from_mapping
+                    .get(Value::String("dependency".to_string()))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "dependency import requires a dependency alias".to_string(),
+                    })?;
+                let export = from_mapping
+                    .get(Value::String("export".to_string()))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "dependency import requires an export group".to_string(),
+                    })?;
+                if !valid_import_alias(dependency) || !valid_import_alias(export) {
+                    return Err(LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: None,
+                        message: "dependency aliases and export groups must use Dawn alias syntax"
+                            .to_string(),
+                    });
+                }
+                ParsedImportSource::DependencyExport {
+                    dependency: dependency.to_string(),
+                    export: export.to_string(),
+                }
+            };
+            let alias = string_field(path, import, "as")?;
+            if !valid_import_alias(alias) {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: None,
+                    message: format!("invalid import alias `{alias}`"),
+                });
+            }
             Ok(ParsedImport {
-                from: Utf8PathBuf::from(string_field(path, import, "from")?),
-                alias: string_field(path, import, "as")?.to_string(),
+                source,
+                alias: alias.to_string(),
             })
         })
         .collect()
+}
+
+fn require_exact_mapping_keys(
+    path: &Utf8Path,
+    mapping: &Mapping,
+    expected: &[&str],
+    label: &str,
+) -> Result<(), LoadProjectError> {
+    let keys = mapping
+        .keys()
+        .map(|key| key.as_str())
+        .collect::<Option<IndexSet<_>>>()
+        .ok_or_else(|| LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: None,
+            message: format!("{label} keys must be strings"),
+        })?;
+    if keys.len() != expected.len() || expected.iter().any(|key| !keys.contains(key)) {
+        return Err(LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: None,
+            message: format!("{label} has missing or unknown fields"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_import_document_path(document: &Utf8Path, value: &str) -> Result<(), LoadProjectError> {
+    let path = Utf8Path::new(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains('\\')
+        || !value.ends_with(".dawn")
+        || value.bytes().any(|byte| byte.is_ascii_control())
+        || value
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(LoadProjectError::InvalidDocument {
+            path: document.to_path_buf(),
+            range: None,
+            message: "local imports must name explicit safe module-relative Dawn documents"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn valid_import_alias(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
 }
 
 pub(crate) fn parse_mark_collection(
@@ -616,40 +800,6 @@ pub(crate) fn bool_field(
         })
 }
 
-pub(crate) fn relative_path(
-    root: &Utf8Path,
-    path: &Utf8Path,
-) -> Result<Utf8PathBuf, LoadProjectError> {
-    path.strip_prefix(root)
-        .map(Utf8Path::to_path_buf)
-        .map_err(|_| LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: None,
-            message: format!("path is outside source root {root}"),
-        })
-}
-
-pub(crate) fn normalize_relative(path: Utf8PathBuf) -> Utf8PathBuf {
-    let original = path.clone();
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            camino::Utf8Component::CurDir => {}
-            camino::Utf8Component::ParentDir => {
-                if parts.last().is_some_and(|part| part != "..") {
-                    let _ = parts.pop();
-                } else {
-                    parts.push("..".to_string());
-                }
-            }
-            camino::Utf8Component::Normal(part) => parts.push(part.to_string()),
-            camino::Utf8Component::RootDir | camino::Utf8Component::Prefix(_) => {
-                return original;
-            }
-        }
-    }
-    parts.into_iter().collect()
-}
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::controller::ControllerId;
 use dawn_language::dsl::Identifier;
@@ -671,6 +821,7 @@ use dawn_language::values::{
     Color, Curve, CurvePoint, DawnDuration, DawnTime, Distance, DistanceSpan, Gradient,
     GradientStop, Point3, Rotation3, Scale3,
 };
+use indexmap::IndexSet;
 use yaml_serde::{Mapping, Value};
 
 use crate::diagnostics::{

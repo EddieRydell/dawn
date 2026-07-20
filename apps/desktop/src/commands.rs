@@ -26,6 +26,51 @@ pub(crate) fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) fn sync_packages(state: State<'_, DesktopState>) -> AppSnapshot {
+    state.sync_packages()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn check_package_updates(state: State<'_, DesktopState>) -> AppSnapshot {
+    state.check_package_updates()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn update_packages(
+    alias: Option<String>,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.update_packages(alias)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn remove_package_dependency(
+    alias: String,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.remove_package_dependency(&alias)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn fork_package_dependency(
+    alias: String,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.fork_package_dependency(&alias)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn open_package_page(alias: String, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.open_package_page(&alias)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) fn update_app_settings(
     settings: AppSettings,
     state: State<'_, DesktopState>,
@@ -492,6 +537,12 @@ pub(crate) fn set_preview_window_open(
 pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
+        sync_packages,
+        check_package_updates,
+        update_packages,
+        remove_package_dependency,
+        fork_package_dependency,
+        open_package_page,
         update_app_settings,
         save_workspace_layout_state,
         get_restored_view_state,

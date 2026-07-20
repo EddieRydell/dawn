@@ -293,6 +293,7 @@ function GraphOperatorInspector({
                       type: "linkGraphOperatorCurve",
                       nodeId: node.id,
                       name,
+                      sourceModuleId: curve.moduleId,
                       sourcePath: curve.path,
                       objectKey: curve.objectKey
                     })
@@ -313,6 +314,7 @@ function GraphOperatorInspector({
                       type: "linkGraphOperatorGradient",
                       nodeId: node.id,
                       name,
+                      sourceModuleId: gradient.moduleId,
                       sourcePath: gradient.path,
                       objectKey: gradient.objectKey
                     })

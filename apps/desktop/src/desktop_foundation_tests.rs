@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use camino::Utf8Path;
-    use dawn_project_io::load_project;
+    use dawn_project_io::load_package;
 
     use crate::dto::{DocumentViewId, GuiDocument, GuiDocumentRequest};
 
@@ -10,7 +10,9 @@ mod tests {
             .parent()
             .and_then(Utf8Path::parent)
             .unwrap();
-        load_project(&workspace.join("examples/starter/project.dawn")).unwrap()
+        load_package(&workspace.join("examples/starter"))
+            .unwrap()
+            .session
     }
 
     #[test]

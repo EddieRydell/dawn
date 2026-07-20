@@ -170,8 +170,9 @@ mod tests {
     use std::time::Duration;
 
     use dawn_language::controller::{ControllerPort, ControllerPortAddress};
-    use dawn_language::identity::SourceIdentity;
+    use dawn_language::identity::{DocumentId, SourceIdentity};
     use sacn::packet::{AcnRootLayerProtocol, E131RootLayerData};
+    use uuid::Uuid;
 
     use super::*;
 
@@ -181,8 +182,8 @@ mod tests {
         receiver
             .set_read_timeout(Some(Duration::from_secs(1)))
             .unwrap();
-        let id = ControllerId(SourceIdentity::new(
-            "controller.dawn".into(),
+        let id = ControllerId(SourceIdentity::from_document(
+            DocumentId::new(Uuid::new_v4(), "controller.dawn".into()),
             "e131".to_string(),
         ));
         let config = E131Config {

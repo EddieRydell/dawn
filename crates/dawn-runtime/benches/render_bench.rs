@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use dawn_language::effect::EffectInstId;
 use dawn_language::values::Color;
-use dawn_project_io::load_project;
+use dawn_project_io::load_package;
 use dawn_runtime::{
     EffectRasterRenderScratch, PreparedEffectRasterRenderer, PreparedSequenceRenderer,
     RenderedFrame, SequenceRenderScratch,
@@ -81,7 +81,9 @@ struct RasterScenario {
 }
 
 fn bench_render(c: &mut Criterion) {
-    let session = load_project(&project_path()).expect("benchmark project should load");
+    let session = load_package(&project_path())
+        .expect("benchmark project should load")
+        .session;
     let setup_id = &session.project.root.setup;
     let sequence_id = session
         .project
@@ -282,7 +284,7 @@ fn render_raster_columns(
 fn project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("examples/starter/project.dawn")
+        .join("examples/starter")
 }
 
 fn checksum_frame(frame: &RenderedFrame) -> u64 {

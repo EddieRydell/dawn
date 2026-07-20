@@ -23,6 +23,71 @@ pub struct AppSnapshot {
     pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
     pub pending_operator_rewrite: Option<PendingOperatorRewrite>,
+    pub package: PackageStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageStatus {
+    pub root: Option<String>,
+    pub manifest_valid: bool,
+    pub lock_present: bool,
+    pub lock_current: bool,
+    pub registry: Option<String>,
+    pub update_checked: bool,
+    pub dependencies: Vec<PackageDependencyStatus>,
+    pub modules: Vec<PackageModuleStatus>,
+    pub warnings: Vec<PackageCompatibilityWarning>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageDependencyStatus {
+    pub alias: String,
+    pub source: PackageDependencySource,
+    pub requirement: String,
+    pub package: Option<String>,
+    pub locked_version: Option<String>,
+    pub module_id: Option<String>,
+    pub cache: PackageCacheState,
+    pub update_available: Option<bool>,
+    pub website_url: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageDependencySource {
+    Registry,
+    Path,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageCacheState {
+    Ready,
+    Missing,
+    Local,
+    Error,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageModuleStatus {
+    pub identity: String,
+    pub module_id: String,
+    pub version: Option<String>,
+    pub documents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageCompatibilityWarning {
+    pub package: String,
+    pub message: String,
+    pub breaking: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -36,6 +101,7 @@ pub struct PendingOperatorRewrite {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorDefinitionRewriteDescription {
+    pub definition: OperatorDefinitionKey,
     pub old_name: String,
     pub exact_replacement: Option<String>,
     pub candidates: Vec<OperatorDefinitionCandidate>,
@@ -45,6 +111,14 @@ pub struct OperatorDefinitionRewriteDescription {
     pub new_required_params: Vec<OperatorRequiredParamDescription>,
     pub removed_ports: Vec<String>,
     pub new_ports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorDefinitionKey {
+    pub module_id: String,
+    pub document: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -132,14 +206,14 @@ pub struct OperatorUsagePortResolution {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorDefinitionResolution {
-    pub old_name: String,
+    pub definition: OperatorDefinitionKey,
     pub replacement_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorParameterResolution {
-    pub old_definition: String,
+    pub definition: OperatorDefinitionKey,
     pub old_name: String,
     pub new_name: Option<String>,
 }
@@ -147,7 +221,7 @@ pub struct OperatorParameterResolution {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorPortResolution {
-    pub old_definition: String,
+    pub definition: OperatorDefinitionKey,
     pub old_name: String,
     pub new_name: Option<String>,
 }
@@ -342,6 +416,7 @@ pub struct GuiDocumentRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiObjectRef {
+    pub module_id: String,
     pub path: String,
     pub object_key: String,
     pub kind: ObjectKind,
@@ -492,7 +567,9 @@ pub struct SetupPatchEdge {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupController {
-    pub id: String,
+    pub label: String,
+    pub source_ref: GuiObjectRef,
+    pub read_only: bool,
     pub protocol: String,
     pub bind_address: String,
     pub destination: Option<String>,
@@ -551,7 +628,7 @@ pub enum SetupGuiEdit {
         to_port: u16,
     },
     SetControllerPort {
-        controller: String,
+        controller: GuiObjectRef,
         port: u32,
         address: u16,
         slot_count: u16,
@@ -697,8 +774,14 @@ pub struct EditorBuffer {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceEffectReference {
-    Builtin { effect: SequenceBuiltinEffect },
-    Custom { path: String, effect_name: String },
+    Builtin {
+        effect: SequenceBuiltinEffect,
+    },
+    Custom {
+        module_id: String,
+        path: String,
+        effect_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -963,6 +1046,7 @@ pub struct SequenceAudio {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceCurveLibraryItem {
+    pub module_id: String,
     pub path: String,
     pub object_key: String,
     pub display_name: String,
@@ -972,6 +1056,7 @@ pub struct SequenceCurveLibraryItem {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceGradientLibraryItem {
+    pub module_id: String,
     pub path: String,
     pub object_key: String,
     pub display_name: String,
@@ -1230,8 +1315,14 @@ pub struct SequenceGraphEdge {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceGraphOperator {
-    Builtin { operator: SequenceBuiltinOperator },
-    Custom { path: String, object_key: String },
+    Builtin {
+        operator: SequenceBuiltinOperator,
+    },
+    Custom {
+        module_id: String,
+        path: String,
+        object_key: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1284,6 +1375,7 @@ pub enum SequenceCurveSource {
     Inline,
     Library {
         reference: String,
+        module_id: Option<String>,
         path: Option<String>,
         object_key: Option<String>,
         display_name: Option<String>,
@@ -1300,6 +1392,7 @@ pub enum SequenceGradientSource {
     Inline,
     Library {
         reference: String,
+        module_id: Option<String>,
         path: Option<String>,
         object_key: Option<String>,
         display_name: Option<String>,
@@ -1493,6 +1586,7 @@ pub enum SequenceGuiEdit {
     LinkEffectCurve {
         id: u32,
         name: String,
+        source_module_id: String,
         source_path: String,
         object_key: String,
     },
@@ -1503,6 +1597,7 @@ pub enum SequenceGuiEdit {
     LinkEffectGradient {
         id: u32,
         name: String,
+        source_module_id: String,
         source_path: String,
         object_key: String,
     },
@@ -1543,6 +1638,7 @@ pub enum SequenceGuiEdit {
     LinkGraphOperatorCurve {
         node_id: String,
         name: String,
+        source_module_id: String,
         source_path: String,
         object_key: String,
     },
@@ -1553,6 +1649,7 @@ pub enum SequenceGuiEdit {
     LinkGraphOperatorGradient {
         node_id: String,
         name: String,
+        source_module_id: String,
         source_path: String,
         object_key: String,
     },

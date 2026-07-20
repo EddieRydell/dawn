@@ -245,7 +245,7 @@ impl GuiHistory {
 mod tests {
     use super::*;
     use camino::Utf8Path;
-    use dawn_project_io::load_project;
+    use dawn_project_io::load_package;
 
     fn entry(session: &ProjectSession, status_path: &str) -> GuiHistoryEntry {
         GuiHistoryEntry {
@@ -262,7 +262,9 @@ mod tests {
             .parent()
             .and_then(Utf8Path::parent)
             .unwrap();
-        let session = load_project(&workspace.join("examples/starter/project.dawn")).unwrap();
+        let session = load_package(&workspace.join("examples/starter"))
+            .unwrap()
+            .session;
         let mut history = GuiHistory::new(2);
         history.push_redo(entry(&session, "redo"));
         history.push_undo(entry(&session, "one"));

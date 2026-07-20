@@ -29,9 +29,7 @@ pub(super) fn sequence_value(
                 })?;
             value.insert(
                 string_value("audio"),
-                Value::String(
-                    relative_path_from_document(from_document, &asset.relative_path).to_string(),
-                ),
+                Value::String(asset.relative_path.to_string()),
             );
         }
     }
@@ -738,4 +736,4 @@ use super::values::{
     string_value, typed_object, write_source_reference,
 };
 use crate::ExportProjectError;
-use crate::source::{SourceObjectKind, relative_path_from_document};
+use crate::source::SourceObjectKind;

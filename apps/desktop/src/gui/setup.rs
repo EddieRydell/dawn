@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
-use dawn_language::controller::{ControllerPortAddress, ControllerProtocol};
+use dawn_language::controller::{ControllerId, ControllerPortAddress, ControllerProtocol};
 use dawn_language::element::{ElementCellAddress, ElementNodeId, ElementNodeKind};
 use dawn_language::patch::{PatchEdge, PatchNode, PatchNodeId, PatchPortId};
 use dawn_language::preview::PropInstanceId;
 use dawn_language::validation::validate_project;
 use dawn_project_io::ProjectSession;
 
+use super::model::source_identity_from_gui;
 use super::{GuiMutationError, ResolvedGuiObject, blocked};
 use crate::dto::{
-    GuiDocument, SetupController, SetupControllerPort, SetupElementCell, SetupElementKind,
-    SetupElementNode, SetupFixtureProfile, SetupGuiDocument, SetupGuiEdit, SetupPatchEdge,
-    SetupPatchNode, SetupPatchNodeKind, SetupPreviewLink,
+    GuiDocument, GuiObjectRef, ObjectKind, SetupController, SetupControllerPort, SetupElementCell,
+    SetupElementKind, SetupElementNode, SetupFixtureProfile, SetupGuiDocument, SetupGuiEdit,
+    SetupPatchEdge, SetupPatchNode, SetupPatchNodeKind, SetupPreviewLink,
 };
 
 pub(super) fn project_setup(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
@@ -205,7 +206,15 @@ pub(super) fn project_setup(session: &ProjectSession, resolved: &ResolvedGuiObje
                     ),
                 };
             Some(SetupController {
-                id: source_key(&id.0),
+                label: source_key(&id.0),
+                source_ref: GuiObjectRef {
+                    module_id: id.0.module_id().to_string(),
+                    path: id.0.document().to_string(),
+                    object_key: id.0.object().to_string(),
+                    kind: ObjectKind::Controller,
+                    id: id.0.object().to_string(),
+                },
+                read_only: !session.source.is_project_owned(id.0.document_id()),
                 protocol,
                 bind_address,
                 destination,
@@ -444,11 +453,26 @@ pub(super) fn edit_setup(
             address,
             slot_count,
         } => {
-            let (id, definition) = session
+            if !matches!(&controller.kind, ObjectKind::Controller) {
+                return Err(GuiMutationError::Invalid(
+                    "Controller source kind is invalid.".to_string(),
+                ));
+            }
+            let identity = source_identity_from_gui(
+                &controller.module_id,
+                &controller.path,
+                &controller.object_key,
+            )?;
+            if !session.source.is_project_owned(identity.document_id()) {
+                return Err(GuiMutationError::Blocked(
+                    "Dependency controller definitions are read-only. Fork the package before editing this controller."
+                        .to_string(),
+                ));
+            }
+            let definition = session
                 .project
                 .controllers
-                .iter_mut()
-                .find(|(id, _)| source_key(&id.0) == controller)
+                .get_mut(&ControllerId(identity))
                 .ok_or_else(|| {
                     GuiMutationError::Invalid("Controller was not found.".to_string())
                 })?;
@@ -464,7 +488,6 @@ pub(super) fn edit_setup(
                 ControllerProtocol::ArtNet(_) => ControllerPortAddress::ArtNetPort(address),
             };
             port.slot_count = slot_count;
-            let _ = id;
         }
     }
     validate_project(&session.project)

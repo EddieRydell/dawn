@@ -1,9 +1,14 @@
+mod common;
+
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::identity::DocumentId;
 use dawn_project_io::{
-    IoDiagnosticCode, IoDiagnosticSeverity, TextRange, check_document_text, check_project,
+    IoDiagnosticCode, IoDiagnosticSeverity, TextRange, check_document_text, check_package,
     check_project_document_text,
 };
 use std::fs;
+
+use common::{load_project_package, write_project_package};
 
 #[test]
 fn invalid_yaml_reports_parser_range() {
@@ -15,8 +20,9 @@ fn invalid_yaml_reports_parser_range() {
         "broken:\n  type: project\n  setup: [\n  sequences: []\n",
     )
     .unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -80,8 +86,9 @@ fn invalid_reference_reports_dawn_reference_diagnostic() {
         "main:\n  type: project\n  setup: missing.setup\n  sequences: []\n",
     )
     .unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -102,12 +109,12 @@ fn repeated_reference_text_reports_the_failing_occurrence() {
     let entrypoint = root.join("project.dawn");
     fs::write(
         &entrypoint,
-        "imports:\n- from: setup.dawn\n  as: shared\nmain:\n  type: project\n  setup: shared.main\n  sequences: [shared.main]\n",
+        "imports:\n- from:\n    documents:\n    - setup.dawn\n  as: shared\nmain:\n  type: project\n  setup: shared.main\n  sequences: [shared.main]\n",
     )
     .unwrap();
     fs::write(
         root.join("setup.dawn"),
-        "imports:\n- from: display.dawn\n  as: display\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n- from:\n    documents:\n    - display.dawn\n  as: display\n- from:\n    documents:\n    - patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
     fs::write(root.join("display.dawn"), "elements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability: { type: rgb }\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n").unwrap();
@@ -116,15 +123,16 @@ fn repeated_reference_text_reports_the_failing_occurrence() {
         "main:\n  type: patch\n  nodes: []\n  edges: []\n",
     )
     .unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
         .find(|diagnostic| diagnostic.code == IoDiagnosticCode::DawnReference)
         .unwrap();
     let range = diagnostic.range.as_ref().unwrap();
-    assert_eq!(range.start.line, 6);
+    assert_eq!(range.start.line, 8);
     assert!(range.start.character >= 14);
 }
 
@@ -134,12 +142,14 @@ fn project_document_override_runs_semantic_validation() {
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     write_imported_sequence_project(
         &root,
-        "  duration: 1s\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph: { nodes: [], edges: [] }\n  automation_clips: []\n",
+        "  duration: 1s\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: { x: 0, y: 0 }\n      type: output\n    edges: []\n  automation_clips: []\n",
     );
+    let session = load_project_package(&root);
+    let document = DocumentId::new(session.source.project_module_id(), "sequence.dawn".into());
     let diagnostics = check_project_document_text(
-        &root.join("project.dawn"),
-        Utf8Path::new("sequence.dawn"),
-        "main:\n  type: sequence\n  duration: invalid\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph: { nodes: [], edges: [] }\n  automation_clips: []\n",
+        &session,
+        &document,
+        "main:\n  type: sequence\n  duration: invalid\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: { x: 0, y: 0 }\n      type: output\n    edges: []\n  automation_clips: []\n",
     );
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.path == Utf8Path::new("sequence.dawn")
@@ -153,8 +163,9 @@ fn missing_required_field_reports_containing_object_range() {
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let entrypoint = root.join("project.dawn");
     fs::write(&entrypoint, "main:\n  type: project\n  sequences: []\n").unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -177,8 +188,9 @@ fn wrong_field_type_reports_bad_value_range() {
         "main:\n  type: project\n  setup: [bad]\n  sequences: []\n",
     )
     .unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -194,8 +206,9 @@ fn unsupported_enum_string_reports_that_string_range() {
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let entrypoint = root.join("project.dawn");
     fs::write(&entrypoint, "main:\n  type: nope\n").unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -209,13 +222,12 @@ fn unsupported_enum_string_reports_that_string_range() {
 fn nested_invalid_color_reports_nested_scalar_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-    let entrypoint = root.join("project.dawn");
     write_imported_sequence_project(
         &root,
         "  duration: 1s\n  frame_rate: 30\n  mark_collections:\n    - key: beats\n      name: Beats\n      color: bad-color\n      marks: []\n",
     );
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -229,13 +241,12 @@ fn nested_invalid_color_reports_nested_scalar_range() {
 fn nested_invalid_duration_reports_nested_scalar_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-    let entrypoint = root.join("project.dawn");
     write_imported_sequence_project(
         &root,
         "  duration: soon\n  frame_rate: 30\n  layers: []\n  effects: []\n  composition_graph:\n    nodes: []\n    edges: []\n",
     );
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let diagnostic = report
         .diagnostics
         .iter()
@@ -252,7 +263,7 @@ fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
     let entrypoint = root.join("project.dawn");
     fs::write(
         &entrypoint,
-        "imports:\n  - from: bad.effect.dawn\n    as: fx\nmain:\n  type: project\n  setup: missing.setup\n  sequences: []\n",
+        "imports:\n  - from:\n      documents:\n      - bad.effect.dawn\n    as: fx\nmain:\n  type: project\n  setup: missing.setup\n  sequences: []\n",
     )
     .unwrap();
     fs::write(
@@ -260,8 +271,9 @@ fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
         "effect Bad {\n  color sample() {\n    return @;\n  }\n}\n",
     )
     .unwrap();
+    write_project_package(&root);
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
     let effect_diagnostics = report
         .diagnostics
         .iter()
@@ -291,13 +303,13 @@ fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
 }
 
 #[test]
-fn invalid_entrypoint_reports_no_range() {
+fn missing_manifest_reports_no_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
-    let report = check_project(&root.join("missing.dawn"));
+    let report = check_package(&root);
     let diagnostic = report.diagnostics.first().unwrap();
 
-    assert_eq!(diagnostic.code, IoDiagnosticCode::IoRead);
+    assert_eq!(diagnostic.code, IoDiagnosticCode::DawnLoad);
     assert_eq!(diagnostic.range, None);
 }
 
@@ -307,9 +319,9 @@ fn valid_example_project_loads_without_diagnostics() {
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    let entrypoint = workspace_root.join("examples/starter/project.dawn");
+    let root = workspace_root.join("examples/starter");
 
-    let report = check_project(&entrypoint);
+    let report = check_package(&root);
 
     assert!(report.session.is_some());
     assert_eq!(report.diagnostics, Vec::new());
@@ -318,12 +330,12 @@ fn valid_example_project_loads_without_diagnostics() {
 fn write_imported_sequence_project(root: &Utf8Path, sequence_body: &str) {
     fs::write(
         root.join("project.dawn"),
-        "imports:\n  - from: setup.dawn\n    as: setups\n  - from: sequence.dawn\n    as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
+        "imports:\n  - from:\n      documents:\n      - setup.dawn\n    as: setups\n  - from:\n      documents:\n      - sequence.dawn\n    as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
     )
     .unwrap();
     fs::write(
         root.join("setup.dawn"),
-        "imports:\n  - from: display.dawn\n    as: display\n  - from: patch.dawn\n    as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n  - from:\n      documents:\n      - display.dawn\n    as: display\n  - from:\n      documents:\n      - patch.dawn\n    as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
     fs::write(root.join("display.dawn"), "elements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability: { type: rgb }\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n").unwrap();
@@ -337,6 +349,7 @@ fn write_imported_sequence_project(root: &Utf8Path, sequence_body: &str) {
         format!("main:\n  type: sequence\n{sequence_body}"),
     )
     .unwrap();
+    write_project_package(root);
 }
 
 fn assert_range(

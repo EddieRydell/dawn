@@ -615,10 +615,11 @@ function GradientSourceShell({
   />;
 }
 
-type LibraryItem = { path: string; objectKey: string; displayName: string };
+type LibraryItem = { moduleId: string; path: string; objectKey: string; displayName: string };
 type LibraryReference = {
   type: "library";
   reference: string;
+  moduleId: string | null;
   path: string | null;
   objectKey: string | null;
   displayName: string | null;
@@ -656,8 +657,12 @@ function LibraryValueShell<T extends { time: number }, S extends LibraryItem>({
   const linked = librarySource !== null;
   const linkedLabel = librarySource?.displayName ?? librarySource?.reference ?? "";
   const availableSources = sources;
-  const selectedSourceIndex = linked && librarySource.path !== null && librarySource.objectKey !== null
-    ? availableSources.findIndex((item) => item.path === librarySource.path && item.objectKey === librarySource.objectKey)
+  const selectedSourceIndex = linked && librarySource.moduleId !== null && librarySource.path !== null && librarySource.objectKey !== null
+    ? availableSources.findIndex((item) =>
+      item.moduleId === librarySource.moduleId
+      && item.path === librarySource.path
+      && item.objectKey === librarySource.objectKey
+    )
     : -1;
   const requestEditableCopy = (action: CopyAction) => {
     if (!linked) return;

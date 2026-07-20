@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
-    is_project_owned_path, source_document_text as generated_source_document_text,
+    source_document_text as generated_source_document_text,
 };
 use indexmap::IndexSet;
 
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, ObjectKind, ProjectDiagnostic, ProjectTreeMode, WorkspaceEntry,
-    WorkspaceEntryKind, WorkspaceLayoutState,
+    DocumentViewId, EditorBuffer, ObjectKind, PackageStatus, ProjectDiagnostic, ProjectTreeMode,
+    WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
 };
 use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
@@ -222,17 +222,21 @@ mod audio;
 mod filesystem;
 mod gui_editing;
 mod operator_rewrite;
+mod packages;
+pub(crate) use packages::{decorate_deprecation_status, package_status};
 mod project_lifecycle;
 mod rendering;
 mod workspace;
 
 fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool {
-    path == project.source.entrypoint
+    let document_id = project.source.project_document(path.to_path_buf());
+    project.source.entrypoint.as_ref() == Some(&document_id)
         || project.source.documents.values().any(|document| {
             document.imports().iter().any(|edge| {
-                edge.targets()
-                    .iter()
-                    .any(|target| target == path || target.starts_with(path))
+                edge.targets().iter().any(|target| {
+                    target.module_id() == project.source.project_module_id()
+                        && (target.path() == path || target.path().starts_with(path))
+                })
             })
         })
 }
@@ -257,14 +261,38 @@ fn empty_snapshot() -> AppSnapshot {
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: crate::live_output::disabled_snapshot(0),
         pending_operator_rewrite: None,
+        package: PackageStatus {
+            root: None,
+            manifest_valid: false,
+            lock_present: false,
+            lock_current: false,
+            registry: None,
+            update_checked: false,
+            dependencies: Vec::new(),
+            modules: Vec::new(),
+            warnings: Vec::new(),
+            message: None,
+        },
     }
 }
 
 pub(crate) struct PendingOperatorRewriteState {
     pub token: u32,
     pub project_revision: u32,
-    pub path: Utf8PathBuf,
-    pub compiled: dawn_project_io::CompiledOperatorDocument,
+    pub target_documents: BTreeSet<dawn_language::identity::DocumentId>,
+    pub kind: PendingOperatorRewriteKind,
+}
+
+pub(crate) enum PendingOperatorRewriteKind {
+    Document {
+        path: Utf8PathBuf,
+        compiled: Box<dawn_project_io::CompiledOperatorDocument>,
+    },
+    PackageUpdate {
+        root: Utf8PathBuf,
+        candidate: Box<dawn_package::PreparedPackageCandidate>,
+        session: Box<ProjectSession>,
+    },
 }
 
 fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {
@@ -282,15 +310,6 @@ fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
         return min;
     }
     value.clamp(min, max)
-}
-
-fn normalize_project_entrypoint(path: &str) -> Utf8PathBuf {
-    let path = Utf8PathBuf::from(path);
-    if path.is_dir() {
-        path.join("project.dawn")
-    } else {
-        path
-    }
 }
 
 fn project_diagnostic(diagnostic: &IoDiagnostic) -> ProjectDiagnostic {
@@ -328,10 +347,10 @@ fn project_diagnostics(report: &ProjectCheckReport) -> Vec<ProjectDiagnostic> {
 
 fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
     let mut paths = IndexSet::new();
-    collect_workspace_paths(&session.source.source_root, Utf8Path::new(""), &mut paths);
-    for path in session.source.documents.keys() {
-        if is_project_owned_path(path) {
-            insert_path_with_parents(&mut paths, path);
+    collect_workspace_paths(session.source.project_root(), Utf8Path::new(""), &mut paths);
+    for document in session.source.documents.keys() {
+        if session.source.is_project_owned(document) {
+            insert_path_with_parents(&mut paths, document.path());
         }
     }
     paths.sort();
@@ -399,7 +418,8 @@ fn generated_source_texts(
 ) -> Result<BTreeMap<String, String>, String> {
     let mut texts = BTreeMap::new();
     for path in paths {
-        match generated_source_document_text(session, Utf8Path::new(path)) {
+        let document_id = session.source.project_document(Utf8PathBuf::from(path));
+        match generated_source_document_text(session, &document_id) {
             Ok(Some(text)) => {
                 texts.insert(path.clone(), text);
             }
@@ -436,7 +456,7 @@ fn refresh_clean_buffers(snapshot: &mut AppSnapshot, generated_text: &BTreeMap<S
 }
 
 fn editor_buffer(session: &ProjectSession, relative_path: &Utf8Path) -> Option<EditorBuffer> {
-    let disk_path = session.source.source_root.join(relative_path);
+    let disk_path = session.source.project_root().join(relative_path);
     let text = fs::read_to_string(&disk_path).ok()?;
     Some(EditorBuffer {
         path: relative_path.to_string(),
@@ -492,7 +512,7 @@ fn descriptor_for_path(
     session
         .source
         .documents
-        .get(relative_path)
+        .get(&session.source.project_document(relative_path.to_path_buf()))
         .map(|document| document_descriptor(relative_path, document))
         .or_else(|| {
             absolute_project_path(session, relative_path)
@@ -617,10 +637,16 @@ fn absolute_project_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<Utf8PathBuf> {
-    if !is_project_owned_path(relative_path) {
+    if relative_path.as_str().is_empty()
+        || relative_path.is_absolute()
+        || relative_path.as_str().contains('\\')
+        || !relative_path
+            .components()
+            .all(|component| matches!(component, camino::Utf8Component::Normal(_)))
+    {
         return None;
     }
-    Some(session.source.source_root.join(relative_path))
+    Some(session.source.project_root().join(relative_path))
 }
 
 fn valid_child_name(name: &str) -> bool {

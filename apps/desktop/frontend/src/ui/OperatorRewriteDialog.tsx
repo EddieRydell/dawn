@@ -6,6 +6,7 @@ import { useAppStore } from "../store";
 import { THEME_COLORS } from "../theme";
 import type {
   OperatorDefinitionCandidate,
+  OperatorDefinitionKey,
   OperatorRewriteResolution,
   PendingOperatorRewrite,
   SequenceEffectParamValue
@@ -18,7 +19,7 @@ export function OperatorRewriteDialog() {
 
 function OperatorRewriteForm({ pending }: { pending: PendingOperatorRewrite }) {
   const [definitions, setDefinitions] = useState<Record<string, string>>(() =>
-    Object.fromEntries(pending.definitions.map((item) => [item.oldName, item.exactReplacement ?? ""]))
+    Object.fromEntries(pending.definitions.map((item) => [definitionKey(item.definition), item.exactReplacement ?? ""]))
   );
   const [params, setParams] = useState<Record<string, string>>({});
   const [ports, setPorts] = useState<Record<string, string>>({});
@@ -79,14 +80,17 @@ function OperatorRewriteForm({ pending }: { pending: PendingOperatorRewrite }) {
           </AlertDialog.Description>
           <div className="operator-rewrite-scroll">
             {pending.definitions.map((definition) => {
-              const selectedName = definitions[definition.oldName] ?? "";
+              const key = definitionKey(definition.definition);
+              const selectedName = definitions[key] ?? "";
               const selected = definition.candidates.find((candidate) => candidate.name === selectedName) ?? null;
               return (
-                <details key={definition.oldName} open>
-                  <summary>{definition.oldName} · {definition.usageCount} usage{definition.usageCount === 1 ? "" : "s"}</summary>
+                <details key={key} open>
+                  <summary title={`${definition.definition.moduleId}:${definition.definition.document}`}>
+                    {definition.oldName} · {definition.definition.document} · {definition.usageCount} usage{definition.usageCount === 1 ? "" : "s"}
+                  </summary>
                   <label>
                     <span>Replacement definition</span>
-                    <select value={selectedName} onChange={(event) => { setDefinitions({ ...definitions, [definition.oldName]: event.target.value }); }}>
+                    <select value={selectedName} onChange={(event) => { setDefinitions({ ...definitions, [key]: event.target.value }); }}>
                       <option value="">Delete affected nodes</option>
                       {definition.candidates.map((candidate) => <option key={candidate.name} value={candidate.name}>{candidate.name}</option>)}
                     </select>
@@ -94,7 +98,7 @@ function OperatorRewriteForm({ pending }: { pending: PendingOperatorRewrite }) {
                   {selected !== null && definition.removedOrChangedParams.map((oldName) => (
                     <label key={`param-${oldName}`}>
                       <span>Parameter {oldName}</span>
-                      <select value={params[mapKey(definition.oldName, oldName)] ?? ""} onChange={(event) => { setParams({ ...params, [mapKey(definition.oldName, oldName)]: event.target.value }); }}>
+                      <select value={params[mapKey(definition.definition, oldName)] ?? ""} onChange={(event) => { setParams({ ...params, [mapKey(definition.definition, oldName)]: event.target.value }); }}>
                         <option value="">Detach automation / discard value</option>
                         {selected.params.map((param) => <option key={param.name} value={param.name}>{param.name} ({param.valueType})</option>)}
                       </select>
@@ -103,7 +107,7 @@ function OperatorRewriteForm({ pending }: { pending: PendingOperatorRewrite }) {
                   {selected !== null && definition.removedPorts.map((oldName) => (
                     <label key={`port-${oldName}`}>
                       <span>Input port {oldName}</span>
-                      <select value={ports[mapKey(definition.oldName, oldName)] ?? ""} onChange={(event) => { setPorts({ ...ports, [mapKey(definition.oldName, oldName)]: event.target.value }); }}>
+                      <select value={ports[mapKey(definition.definition, oldName)] ?? ""} onChange={(event) => { setPorts({ ...ports, [mapKey(definition.definition, oldName)]: event.target.value }); }}>
                         <option value="">Disconnect</option>
                         {selected.inputPorts.map((port) => <option key={port} value={port}>{port}</option>)}
                       </select>
@@ -200,7 +204,7 @@ function buildResolution(
   const requiredValues: OperatorRewriteResolution["requiredValues"] = [];
   const requiredConnections: OperatorRewriteResolution["requiredConnections"] = [];
   for (const definition of pending.definitions) {
-    const selected = definition.candidates.find((candidate) => candidate.name === definitions[definition.oldName]);
+    const selected = definition.candidates.find((candidate) => candidate.name === definitions[definitionKey(definition.definition)]);
     if (selected === undefined) continue;
     for (const usage of definition.usages) {
       const definitionOverride = usageDefinitions[usageKey(usage, "definition")];
@@ -233,7 +237,10 @@ function buildResolution(
     }
   }
   return {
-    definitions: pending.definitions.map((definition) => ({ oldName: definition.oldName, replacementName: emptyToNull(definitions[definition.oldName]) })),
+    definitions: pending.definitions.map((definition) => ({
+      definition: definition.definition,
+      replacementName: emptyToNull(definitions[definitionKey(definition.definition)])
+    })),
     usageDefinitions: pending.definitions.flatMap((definition) => definition.usages.flatMap((usage) => {
       const replacementName = usageDefinitions[usageKey(usage, "definition")];
       return replacementName === undefined || replacementName === "__global" ? [] : [{
@@ -244,9 +251,9 @@ function buildResolution(
       }];
     })),
     parameters: pending.definitions.flatMap((definition) => definition.removedOrChangedParams.map((oldName) => ({
-      oldDefinition: definition.oldName,
+      definition: definition.definition,
       oldName,
-      newName: emptyToNull(params[mapKey(definition.oldName, oldName)])
+      newName: emptyToNull(params[mapKey(definition.definition, oldName)])
     }))),
     usageParameters: pending.definitions.flatMap((definition) => definition.usages.flatMap((usage) => definition.removedOrChangedParams.flatMap((oldName) => {
       const newName = usageParams[usageKey(usage, oldName)];
@@ -259,9 +266,9 @@ function buildResolution(
       }];
     }))),
     ports: pending.definitions.flatMap((definition) => definition.removedPorts.map((oldName) => ({
-      oldDefinition: definition.oldName,
+      definition: definition.definition,
       oldName,
-      newName: emptyToNull(ports[mapKey(definition.oldName, oldName)])
+      newName: emptyToNull(ports[mapKey(definition.definition, oldName)])
     }))),
     usagePorts: pending.definitions.flatMap((definition) => definition.usages.flatMap((usage) => definition.removedPorts.flatMap((oldName) => {
       const newName = usagePorts[usageKey(usage, oldName)];
@@ -283,7 +290,7 @@ function requiredParams(
   candidate: OperatorDefinitionCandidate,
   mappings: Record<string, string>
 ) {
-  const mapped = new Set(definition.removedOrChangedParams.map((name) => mappings[mapKey(definition.oldName, name)]).filter(Boolean));
+  const mapped = new Set(definition.removedOrChangedParams.map((name) => mappings[mapKey(definition.definition, name)]).filter(Boolean));
   const explicitlyNew = new Set(definition.newRequiredParams.map((param) => param.name));
   return candidate.params.filter((param) => param.required && !mapped.has(param.name) && (definition.exactReplacement === null || explicitlyNew.has(param.name)));
 }
@@ -299,8 +306,8 @@ function usageMappings(
     ...definition.removedPorts
   ].map((name) => {
     const override = overrides[usageKey(usage, name)];
-    return [mapKey(definition.oldName, name), override === undefined || override === "__global"
-      ? globalMappings[mapKey(definition.oldName, name)] ?? ""
+    return [mapKey(definition.definition, name), override === undefined || override === "__global"
+      ? globalMappings[mapKey(definition.definition, name)] ?? ""
       : override];
   }));
 }
@@ -310,7 +317,7 @@ function requiredPorts(
   candidate: OperatorDefinitionCandidate,
   mappings: Record<string, string>
 ) {
-  const mapped = new Set(definition.removedPorts.map((name) => mappings[mapKey(definition.oldName, name)]).filter(Boolean));
+  const mapped = new Set(definition.removedPorts.map((name) => mappings[mapKey(definition.definition, name)]).filter(Boolean));
   const explicitlyNew = new Set(definition.newPorts);
   return candidate.inputPorts.filter((port) => !mapped.has(port) && (definition.exactReplacement === null || explicitlyNew.has(port)));
 }
@@ -338,7 +345,13 @@ function defaultValueText(valueType: string): string {
   return "0";
 }
 
-function mapKey(definition: string, name: string) { return `${definition}\u0000${name}`; }
+function definitionKey(definition: OperatorDefinitionKey) {
+  return `${definition.moduleId}\u0000${definition.document}\u0000${definition.name}`;
+}
+
+function mapKey(definition: OperatorDefinitionKey, name: string) {
+  return `${definitionKey(definition)}\u0000${name}`;
+}
 function usageKey(usage: { sequencePath: string; sequenceName: string; nodeId: string }, name: string) {
   return `${usage.sequencePath}\u0000${usage.sequenceName}\u0000${usage.nodeId}\u0000${name}`;
 }

@@ -11,6 +11,7 @@ default-run = "dawn-desktop"
 camino.workspace = true
 bytemuck.workspace = true
 dawn-project-io.workspace = true
+dawn-package.workspace = true
 dawn-language.workspace = true
 dawn-output.workspace = true
 dawn-runtime.workspace = true
@@ -18,6 +19,7 @@ glam.workspace = true
 indexmap.workspace = true
 kira.workspace = true
 rfd.workspace = true
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 specta.workspace = true
@@ -25,6 +27,8 @@ specta-typescript.workspace = true
 tauri.workspace = true
 tauri-specta.workspace = true
 wgpu.workspace = true
+uuid.workspace = true
+webbrowser.workspace = true
 yaml_serde.workspace = true
 
 [build-dependencies]

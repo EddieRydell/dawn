@@ -12,3 +12,6 @@ dawn-language.workspace = true
 dawn-runtime.workspace = true
 indexmap.workspace = true
 sacn.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true

@@ -100,12 +100,19 @@ export function SetupEditor({ document }: { document: SetupDocument }) {
 
         <SetupSection title="Controllers">
           {document.controllers.map((controller) => (
-            <div className="controller-card" key={controller.id}>
+            <div className="controller-card" key={`${controller.sourceRef.moduleId}:${controller.sourceRef.path}:${controller.sourceRef.objectKey}`}>
               <div className="setup-summary">
-                <strong>{controller.id}</strong>
-                <span>{controller.protocol} · {controller.mode} · bind {controller.bindAddress}{controller.destination !== null ? ` · ${controller.destination}` : ""}</span>
+                <strong>{controller.label}</strong>
+                <span>{controller.protocol} · {controller.mode} · bind {controller.bindAddress}{controller.destination !== null ? ` · ${controller.destination}` : ""}{controller.readOnly ? " · read-only dependency" : ""}</span>
               </div>
-              {controller.ports.map((port) => <ControllerPort key={port.id} controller={controller.id} port={port} />)}
+              {controller.ports.map((port) => (
+                <ControllerPort
+                  key={port.id}
+                  controller={controller.sourceRef}
+                  port={port}
+                  readOnly={controller.readOnly}
+                />
+              ))}
             </div>
           ))}
         </SetupSection>
@@ -139,15 +146,23 @@ function PreviewLink({ link, document }: { link: SetupDocument["previewLinks"][n
   );
 }
 
-function ControllerPort({ controller, port }: { controller: string; port: SetupDocument["controllers"][number]["ports"][number] }) {
+function ControllerPort({
+  controller,
+  port,
+  readOnly
+}: {
+  controller: SetupDocument["controllers"][number]["sourceRef"];
+  port: SetupDocument["controllers"][number]["ports"][number];
+  readOnly: boolean;
+}) {
   const [address, setAddress] = useState(port.address);
   const [slotCount, setSlotCount] = useState(port.slotCount);
   return (
     <div className="controller-port-row">
       <span>Port {port.id}</span>
-      <label>Address <input type="number" min={0} value={address} onChange={(event) => { setAddress(Number(event.currentTarget.value)); }} /></label>
-      <label>Slots <input type="number" min={1} max={512} value={slotCount} onChange={(event) => { setSlotCount(Number(event.currentTarget.value)); }} /></label>
-      <button onClick={() => void runGuiEditCommand(() => commands.applySetupGuiEdit({
+      <label>Address <input type="number" min={0} value={address} disabled={readOnly} onChange={(event) => { setAddress(Number(event.currentTarget.value)); }} /></label>
+      <label>Slots <input type="number" min={1} max={512} value={slotCount} disabled={readOnly} onChange={(event) => { setSlotCount(Number(event.currentTarget.value)); }} /></label>
+      <button disabled={readOnly} title={readOnly ? "Fork the dependency package before editing this controller." : undefined} onClick={() => void runGuiEditCommand(() => commands.applySetupGuiEdit({
         type: "setControllerPort",
         controller,
         port: port.id,

@@ -1,5 +1,7 @@
 imports:
-- from: ../fixtures/vertical.fixture.dawn
+- from:
+    documents:
+    - fixtures/vertical.fixture.dawn
   as: props
 outputs_elements:
   type: element_tree

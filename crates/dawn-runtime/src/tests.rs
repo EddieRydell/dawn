@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use dawn_project_io::load_project;
+use dawn_project_io::load_package;
 
 use crate::{PreparedRenderSession, RenderedElementState};
 
@@ -7,9 +7,10 @@ fn example(name: &str) -> dawn_project_io::ProjectSession {
     let path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("examples")
-        .join(name)
-        .join("project.dawn");
-    load_project(&path).unwrap_or_else(|error| panic!("failed to load {name}: {error}"))
+        .join(name);
+    load_package(&path)
+        .map(|loaded| loaded.session)
+        .unwrap_or_else(|error| panic!("failed to load {name}: {error}"))
 }
 
 #[test]
