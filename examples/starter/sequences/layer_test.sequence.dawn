@@ -27,7 +27,7 @@ imports:
 layer_test:
   type: sequence
   duration: 249.753832s
-  frame_rate: 60
+  frame_rate: 144
   audio: audio/Babokon - All We Are.mp3
   mark_collections:
   - key: marks

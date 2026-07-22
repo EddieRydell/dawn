@@ -2,13 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use camino::{Utf8Path, Utf8PathBuf};
-use dawn_project_io::{
-    IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
-    source_document_text as generated_source_document_text,
-};
-use indexmap::IndexSet;
-
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
@@ -19,6 +12,11 @@ use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
     GuiHistory, GuiSaveScheduler, RenderRefreshScheduler, gui_save_scheduler,
     render_refresh_scheduler,
+};
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_project_io::{
+    IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
+    source_document_text as generated_source_document_text,
 };
 
 pub(crate) struct DesktopState {
@@ -346,21 +344,23 @@ fn project_diagnostics(report: &ProjectCheckReport) -> Vec<ProjectDiagnostic> {
 }
 
 fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
-    let mut paths = IndexSet::new();
+    let mut paths = BTreeMap::new();
     collect_workspace_paths(session.source.project_root(), Utf8Path::new(""), &mut paths);
     for document in session.source.documents.keys() {
         if session.source.is_project_owned(document) {
             insert_path_with_parents(&mut paths, document.path());
         }
     }
-    paths.sort();
-    paths.into_iter().map(workspace_entry).collect()
+    paths
+        .into_iter()
+        .map(|(path, kind)| workspace_entry(path, kind))
+        .collect()
 }
 
 fn collect_workspace_paths(
     root: &Utf8Path,
     relative: &Utf8Path,
-    paths: &mut IndexSet<Utf8PathBuf>,
+    paths: &mut BTreeMap<Utf8PathBuf, FsEntryKind>,
 ) {
     let absolute = root.join(relative);
     let Ok(entries) = fs::read_dir(absolute) else {
@@ -370,46 +370,56 @@ fn collect_workspace_paths(
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
-        let path = if relative.as_str().is_empty() {
-            Utf8PathBuf::from(name)
+        let path = canonical_relative_path(&relative.join(name));
+        let kind = if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+            FsEntryKind::Directory
         } else {
-            relative.join(name)
+            FsEntryKind::File
         };
-        paths.insert(path.clone());
-        if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+        paths.insert(path.clone(), kind);
+        if matches!(kind, FsEntryKind::Directory) {
             collect_workspace_paths(root, &path, paths);
         }
     }
 }
 
-fn insert_path_with_parents(paths: &mut IndexSet<Utf8PathBuf>, path: &Utf8Path) {
+fn insert_path_with_parents(paths: &mut BTreeMap<Utf8PathBuf, FsEntryKind>, path: &Utf8Path) {
     let mut current = Utf8PathBuf::new();
+    let path = canonical_relative_path(path);
     for component in path.components() {
         let camino::Utf8Component::Normal(part) = component else {
             continue;
         };
         current.push(part);
-        paths.insert(current.clone());
+        current = canonical_relative_path(&current);
+        let kind = if current == path {
+            FsEntryKind::File
+        } else {
+            FsEntryKind::Directory
+        };
+        paths.entry(current.clone()).or_insert(kind);
     }
 }
 
-fn workspace_entry(path: Utf8PathBuf) -> WorkspaceEntry {
+fn workspace_entry(path: Utf8PathBuf, kind: FsEntryKind) -> WorkspaceEntry {
     let name = path
         .file_name()
         .map(ToString::to_string)
         .unwrap_or_else(|| path.to_string());
     let parent = path.parent().map(Utf8Path::to_string).unwrap_or_default();
-    let kind = if path.extension().is_some() {
-        WorkspaceEntryKind::File
-    } else {
-        WorkspaceEntryKind::Directory
-    };
     WorkspaceEntry {
-        path: path.to_string(),
-        kind,
+        path: canonical_relative_path(&path).to_string(),
+        kind: match kind {
+            FsEntryKind::Directory => WorkspaceEntryKind::Directory,
+            FsEntryKind::File => WorkspaceEntryKind::File,
+        },
         name,
         parent,
     }
+}
+
+fn canonical_relative_path(path: &Utf8Path) -> Utf8PathBuf {
+    Utf8PathBuf::from(path.as_str().replace(std::path::MAIN_SEPARATOR, "/"))
 }
 
 fn generated_source_texts(
