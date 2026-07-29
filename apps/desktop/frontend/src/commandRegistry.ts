@@ -1,6 +1,11 @@
 import { commands, getCurrentGuiRequest } from "./api";
 import { effectiveEditorViewMode } from "./editorViewMode";
 import { runSnapshotCommand, useAppStore } from "./store";
+import type { SidebarView } from "./types";
+
+export const OPEN_COMMAND_PALETTE_EVENT = "dawn:open-command-palette";
+export const OPEN_QUICK_OPEN_EVENT = "dawn:open-quick-open";
+export const FOCUS_SIDEBAR_EVENT = "dawn:focus-sidebar";
 
 export type CommandId =
   | "file.newProject"
@@ -13,140 +18,128 @@ export type CommandId =
   | "edit.redo"
   | "view.toggleGuiMode"
   | "view.toggleProjectTree"
-  | "project.reload";
+  | "view.focusExplorer"
+  | "view.focusSearch"
+  | "view.focusPackages"
+  | "view.focusProblems"
+  | "workbench.quickOpen"
+  | "workbench.commandPalette"
+  | "project.reload"
+  | "packages.sync"
+  | "packages.checkUpdates"
+  | "packages.updateAll";
 
 export type CommandDefinition = {
   label: string;
+  category: "File" | "Edit" | "View" | "Project" | "Packages" | "Workbench";
+  keywords: string[];
   shortcut?: string;
-  run: () => Promise<void>;
+  enabled: () => boolean;
+  run: () => Promise<void> | void;
+};
+
+const always = () => true;
+const hasProject = () => useAppStore.getState().snapshot?.projectRoot !== null;
+const focusSidebar = (view: SidebarView) => () => {
+  window.dispatchEvent(new CustomEvent<SidebarView>(FOCUS_SIDEBAR_EVENT, { detail: view }));
 };
 
 export const commandRegistry: Record<CommandId, CommandDefinition> = {
-  "file.newProject": {
-    label: "New Project...",
-    run: () => {
-      window.dispatchEvent(new CustomEvent("dawn:new-project"));
-      return Promise.resolve();
-    }
-  },
-  "file.newSequence": {
-    label: "New Sequence...",
-    run: () => {
-      window.dispatchEvent(new CustomEvent("dawn:new-sequence"));
-      return Promise.resolve();
-    }
-  },
-  "file.openProject": {
-    label: "Open Project...",
-    shortcut: "Ctrl+O",
-    run: async () => {
-      await runSnapshotCommand(commands.openProjectDialog);
-    }
-  },
-  "file.save": {
-    label: "Save",
-    shortcut: "Ctrl+S",
-    run: async () => {
-      const store = useAppStore.getState();
-      if (store.snapshot === null || store.snapshot.activeBuffer === null || effectiveEditorViewMode(store.snapshot) !== "text") return;
-      const text = store.localText;
-      await runSnapshotCommand(commands.updateActiveText.bind(null, text));
-      await runSnapshotCommand(commands.flushAutosave);
-    }
-  },
-  "file.reloadFromDisk": {
-    label: "Reload From Disk",
-    run: async () => {
-      await runSnapshotCommand(commands.reloadActiveBufferFromDisk);
-      await refreshActiveGuiDocument();
-    }
-  },
-  "file.settings": {
-    label: "Settings...",
-    run: () => {
-      window.dispatchEvent(new CustomEvent("dawn:settings"));
-      return Promise.resolve();
-    }
-  },
-  "edit.undo": {
-    label: "Undo",
-    shortcut: "Ctrl+Z",
-    run: async () => {
-      if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
-      await runSnapshotCommand(commands.undoActiveEdit);
-      await refreshActiveGuiDocument();
-    }
-  },
-  "edit.redo": {
-    label: "Redo",
-    shortcut: "Ctrl+Shift+Z / Ctrl+Y",
-    run: async () => {
-      if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
-      await runSnapshotCommand(commands.redoActiveEdit);
-      await refreshActiveGuiDocument();
-    }
-  },
-  "view.toggleGuiMode": {
-    label: "GUI Mode",
-    run: async () => {
-      const mode = (useAppStore.getState().snapshot?.settings.editorViewMode ?? "gui") === "gui" ? "text" : "gui";
-      await runSnapshotCommand(() => commands.setEditorViewMode(mode));
-    }
-  },
-  "view.toggleProjectTree": {
-    label: "Project Tree",
-    shortcut: "Ctrl+B",
-    run: async () => {
-      await runSnapshotCommand(commands.toggleProjectTree);
-    }
-  },
-  "project.reload": {
-    label: "Reload / Check",
-    shortcut: "Ctrl+R",
-    run: async () => {
-      await runSnapshotCommand(commands.reloadProject);
-    }
-  }
+  "file.newProject": command("New Project...", "File", ["create"], () => {
+    window.dispatchEvent(new CustomEvent("dawn:new-project"));
+  }),
+  "file.newSequence": command("New Sequence...", "File", ["create", "document"], () => {
+    window.dispatchEvent(new CustomEvent("dawn:new-sequence"));
+  }, hasProject),
+  "file.openProject": command("Open Project...", "File", ["folder", "workspace"], async () => {
+    await runSnapshotCommand(commands.openProjectDialog);
+  }, always, "Ctrl+O"),
+  "file.save": command("Save", "File", ["write"], async () => {
+    const store = useAppStore.getState();
+    if (store.snapshot === null || store.snapshot.activeBuffer === null || effectiveEditorViewMode(store.snapshot) !== "text") return;
+    await runSnapshotCommand(() => commands.updateActiveText(store.localText));
+    await runSnapshotCommand(commands.flushAutosave);
+  }, hasProject, "Ctrl+S"),
+  "file.reloadFromDisk": command("Reload From Disk", "File", ["revert"], async () => {
+    await runSnapshotCommand(commands.reloadActiveBufferFromDisk);
+    await refreshActiveGuiDocument();
+  }, hasProject),
+  "file.settings": command("Settings...", "File", ["preferences"], () => {
+    window.dispatchEvent(new CustomEvent("dawn:settings"));
+  }),
+  "edit.undo": command("Undo", "Edit", ["history"], async () => {
+    if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
+    await runSnapshotCommand(commands.undoActiveEdit);
+    await refreshActiveGuiDocument();
+  }, hasProject, "Ctrl+Z"),
+  "edit.redo": command("Redo", "Edit", ["history"], async () => {
+    if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
+    await runSnapshotCommand(commands.redoActiveEdit);
+    await refreshActiveGuiDocument();
+  }, hasProject, "Ctrl+Shift+Z / Ctrl+Y"),
+  "view.toggleGuiMode": command("Toggle GUI / Text Mode", "View", ["editor"], async () => {
+    const mode = (useAppStore.getState().snapshot?.settings.editorViewMode ?? "gui") === "gui" ? "text" : "gui";
+    await runSnapshotCommand(() => commands.setEditorViewMode(mode));
+  }, hasProject),
+  "view.toggleProjectTree": command("Toggle Side Bar", "View", ["collapse", "panel"], async () => {
+    await runSnapshotCommand(commands.toggleProjectTree);
+  }, always, "Ctrl+B"),
+  "view.focusExplorer": command("Focus Explorer", "View", ["files", "sidebar"], focusSidebar("explorer")),
+  "view.focusSearch": command("Focus Search", "View", ["find", "sidebar"], focusSidebar("search")),
+  "view.focusPackages": command("Focus Packages", "View", ["dependencies", "sidebar"], focusSidebar("packages")),
+  "view.focusProblems": command("Focus Problems", "View", ["diagnostics", "errors", "sidebar"], focusSidebar("problems")),
+  "workbench.quickOpen": command("Quick Open...", "Workbench", ["file", "recent"], () => {
+    window.dispatchEvent(new CustomEvent(OPEN_QUICK_OPEN_EVENT));
+  }, hasProject, "Ctrl+P"),
+  "workbench.commandPalette": command("Command Palette...", "Workbench", ["commands"], () => {
+    window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT));
+  }, always, "Ctrl+Shift+P"),
+  "project.reload": command("Reload / Check Project", "Project", ["refresh", "diagnostics"], async () => {
+    await runSnapshotCommand(commands.reloadProject);
+  }, hasProject, "Ctrl+R"),
+  "packages.sync": command("Synchronize Packages", "Packages", ["lock", "cache"], async () => {
+    await runSnapshotCommand(commands.syncPackages);
+  }, hasProject),
+  "packages.checkUpdates": command("Check Package Updates", "Packages", ["registry"], async () => {
+    await runSnapshotCommand(commands.checkPackageUpdates);
+  }, hasProject),
+  "packages.updateAll": command("Update All Packages", "Packages", ["registry", "upgrade"], async () => {
+    await runSnapshotCommand(() => commands.updatePackages(null));
+  }, hasProject)
 };
 
 export function installGlobalShortcuts() {
   const onKeyDown = (event: KeyboardEvent) => {
     const ctrl = event.ctrlKey || event.metaKey;
     if (!ctrl) return;
-    const active = useAppStore.getState().snapshot;
-    if (!active) return;
     const key = event.key.toLowerCase();
-    if (key === "z") {
-      if (effectiveEditorViewMode(active) !== "gui") return;
-      event.preventDefault();
-      void (event.shiftKey ? commandRegistry["edit.redo"] : commandRegistry["edit.undo"]).run();
-      return;
-    }
-    if (key === "y") {
-      if (effectiveEditorViewMode(active) !== "gui") return;
-      event.preventDefault();
-      void commandRegistry["edit.redo"].run();
-      return;
-    }
-    const command =
-      key === "o"
-        ? commandRegistry["file.openProject"]
-        : key === "s"
-          ? commandRegistry["file.save"]
-          : key === "b"
-            ? commandRegistry["view.toggleProjectTree"]
-            : key === "r"
-              ? commandRegistry["project.reload"]
-              : null;
-    if (command) {
-      event.preventDefault();
-      void command.run();
-    }
+    let id: CommandId | null = null;
+    if (key === "p") id = event.shiftKey ? "workbench.commandPalette" : "workbench.quickOpen";
+    else if (key === "z") id = event.shiftKey ? "edit.redo" : "edit.undo";
+    else if (key === "y") id = "edit.redo";
+    else if (key === "o") id = "file.openProject";
+    else if (key === "s") id = "file.save";
+    else if (key === "b") id = "view.toggleProjectTree";
+    else if (key === "r") id = "project.reload";
+    if (id === null || !commandRegistry[id].enabled()) return;
+    event.preventDefault();
+    void commandRegistry[id].run();
   };
   window.addEventListener("keydown", onKeyDown);
-  return () => {
-    window.removeEventListener("keydown", onKeyDown);
-  };
+  return () => { window.removeEventListener("keydown", onKeyDown); };
+}
+
+function command(
+  label: string,
+  category: CommandDefinition["category"],
+  keywords: string[],
+  run: () => Promise<void> | void,
+  enabled: () => boolean = always,
+  shortcut?: string
+): CommandDefinition {
+  return shortcut === undefined
+    ? { label, category, keywords, enabled, run }
+    : { label, category, keywords, shortcut, enabled, run };
 }
 
 async function refreshActiveGuiDocument() {

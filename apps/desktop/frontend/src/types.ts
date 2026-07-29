@@ -80,7 +80,18 @@ export type {
   TextRange,
   Transform,
   WorkspaceEntry,
-  WorkspaceLayoutState
+  WorkspaceEntryOwnership,
+  WorkspaceEntryRole,
+  WorkspaceExplorerState,
+  WorkspaceLayoutState,
+  WorkspaceOperation,
+  SidebarView,
+  PackageReadiness,
+  ProjectSearchRequest,
+  ProjectSearchResponse,
+  ProjectSearchMatch,
+  WorkspacePathChangePlan,
+  WorkspacePathChangeRequest
 } from "./generated/bindings";
 
 export type {

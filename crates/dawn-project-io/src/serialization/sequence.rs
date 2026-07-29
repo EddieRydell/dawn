@@ -627,10 +627,6 @@ pub(super) fn effect_param_value(
         EffectParamValue::Array(values) => {
             value.insert(string_value("type"), Value::String("array".to_string()));
             value.insert(
-                string_value("element_type"),
-                Value::String(array_element_type(values).to_string()),
-            );
-            value.insert(
                 string_value("values"),
                 Value::Sequence(
                     values
@@ -667,18 +663,6 @@ pub(super) fn array_item_value(
             Ok(Value::Mapping(value))
         }
         _ => effect_param_value(session, from_document, param),
-    }
-}
-
-pub(super) fn array_element_type(values: &[EffectParamValue]) -> &'static str {
-    match values.first() {
-        Some(EffectParamValue::Int(_)) => "integer",
-        Some(EffectParamValue::Float(_)) => "float",
-        Some(EffectParamValue::Bool(_)) => "bool",
-        Some(EffectParamValue::Color(_)) => "color",
-        Some(EffectParamValue::Curve(_)) => "curve",
-        Some(EffectParamValue::Gradient(_)) => "gradient",
-        _ => "float",
     }
 }
 

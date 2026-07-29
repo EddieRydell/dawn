@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, Runtime, Window};
 
-use crate::dto::{AppSettings, AppSnapshot, WorkspaceLayoutState};
+use crate::dto::{AppSettings, AppSnapshot, WorkspaceExplorerState, WorkspaceLayoutState};
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "desktop-state-v1.json";
@@ -194,6 +194,53 @@ impl PersistenceService {
         inner.save_debounced()
     }
 
+    pub fn remap_project_paths(
+        &self,
+        project_root: &str,
+        source: &str,
+        destination: &str,
+    ) -> Result<(), String> {
+        let mut inner = self.inner();
+        if !inner.write_allowed {
+            return Ok(());
+        }
+        let Some(session) = inner.store.projects.get_mut(project_root) else {
+            return Ok(());
+        };
+        for path in &mut session.tabs {
+            *path = remap_workspace_path(path, source, destination);
+        }
+        if let Some(path) = &mut session.active_file {
+            *path = remap_workspace_path(path, source, destination);
+        }
+        session.editor_states = std::mem::take(&mut session.editor_states)
+            .into_iter()
+            .map(|(path, state)| (remap_workspace_path(&path, source, destination), state))
+            .collect();
+        session.sequence_viewports = std::mem::take(&mut session.sequence_viewports)
+            .into_iter()
+            .map(|(key, state)| {
+                let remapped = key.split_once("::").map_or(key.clone(), |(path, object)| {
+                    sequence_viewport_key(&remap_workspace_path(path, source, destination), object)
+                });
+                (remapped, state)
+            })
+            .collect();
+        session.workspace_explorer.expanded_paths = session
+            .workspace_explorer
+            .expanded_paths
+            .iter()
+            .map(|path| remap_workspace_path(path, source, destination))
+            .collect();
+        session.workspace_explorer.recent_files = session
+            .workspace_explorer
+            .recent_files
+            .iter()
+            .map(|path| remap_workspace_path(path, source, destination))
+            .collect();
+        inner.save_now()
+    }
+
     pub fn restore_for_project(
         &self,
         project_root: &str,
@@ -343,11 +390,12 @@ impl Default for PersistedStore {
 pub struct PersistedProjectSession {
     pub tabs: Vec<String>,
     pub active_file: Option<String>,
-    pub project_tree_visible: bool,
     pub audio_position_seconds: f64,
     pub audio_home_seconds: f64,
     pub editor_states: BTreeMap<String, PersistedEditorViewState>,
     pub sequence_viewports: BTreeMap<String, PersistedSequenceViewportState>,
+    #[serde(default)]
+    pub workspace_explorer: WorkspaceExplorerState,
 }
 
 impl PersistedProjectSession {
@@ -355,20 +403,20 @@ impl PersistedProjectSession {
         Self {
             tabs: Vec::new(),
             active_file: None,
-            project_tree_visible: true,
             audio_position_seconds: 0.0,
             audio_home_seconds: 0.0,
             editor_states: BTreeMap::new(),
             sequence_viewports: BTreeMap::new(),
+            workspace_explorer: WorkspaceExplorerState::default(),
         }
     }
 
     fn with_snapshot(mut self, snapshot: &AppSnapshot) -> Self {
         self.tabs = snapshot.tabs.iter().map(|tab| tab.path.clone()).collect();
         self.active_file = snapshot.active_file.clone();
-        self.project_tree_visible = snapshot.project_tree_visible;
         self.audio_position_seconds = snapshot.audio_transport.position_seconds;
         self.audio_home_seconds = snapshot.audio_transport.home_seconds;
+        self.workspace_explorer = snapshot.workspace_explorer.clone();
         self
     }
 }
@@ -420,4 +468,14 @@ fn trim_recent_projects(store: &mut PersistedStore) {
     for project in remove {
         store.projects.remove(&project);
     }
+}
+
+fn remap_workspace_path(path: &str, source: &str, destination: &str) -> String {
+    if path == source {
+        return destination.to_string();
+    }
+    path.strip_prefix(source)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .map(|suffix| format!("{destination}/{suffix}"))
+        .unwrap_or_else(|| path.to_string())
 }

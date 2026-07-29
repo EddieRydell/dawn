@@ -16,6 +16,7 @@ dawn-language.workspace = true
 dawn-output.workspace = true
 dawn-runtime.workspace = true
 glam.workspace = true
+ignore.workspace = true
 indexmap.workspace = true
 kira.workspace = true
 rfd.workspace = true
@@ -33,6 +34,9 @@ yaml_serde.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [[bin]]
 name = "dawn-desktop"

@@ -559,19 +559,23 @@ impl<'source> Parser<'source> {
         match token.kind {
             TokenKind::IntegerLiteral => Expr {
                 span: token.span,
-                kind: ExprKind::Literal(Value::Int(
-                    self.source[token.span.start..token.span.end]
-                        .parse()
-                        .unwrap_or(0),
-                )),
+                kind: ExprKind::Literal(Value::Int(match self.text(token.span).parse() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        self.error(token.span, "integer literal is out of range");
+                        0
+                    }
+                })),
             },
             TokenKind::FloatLiteral => Expr {
                 span: token.span,
-                kind: ExprKind::Literal(Value::Float(
-                    self.source[token.span.start..token.span.end]
-                        .parse()
-                        .unwrap_or(0.0),
-                )),
+                kind: ExprKind::Literal(Value::Float(match self.text(token.span).parse::<f64>() {
+                    Ok(value) if value.is_finite() => value,
+                    _ => {
+                        self.error(token.span, "float literal must be finite");
+                        0.0
+                    }
+                })),
             },
             TokenKind::ColorLiteral => Expr {
                 span: token.span,
@@ -788,19 +792,18 @@ impl<'source> Parser<'source> {
         }
     }
 
-    fn parse_color(&self, span: TextSpan) -> Color {
+    fn parse_color(&mut self, span: TextSpan) -> Color {
         let text = self.text(span);
-        if text.len() != 7 {
-            return Color {
-                red: 0,
-                green: 0,
-                blue: 0,
-            };
-        }
-        Color {
-            red: u8::from_str_radix(&text[1..3], 16).unwrap_or(0),
-            green: u8::from_str_radix(&text[3..5], 16).unwrap_or(0),
-            blue: u8::from_str_radix(&text[5..7], 16).unwrap_or(0),
+        match Color::from_hex(text) {
+            Some(color) => color,
+            None => {
+                self.error(span, "invalid color literal");
+                Color {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                }
+            }
         }
     }
 

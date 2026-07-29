@@ -767,7 +767,7 @@ impl Checker {
             | BinaryOp::Divide
             | BinaryOp::Remainder => {
                 if numeric(left) && numeric(right) {
-                    if left == &Type::Float || right == &Type::Float {
+                    if op == BinaryOp::Divide || left == &Type::Float || right == &Type::Float {
                         Type::Float
                     } else {
                         Type::Int

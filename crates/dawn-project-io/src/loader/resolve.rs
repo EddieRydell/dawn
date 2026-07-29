@@ -784,6 +784,23 @@ impl DomainResolver<'_> {
             .loader
             .object_value(&ResolvedObject::Sequence(id.clone()))?;
         let document_path = document_id.path().to_path_buf();
+        require_allowed_mapping_keys(
+            &document_path,
+            &value,
+            &[
+                "type",
+                "duration",
+                "frame_rate",
+                "audio",
+                "mark_collections",
+                "layers",
+                "effects",
+                "composition_graph",
+                "automation_clips",
+                "control_clips",
+            ],
+            "sequence",
+        )?;
         let duration =
             parse_duration(string_field(&document_path, &value, "duration")?).map_err(|error| {
                 with_yaml_location(
@@ -793,7 +810,7 @@ impl DomainResolver<'_> {
                 )
             })?;
         let audio = self.parse_audio(&document_id, &value)?;
-        let mark_collections = optional_sequence(&value, "mark_collections")
+        let mark_collections = optional_sequence(&document_path, &value, "mark_collections")?
             .into_iter()
             .flatten()
             .map(|collection| parse_mark_collection(&document_path, collection))
@@ -810,7 +827,7 @@ impl DomainResolver<'_> {
             &document_id,
             required_field(&document_path, &value, "composition_graph")?,
         )?;
-        let automation_clips = optional_sequence(&value, "automation_clips")
+        let automation_clips = optional_sequence(&document_path, &value, "automation_clips")?
             .into_iter()
             .flatten()
             .map(|clip| self.parse_automation_clip(&document_path, clip))
@@ -830,7 +847,7 @@ impl DomainResolver<'_> {
                 });
             }
         }
-        let control_clips = optional_sequence(&value, "control_clips")
+        let control_clips = optional_sequence(&document_path, &value, "control_clips")?
             .into_iter()
             .flatten()
             .map(|clip| self.parse_control_clip(&document_id, clip))
@@ -1052,7 +1069,7 @@ impl DomainResolver<'_> {
         value: &Value,
     ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
         let path = document_id.path();
-        Ok(optional_mapping(value, "params")
+        Ok(optional_mapping(path, value, "params")?
             .map(|mapping| {
                 mapping
                     .iter()
@@ -1289,7 +1306,7 @@ impl DomainResolver<'_> {
             .iter()
             .map(|binding| parse_automation_binding(path, binding))
             .collect::<Result<Vec<_>, _>>()?;
-        let detached_bindings = optional_sequence(value, "detached_bindings")
+        let detached_bindings = optional_sequence(path, value, "detached_bindings")?
             .into_iter()
             .flatten()
             .map(|binding| parse_detached_automation_binding(path, binding))
@@ -1519,8 +1536,8 @@ use super::parse::{
     parse_color, parse_curve, parse_detached_automation_binding, parse_duration,
     parse_duration_as_time, parse_effect_scope, parse_gradient, parse_graph_edge,
     parse_graph_position, parse_mark_collection, parse_point3, parse_rotation3, parse_scale3,
-    parse_sequence_layer, required_field, sequence_field, sequence_values, string_field, u32_field,
-    usize_field,
+    parse_sequence_layer, require_allowed_mapping_keys, required_field, sequence_field,
+    sequence_values, string_field, u32_field, usize_field,
 };
 use crate::LoadProjectError;
 use crate::diagnostics::{

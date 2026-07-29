@@ -8,10 +8,15 @@ use dawn_project_io::{
 
 use super::{
     DesktopState, FsEntryKind, PendingOperatorRewriteKind, absolute_project_path,
-    document_descriptor, editor_buffer_for_path, empty_document_descriptor, lock_unpoisoned,
-    project_diagnostic, project_path_is_structural, upsert_tab, valid_child_name,
+    descriptor_for_path, document_id_for_workspace_path, editor_buffer_for_path, lock_unpoisoned,
+    path_matches_or_is_child, project_diagnostic, project_path_is_structural, upsert_tab,
+    valid_child_name,
 };
 use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
+use crate::dto::{
+    WorkspaceExplorerState, WorkspacePathChangeImpact, WorkspacePathChangePlan,
+    WorkspacePathChangeRequest, WorkspacePathOwnership,
+};
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedSequenceViewportStateUpdate, ProjectRestoreState,
 };
@@ -89,19 +94,181 @@ impl DesktopState {
                 "File is not part of the loaded project",
             );
         };
-        let descriptor = project
-            .source
-            .documents
-            .get(&project.source.project_document(relative_path.clone()))
-            .map(|document| document_descriptor(&relative_path, document))
-            .unwrap_or_else(|| empty_document_descriptor(&relative_path));
+        let Some(descriptor) = descriptor_for_path(&project, &relative_path) else {
+            return self.snapshot_with_error(
+                "file.open",
+                path,
+                "File is not part of the loaded project",
+            );
+        };
         self.update_snapshot(|snapshot| {
             upsert_tab(&mut snapshot.tabs, buffer.clone());
             snapshot.active_file = Some(buffer.path.clone());
             snapshot.active_buffer = Some(buffer);
             snapshot.active_document_descriptor = Some(descriptor);
+            snapshot
+                .workspace_explorer
+                .recent_files
+                .retain(|item| item != path);
+            snapshot
+                .workspace_explorer
+                .recent_files
+                .insert(0, path.to_string());
+            snapshot.workspace_explorer.recent_files.truncate(20);
             snapshot.status = format!("Opened {path}");
         })
+    }
+
+    pub fn save_workspace_explorer_state(&self, state: WorkspaceExplorerState) -> AppSnapshot {
+        self.update_snapshot(|snapshot| {
+            snapshot.workspace_explorer = state;
+        })
+    }
+
+    pub fn plan_workspace_path_change(
+        &self,
+        request: WorkspacePathChangeRequest,
+    ) -> Result<WorkspacePathChangePlan, String> {
+        let snapshot = self.snapshot();
+        if request.project_revision != snapshot.project_revision {
+            return Err("The project changed; plan the path operation again.".to_string());
+        }
+        let project = self
+            .project_session()
+            .ok_or_else(|| "No project is open.".to_string())?;
+        let plan = dawn_project_io::plan_path_change(
+            &project,
+            Utf8Path::new(&request.source),
+            Utf8Path::new(&request.destination),
+        )?;
+        let open_files = snapshot
+            .tabs
+            .iter()
+            .filter(|buffer| path_matches_or_is_child(&buffer.path, &request.source))
+            .map(|buffer| buffer.path.clone())
+            .collect();
+        let recent_files = snapshot
+            .workspace_explorer
+            .recent_files
+            .iter()
+            .filter(|path| path_matches_or_is_child(path, &request.source))
+            .cloned()
+            .collect();
+        let restore = snapshot
+            .project_root
+            .as_deref()
+            .map(|root| self.persistence.restore_view_state(root));
+        let persisted_state = restore
+            .into_iter()
+            .flat_map(|state| {
+                state
+                    .editor_states
+                    .into_keys()
+                    .chain(state.sequence_viewports.into_keys())
+            })
+            .filter(|path| path_matches_or_is_child(path, &request.source))
+            .collect();
+        Ok(WorkspacePathChangePlan {
+            request,
+            structural: plan.structural,
+            ownership: match plan.ownership {
+                dawn_project_io::PathChangeOwnership::Project => WorkspacePathOwnership::Project,
+                dawn_project_io::PathChangeOwnership::PathDependency {
+                    module_id,
+                    module_root,
+                } => WorkspacePathOwnership::PathDependency {
+                    module_id: module_id.to_string(),
+                    module_root,
+                },
+            },
+            impact: WorkspacePathChangeImpact {
+                documents: plan.impact.documents,
+                imports: plan.impact.imports,
+                manifests: plan.impact.manifests,
+                assets: plan.impact.assets,
+                modules: plan.impact.modules,
+                open_files,
+                recent_files,
+                persisted_state,
+            },
+        })
+    }
+
+    pub fn apply_workspace_path_change(
+        &self,
+        request: WorkspacePathChangeRequest,
+    ) -> Result<AppSnapshot, String> {
+        let description = self.plan_workspace_path_change(request.clone())?;
+        if description.structural && self.snapshot().tabs.iter().any(|buffer| buffer.dirty) {
+            return Err(
+                "Structural path changes require every open text buffer to be saved.".to_string(),
+            );
+        }
+        let project = self
+            .project_session()
+            .ok_or_else(|| "No project is open.".to_string())?;
+        let plan = dawn_project_io::plan_path_change(
+            &project,
+            Utf8Path::new(&request.source),
+            Utf8Path::new(&request.destination),
+        )?;
+        lock_unpoisoned(&self.gui_save).invalidate_pending();
+        lock_unpoisoned(&self.render_refresh).invalidate_pending();
+        let candidate = {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            dawn_project_io::apply_path_change(&project, &plan)?
+        };
+        let root = candidate.source.project_root().to_string();
+        self.persistence
+            .remap_project_paths(&root, &request.source, &request.destination)?;
+        *lock_unpoisoned(&self.project) = Some(std::sync::Arc::new(candidate.clone()));
+        lock_unpoisoned(&self.gui_history).clear();
+        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
+        let entries = super::workspace_entries(&candidate);
+        let package = super::package_status(Utf8Path::new(&root), Some(&candidate));
+        let remap = |path: &str| remap_workspace_path(path, &request.source, &request.destination);
+        let snapshot = self.update_snapshot(|snapshot| {
+            for tab in &mut snapshot.tabs {
+                tab.path = remap(&tab.path);
+                tab.name = Utf8Path::new(&tab.path)
+                    .file_name()
+                    .unwrap_or(tab.path.as_str())
+                    .to_string();
+            }
+            snapshot.active_file = snapshot.active_file.as_deref().map(remap);
+            snapshot.active_buffer = snapshot
+                .active_file
+                .as_deref()
+                .and_then(|path| super::editor_buffer_for_path(&candidate, Utf8Path::new(path)));
+            snapshot.active_document_descriptor = snapshot
+                .active_file
+                .as_deref()
+                .and_then(|path| super::descriptor_for_path(&candidate, Utf8Path::new(path)));
+            snapshot.workspace_explorer.expanded_paths = snapshot
+                .workspace_explorer
+                .expanded_paths
+                .iter()
+                .map(|path| remap(path))
+                .collect();
+            snapshot.workspace_explorer.recent_files = snapshot
+                .workspace_explorer
+                .recent_files
+                .iter()
+                .map(|path| remap(path))
+                .collect();
+            snapshot.project_entries = entries;
+            snapshot.package = package;
+            snapshot.pending_operator_rewrite = None;
+            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
+            snapshot.status = if description.structural {
+                "Structural path change applied; GUI undo and redo history were cleared."
+                    .to_string()
+            } else {
+                "Path change applied.".to_string()
+            };
+        });
+        self.schedule_render_refresh(std::sync::Arc::new(candidate));
+        Ok(snapshot)
     }
 
     pub fn set_active_file_path(&self, path: &str) -> AppSnapshot {
@@ -122,12 +289,13 @@ impl DesktopState {
                 "File is not part of the loaded project",
             );
         };
-        let descriptor = project
-            .source
-            .documents
-            .get(&project.source.project_document(relative_path.clone()))
-            .map(|document| document_descriptor(&relative_path, document))
-            .unwrap_or_else(|| empty_document_descriptor(&relative_path));
+        let Some(descriptor) = descriptor_for_path(&project, &relative_path) else {
+            return self.snapshot_with_error(
+                "file.activate",
+                path,
+                "File is not part of the loaded project",
+            );
+        };
         self.update_snapshot(|snapshot| {
             snapshot.active_file = Some(buffer.path.clone());
             snapshot.active_buffer = Some(buffer);
@@ -155,17 +323,9 @@ impl DesktopState {
                 .cloned()
             {
                 snapshot.active_file = Some(next.path.clone());
-                snapshot.active_document_descriptor = self.project_session().and_then(|project| {
-                    project
-                        .source
-                        .documents
-                        .get(
-                            &project
-                                .source
-                                .project_document(Utf8PathBuf::from(&next.path)),
-                        )
-                        .map(|document| document_descriptor(Utf8Path::new(&next.path), document))
-                });
+                snapshot.active_document_descriptor = self
+                    .project_session()
+                    .and_then(|project| descriptor_for_path(&project, Utf8Path::new(&next.path)));
                 snapshot.active_buffer = Some(next);
             } else {
                 snapshot.active_file = None;
@@ -189,10 +349,11 @@ impl DesktopState {
                 self.project_session().map_or_else(
                     || check_document_text(Utf8Path::new(path), &text),
                     |project| {
-                        check_project_document_text(
-                            &project,
-                            &project.source.project_document(Utf8PathBuf::from(path)),
-                            &text,
+                        document_id_for_workspace_path(&project, Utf8Path::new(path)).map_or_else(
+                            || check_document_text(Utf8Path::new(path), &text),
+                            |document_id| {
+                                check_project_document_text(&project, &document_id, &text)
+                            },
                         )
                     },
                 )
@@ -258,7 +419,10 @@ impl DesktopState {
         let Some(path) = absolute_project_path(&project, &relative_path) else {
             return Err("File path is outside the loaded project".to_string());
         };
-        fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
+        {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
+        }
         self.after_file_saved(&buffer.path);
         let root = project.source.project_root();
         Ok(self.apply_project_refresh_check(root.as_str(), check_package(root)))
@@ -293,7 +457,11 @@ impl DesktopState {
                 "File path is outside the loaded project",
             );
         };
-        match fs::write(&path, &buffer.text) {
+        let result = {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            fs::write(&path, &buffer.text)
+        };
+        match result {
             Ok(()) => {
                 self.after_file_saved(&buffer.path);
                 let root = project.source.project_root();
@@ -349,7 +517,11 @@ impl DesktopState {
                 return self.snapshot_with_error("project.create", root.as_str(), &error);
             }
         };
-        if let Err(error) = write_new_project_files(&root, &files) {
+        let result = {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            write_new_project_files(&root, &files)
+        };
+        if let Err(error) = result {
             return self.snapshot_with_error("project.create", root.as_str(), &error);
         }
         self.apply_project_open_check(root.as_str(), check_package(&root))
@@ -369,15 +541,18 @@ impl DesktopState {
         };
         let root = project.source.project_root().to_path_buf();
         let mut edited = (*project).clone();
-        if let Err(error) = dawn_project_io::insert_sequence(
+        let result = dawn_project_io::insert_sequence(
             &mut edited,
             sequence_path.clone(),
             request.object_key.clone(),
             dawn_language::values::DawnDuration(duration),
             request.frame_rate,
         )
-        .and_then(|_| save_project(&edited).map(|_| ()))
-        {
+        .and_then(|_| {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            save_project(&edited).map(|_| ())
+        });
+        if let Err(error) = result {
             return self.snapshot_with_error(
                 "sequence.create",
                 &request.file_path,
@@ -393,49 +568,6 @@ impl DesktopState {
             return refreshed;
         }
         self.open_file_path(&request.file_path)
-    }
-
-    pub fn rename_path(&self, path: &str, new_name: &str) -> AppSnapshot {
-        let Some(project) = self.project_session() else {
-            return self.snapshot();
-        };
-        if !valid_child_name(new_name) {
-            return self.snapshot_with_error(
-                "file.rename",
-                path,
-                "New name must be a single path segment",
-            );
-        }
-        let relative_path = Utf8PathBuf::from(path);
-        if project_path_is_structural(&project, &relative_path) {
-            return self.snapshot_with_error(
-                "file.rename",
-                path,
-                "Imported documents and the project entrypoint cannot be renamed from the workspace.",
-            );
-        }
-        let Some(from) = absolute_project_path(&project, &relative_path) else {
-            return self.snapshot_with_error(
-                "file.rename",
-                path,
-                "Path is outside the loaded project",
-            );
-        };
-        let to_relative = relative_path
-            .parent()
-            .map(|parent| parent.join(new_name))
-            .unwrap_or_else(|| Utf8PathBuf::from(new_name));
-        let Some(to) = absolute_project_path(&project, &to_relative) else {
-            return self.snapshot_with_error(
-                "file.rename",
-                path,
-                "New path is outside the loaded project",
-            );
-        };
-        match fs::rename(&from, &to) {
-            Ok(()) => self.after_workspace_changed(Some(path), Some(to_relative.as_str())),
-            Err(error) => self.snapshot_with_error("file.rename", path, &error.to_string()),
-        }
     }
 
     pub fn delete_path(&self, path: &str) -> AppSnapshot {
@@ -457,10 +589,13 @@ impl DesktopState {
                 "Path is outside the loaded project",
             );
         };
-        let result = if absolute_path.is_dir() {
-            fs::remove_dir_all(&absolute_path)
-        } else {
-            fs::remove_file(&absolute_path)
+        let result = {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            if absolute_path.is_dir() {
+                fs::remove_dir_all(&absolute_path)
+            } else {
+                fs::remove_file(&absolute_path)
+            }
         };
         match result {
             Ok(()) => self.after_workspace_changed(Some(path), None),
@@ -481,4 +616,14 @@ fn is_operator_document(path: &str) -> bool {
     Utf8Path::new(path)
         .file_name()
         .is_some_and(|name| name.ends_with(".operator.dawn"))
+}
+
+fn remap_workspace_path(path: &str, source: &str, destination: &str) -> String {
+    if path == source {
+        return destination.to_string();
+    }
+    path.strip_prefix(source)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .map(|suffix| format!("{destination}/{suffix}"))
+        .unwrap_or_else(|| path.to_string())
 }

@@ -114,7 +114,7 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
     };
     let reference = generator
         .generate_bound(
-            &generator.bind_params(&params),
+            &generator.bind_params(&params).unwrap(),
             &context,
             &mut Default::default(),
         )
@@ -132,7 +132,7 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
         assert_eq!(native.start_seconds, reference.start_seconds);
         assert_eq!(native.duration_seconds, reference.duration_seconds);
         assert_eq!(native.target, reference.target);
-        let bound = child.bind_params(&reference.params);
+        let bound = child.bind_params(&reference.params).unwrap();
         for pixel in native.target.pixels.iter() {
             for progress in [0.0, 0.25, 0.75, 1.0] {
                 let context = RunContext {

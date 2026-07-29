@@ -7,9 +7,9 @@ use specta::Type;
 pub struct AppSnapshot {
     pub settings: AppSettings,
     pub workspace_layout: WorkspaceLayoutState,
+    pub workspace_explorer: WorkspaceExplorerState,
     pub project_root: Option<String>,
     pub project_revision: u32,
-    pub project_tree_visible: bool,
     pub project_entries: Vec<WorkspaceEntry>,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<String>,
@@ -29,6 +29,7 @@ pub struct AppSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageStatus {
+    pub readiness: PackageReadiness,
     pub root: Option<String>,
     pub manifest_valid: bool,
     pub lock_present: bool,
@@ -39,6 +40,16 @@ pub struct PackageStatus {
     pub modules: Vec<PackageModuleStatus>,
     pub warnings: Vec<PackageCompatibilityWarning>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageReadiness {
+    NoProject,
+    Invalid,
+    NeedsSync,
+    Ready,
+    Warning,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -113,7 +124,7 @@ pub struct OperatorDefinitionRewriteDescription {
     pub new_ports: Vec<String>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorDefinitionKey {
     pub module_id: String,
@@ -263,27 +274,77 @@ pub struct NewSequenceRequest {
     pub frame_rate: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLayoutState {
-    pub project_tree_width_px: f64,
+    pub sidebar_width_px: f64,
     pub inspector_width_px: f64,
-    pub project_tree_collapsed: bool,
+    pub sidebar_collapsed: bool,
     pub inspector_collapsed: bool,
-    #[serde(default)]
-    pub project_tree_expanded_paths: Option<Vec<String>>,
+    pub active_sidebar_view: SidebarView,
+}
+
+impl<'de> Deserialize<'de> for WorkspaceLayoutState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct StoredLayout {
+            sidebar_width_px: Option<f64>,
+            project_tree_width_px: Option<f64>,
+            inspector_width_px: f64,
+            sidebar_collapsed: Option<bool>,
+            project_tree_collapsed: Option<bool>,
+            inspector_collapsed: bool,
+            #[serde(default)]
+            active_sidebar_view: SidebarView,
+        }
+        let stored = StoredLayout::deserialize(deserializer)?;
+        Ok(Self {
+            sidebar_width_px: stored
+                .sidebar_width_px
+                .or(stored.project_tree_width_px)
+                .unwrap_or(288.0),
+            inspector_width_px: stored.inspector_width_px,
+            sidebar_collapsed: stored
+                .sidebar_collapsed
+                .or(stored.project_tree_collapsed)
+                .unwrap_or(false),
+            inspector_collapsed: stored.inspector_collapsed,
+            active_sidebar_view: stored.active_sidebar_view,
+        })
+    }
 }
 
 impl Default for WorkspaceLayoutState {
     fn default() -> Self {
         Self {
-            project_tree_width_px: 288.0,
+            sidebar_width_px: 288.0,
             inspector_width_px: 260.0,
-            project_tree_collapsed: false,
+            sidebar_collapsed: false,
             inspector_collapsed: false,
-            project_tree_expanded_paths: None,
+            active_sidebar_view: SidebarView::Explorer,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SidebarView {
+    #[default]
+    Explorer,
+    Search,
+    Packages,
+    Problems,
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceExplorerState {
+    pub expanded_paths: Vec<String>,
+    pub recent_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -292,7 +353,6 @@ pub struct AppSettings {
     pub reopen_last_project: bool,
     #[serde(default = "default_editor_view_mode")]
     pub editor_view_mode: EditorViewMode,
-    pub project_tree_mode: ProjectTreeMode,
     pub reopen_preview_window: bool,
     pub autosave_text_edits: bool,
     pub sequence_initial_zoom_mode: SequenceInitialZoomMode,
@@ -310,7 +370,6 @@ impl Default for AppSettings {
         Self {
             reopen_last_project: true,
             editor_view_mode: EditorViewMode::Gui,
-            project_tree_mode: ProjectTreeMode::Remember,
             reopen_preview_window: true,
             autosave_text_edits: true,
             sequence_initial_zoom_mode: SequenceInitialZoomMode::FitToWidth,
@@ -319,14 +378,6 @@ impl Default for AppSettings {
             effect_raster: EffectRasterSettings::default(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum ProjectTreeMode {
-    Remember,
-    Show,
-    Hide,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -732,6 +783,121 @@ pub enum SequenceResizeEdge {
 pub enum WorkspaceEntryKind {
     Directory,
     File,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceEntryRole {
+    Directory,
+    Project,
+    Entrypoint,
+    Setup,
+    Layout,
+    Fixture,
+    Patch,
+    Curve,
+    Gradient,
+    Effect,
+    Operator,
+    Sequence,
+    Manifest,
+    Lockfile,
+    Asset,
+    PathDependency,
+    File,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceEntryOwnership {
+    Project,
+    PathDependency,
+    Registry,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceOperation {
+    Open,
+    Create,
+    Rename,
+    Delete,
+    Move,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSearchRequest {
+    pub request_id: u32,
+    pub query: String,
+    pub match_case: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSearchMatch {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    pub preview: String,
+    pub kind: ProjectSearchMatchKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectSearchMatchKind {
+    Filename,
+    Content,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSearchResponse {
+    pub request_id: u32,
+    pub matches: Vec<ProjectSearchMatch>,
+    pub skipped_binary: u32,
+    pub skipped_oversized: u32,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePathChangeRequest {
+    pub source: String,
+    pub destination: String,
+    pub project_revision: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspacePathOwnership {
+    Project,
+    PathDependency {
+        module_id: String,
+        module_root: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePathChangeImpact {
+    pub documents: Vec<String>,
+    pub imports: Vec<String>,
+    pub manifests: Vec<String>,
+    pub assets: Vec<String>,
+    pub modules: Vec<String>,
+    pub open_files: Vec<String>,
+    pub recent_files: Vec<String>,
+    pub persisted_state: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePathChangePlan {
+    pub request: WorkspacePathChangeRequest,
+    pub structural: bool,
+    pub ownership: WorkspacePathOwnership,
+    pub impact: WorkspacePathChangeImpact,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1860,4 +2026,8 @@ pub struct WorkspaceEntry {
     pub kind: WorkspaceEntryKind,
     pub name: String,
     pub parent: String,
+    pub role: WorkspaceEntryRole,
+    pub ownership: WorkspaceEntryOwnership,
+    pub operations: Vec<WorkspaceOperation>,
+    pub operation_explanation: Option<String>,
 }

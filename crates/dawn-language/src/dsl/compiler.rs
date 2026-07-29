@@ -520,14 +520,9 @@ impl FunctionCompiler {
                         }
                     }
                     _ => {
-                        let result_slot_ty = if op == BinaryOp::Divide && result_ty == Type::Int {
-                            Type::Float
-                        } else {
-                            result_ty
-                        };
                         let left = self.compile_expr(*left);
                         let right = self.compile_expr(*right);
-                        let dst = self.allocate_slot(&result_slot_ty);
+                        let dst = self.allocate_slot(&result_ty);
                         self.emit_binary(dst, op, left, right);
                         dst
                     }

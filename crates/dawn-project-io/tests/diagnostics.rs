@@ -257,6 +257,48 @@ fn nested_invalid_duration_reports_nested_scalar_range() {
 }
 
 #[test]
+fn negative_duration_is_a_diagnostic_not_a_loader_panic() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    write_imported_sequence_project(
+        &root,
+        "  duration: -1s\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: { x: 0, y: 0 }\n      type: output\n    edges: []\n  control_clips: []\n",
+    );
+
+    let report = check_package(&root);
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("duration must not be negative")),
+        "{:#?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn malformed_optional_sequence_and_unknown_sequence_field_are_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    write_imported_sequence_project(&root, &minimal_sequence_body("  automation_clips: wrong\n"));
+    let malformed = check_package(&root);
+    assert!(malformed.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("field `automation_clips` must be a sequence")
+    }));
+
+    write_imported_sequence_project(&root, &minimal_sequence_body("  automtion_clips: []\n"));
+    let typo = check_package(&root);
+    assert!(typo.diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("sequence has an unknown field `automtion_clips`")
+    }));
+}
+
+#[test]
 fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
@@ -350,6 +392,12 @@ fn write_imported_sequence_project(root: &Utf8Path, sequence_body: &str) {
     )
     .unwrap();
     write_project_package(root);
+}
+
+fn minimal_sequence_body(extra: &str) -> String {
+    format!(
+        "  duration: 1s\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: {{ x: 0, y: 0 }}\n      type: output\n    edges: []\n{extra}  control_clips: []\n"
+    )
 }
 
 fn assert_range(

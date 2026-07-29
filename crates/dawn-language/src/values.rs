@@ -1,5 +1,11 @@
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SecondsError {
+    NotFinite,
+    Negative,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DawnTime(pub Duration);
 
@@ -7,6 +13,16 @@ pub struct DawnTime(pub Duration);
 pub struct DawnDuration(pub Duration);
 
 impl DawnTime {
+    pub fn try_from_seconds_f64(seconds: f64) -> Result<Self, SecondsError> {
+        if !seconds.is_finite() {
+            return Err(SecondsError::NotFinite);
+        }
+        if seconds < 0.0 {
+            return Err(SecondsError::Negative);
+        }
+        Ok(Self(Duration::from_secs_f64(seconds)))
+    }
+
     pub fn from_seconds_f64(seconds: f64) -> Self {
         Self(Duration::from_secs_f64(seconds))
     }
@@ -17,6 +33,16 @@ impl DawnTime {
 }
 
 impl DawnDuration {
+    pub fn try_from_seconds_f64(seconds: f64) -> Result<Self, SecondsError> {
+        if !seconds.is_finite() {
+            return Err(SecondsError::NotFinite);
+        }
+        if seconds < 0.0 {
+            return Err(SecondsError::Negative);
+        }
+        Ok(Self(Duration::from_secs_f64(seconds)))
+    }
+
     pub fn from_seconds_f64(seconds: f64) -> Self {
         Self(Duration::from_secs_f64(seconds))
     }
@@ -148,6 +174,42 @@ pub struct Curve {
 pub struct CurvePoint {
     pub position: f64,
     pub value: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CurveValidationError {
+    Empty,
+    NonFinitePoint,
+    PositionOutOfRange,
+    PositionsNotStrictlyIncreasing,
+}
+
+impl Curve {
+    pub fn validate(&self) -> Result<(), CurveValidationError> {
+        let Some(first) = self.points.first() else {
+            return Err(CurveValidationError::Empty);
+        };
+        if !first.position.is_finite() || !first.value.is_finite() {
+            return Err(CurveValidationError::NonFinitePoint);
+        }
+        if !(0.0..=1.0).contains(&first.position) {
+            return Err(CurveValidationError::PositionOutOfRange);
+        }
+        let mut previous = first.position;
+        for point in self.points.iter().skip(1) {
+            if !point.position.is_finite() || !point.value.is_finite() {
+                return Err(CurveValidationError::NonFinitePoint);
+            }
+            if !(0.0..=1.0).contains(&point.position) {
+                return Err(CurveValidationError::PositionOutOfRange);
+            }
+            if point.position <= previous {
+                return Err(CurveValidationError::PositionsNotStrictlyIncreasing);
+            }
+            previous = point.position;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -16,6 +16,7 @@ import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
 import { THEME_METRICS } from "../theme";
+import { NAVIGATE_TO_TEXT_EVENT, type TextNavigation } from "../workspace/navigation";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
@@ -36,6 +37,7 @@ export function EditorPane({
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorSignal, setEditorSignal] = useState(0);
   const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, resetRevision: 0, selection: null });
+  const [pendingTextNavigation, setPendingTextNavigation] = useState<TextNavigation | null>(null);
   const latestLocalText = useRef(localText);
   const loadedSequenceAudioKey = useRef<string | null>(null);
   const applyingExternalText = useRef(false);
@@ -73,6 +75,42 @@ export function EditorPane({
     },
     [activePath, guiResetRevision]
   );
+
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      setPendingTextNavigation((event as CustomEvent<TextNavigation>).detail);
+    };
+    window.addEventListener(NAVIGATE_TO_TEXT_EVENT, onNavigate);
+    return () => { window.removeEventListener(NAVIGATE_TO_TEXT_EVENT, onNavigate); };
+  }, []);
+
+  useEffect(() => {
+    if (
+      pendingTextNavigation === null
+      || pendingTextNavigation.path !== activePath
+      || viewMode !== "text"
+      || view.current === null
+    ) return;
+    const editor = view.current;
+    const range = pendingTextNavigation.range;
+    if (range === null) {
+      editor.focus();
+      return;
+    }
+    const startLine = editor.state.doc.line(
+      clamp(range.start.line + 1, 1, editor.state.doc.lines)
+    );
+    const endLine = editor.state.doc.line(
+      clamp(range.end.line + 1, 1, editor.state.doc.lines)
+    );
+    const anchor = clamp(startLine.from + range.start.character, startLine.from, startLine.to);
+    const head = clamp(endLine.from + range.end.character, endLine.from, endLine.to);
+    editor.dispatch({
+      selection: { anchor, head },
+      effects: EditorView.scrollIntoView(anchor, { y: "center" })
+    });
+    editor.focus();
+  }, [activePath, editorView, pendingTextNavigation, viewMode]);
 
   useEffect(() => {
     latestLocalText.current = localText;
@@ -766,7 +804,10 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function languageForPath(path: string | null): Extension {
-  if (path !== null && path.endsWith(".effect.dawn")) {
+  if (
+    path !== null &&
+    (path.endsWith(".effect.dawn") || path.endsWith(".operator.dawn"))
+  ) {
     return cpp();
   }
   return yaml();

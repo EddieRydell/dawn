@@ -62,7 +62,7 @@ fn signal_sampling_and_color_operations_execute() {
     .into_iter()
     .next()
     .expect("one operator");
-    let params = operator.bind_params(&IndexMap::new());
+    let params = operator.bind_params(&IndexMap::new()).unwrap();
     let context = OperatorRunContext {
         progress: 0.25,
         seconds: 1.0,
@@ -115,7 +115,7 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
     .expect("one effect");
     let generated = effect
         .generate_bound(
-            &effect.bind_params(&IndexMap::new()),
+            &effect.bind_params(&IndexMap::new()).unwrap(),
             &GeneratorContext {
                 duration: 1.0,
                 target: Arc::new(TargetValue { groups: Vec::new() }),
@@ -164,6 +164,71 @@ fn qualified_generator_emit_references_report_specific_diagnostics() {
             "missing `{expected}` in {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn source_numeric_overflow_and_integer_division_report_diagnostics() {
+    let integer_overflow = compile_effects(
+        "effect Bad { color sample() { int value = 999999999999999999999999999999; return #000000; } }",
+    )
+    .expect_err("out-of-range integer literals must fail");
+    assert!(integer_overflow.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("integer literal is out of range")
+    }));
+
+    let integer_division =
+        compile_effects("effect Bad { color sample() { int value = 4 / 2; return #000000; } }")
+            .expect_err("integer division produces a float and cannot initialize an int");
+    assert!(!integer_division.is_empty());
+}
+
+#[test]
+fn required_parameters_and_integer_remainder_fail_without_panicking() {
+    let effect = compile_effects(
+        "effect Required { param float amount; color sample() { int value = 1 % 0; return #000000; } }",
+    )
+    .expect("effect compiles")
+    .into_iter()
+    .next()
+    .expect("one effect");
+    let missing = effect
+        .bind_params(&IndexMap::new())
+        .expect_err("required parameters must not synthesize a default");
+    assert!(
+        missing
+            .message
+            .contains("missing required parameter `amount`")
+    );
+
+    let params = IndexMap::from([(
+        Identifier::new("amount".to_string()).unwrap(),
+        dawn_language::dsl::Value::Float(1.0),
+    )]);
+    let bound = effect
+        .bind_params(&params)
+        .expect("required parameter binds");
+    let error = effect
+        .sample_bound(
+            &bound,
+            &dawn_language::dsl::RunContext {
+                progress: 0.0,
+                seconds: 0.0,
+                duration: 1.0,
+                pixel_index: 0,
+                pixel_count: 1,
+                pixel_fraction: 0.0,
+                global_marks: dawn_language::dsl::Marks { marks: Vec::new() },
+            },
+            &mut DslVmScratch::default(),
+        )
+        .expect_err("integer remainder by zero must become a runtime error");
+    assert!(
+        error
+            .message
+            .contains("integer arithmetic overflow or division by zero")
+    );
 }
 
 struct ConstantSignal(Color);

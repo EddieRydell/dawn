@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-const LOOP_ITERATION_LIMIT: usize = 100_000;
+pub const MAX_VM_INSTRUCTIONS_PER_INVOCATION: usize = 10_000;
 
 #[derive(Clone, Debug)]
 pub struct RunContext {
@@ -279,7 +279,7 @@ impl VmRegisters {
 pub(crate) fn bind_effect_params(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
-) -> BoundParams {
+) -> Result<BoundParams, RuntimeError> {
     let mut cache = DslBindCache::default();
     bind_effect_params_cached(effect, params, &mut cache)
 }
@@ -288,20 +288,26 @@ pub(crate) fn bind_effect_params_cached(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
     cache: &mut DslBindCache,
-) -> BoundParams {
-    BoundParams {
+) -> Result<BoundParams, RuntimeError> {
+    Ok(BoundParams {
         values: effect
             .params
             .iter()
-            .map(|param| bind_param_value(&param.ty, resolve_param(param, params), cache))
-            .collect(),
-    }
+            .map(|param| {
+                Ok(bind_param_value(
+                    &param.ty,
+                    resolve_param(param, params)?,
+                    cache,
+                ))
+            })
+            .collect::<Result<_, RuntimeError>>()?,
+    })
 }
 
 pub(crate) fn bind_operator_params(
     operator: &CompiledOperator,
     params: &IndexMap<Identifier, Value>,
-) -> BoundParams {
+) -> Result<BoundParams, RuntimeError> {
     let mut cache = DslBindCache::default();
     bind_operator_params_cached(operator, params, &mut cache)
 }
@@ -310,14 +316,20 @@ pub(crate) fn bind_operator_params_cached(
     operator: &CompiledOperator,
     params: &IndexMap<Identifier, Value>,
     cache: &mut DslBindCache,
-) -> BoundParams {
-    BoundParams {
+) -> Result<BoundParams, RuntimeError> {
+    Ok(BoundParams {
         values: operator
             .params
             .iter()
-            .map(|param| bind_param_value(&param.ty, resolve_param(param, params), cache))
-            .collect(),
-    }
+            .map(|param| {
+                Ok(bind_param_value(
+                    &param.ty,
+                    resolve_param(param, params)?,
+                    cache,
+                ))
+            })
+            .collect::<Result<_, RuntimeError>>()?,
+    })
 }
 
 pub(crate) fn run_sample_effect(
@@ -596,7 +608,11 @@ impl<'a> Vm<'a> {
                 }
                 Instruction::Not { dst, src } => self.set_bool(*dst, !self.bool(*src)?)?,
                 Instruction::NegInt { dst, src } => {
-                    self.set_int(*dst, -self.int(*src)?)?;
+                    let value = self
+                        .int(*src)?
+                        .checked_neg()
+                        .ok_or_else(|| RuntimeError::new("integer negation overflow"))?;
+                    self.set_int(*dst, value)?;
                 }
                 Instruction::NegFloat { dst, src } => {
                     self.set_float(*dst, -self.float(*src)?)?;
@@ -650,11 +666,14 @@ impl<'a> Vm<'a> {
                     let left = self.int(*left)?;
                     let right = self.int(*right)?;
                     let value = match op {
-                        IntArithmeticOp::Add => left + right,
-                        IntArithmeticOp::Subtract => left - right,
-                        IntArithmeticOp::Multiply => left * right,
-                        IntArithmeticOp::Remainder => left % right,
+                        IntArithmeticOp::Add => left.checked_add(right),
+                        IntArithmeticOp::Subtract => left.checked_sub(right),
+                        IntArithmeticOp::Multiply => left.checked_mul(right),
+                        IntArithmeticOp::Remainder => left.checked_rem(right),
                     };
+                    let value = value.ok_or_else(|| {
+                        RuntimeError::new("integer arithmetic overflow or division by zero")
+                    })?;
                     self.set_int(*dst, value)?;
                 }
                 Instruction::FloatCompare {
@@ -1105,7 +1124,7 @@ impl<'a> Vm<'a> {
                 },
                 Instruction::CheckLoopLimit => {
                     self.loop_iterations += 1;
-                    if self.loop_iterations > LOOP_ITERATION_LIMIT {
+                    if self.loop_iterations > MAX_VM_INSTRUCTIONS_PER_INVOCATION {
                         return Err(RuntimeError::new("loop iteration limit exceeded"));
                     }
                 }
@@ -1611,14 +1630,20 @@ impl<'a> Vm<'a> {
     }
 }
 
-fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Value {
+fn resolve_param(
+    param: &ParamDecl,
+    params: &IndexMap<Identifier, Value>,
+) -> Result<Value, RuntimeError> {
     if let Some(value) = params.get(&param.name) {
-        return value.clone();
+        return Ok(value.clone());
     }
     if let Some(default) = &param.default {
-        return default.clone();
+        return Ok(default.clone());
     }
-    param.ty.default_value()
+    Err(RuntimeError::new(format!(
+        "missing required parameter `{}`",
+        param.name.as_str()
+    )))
 }
 
 fn bind_param_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> BoundParamValue {

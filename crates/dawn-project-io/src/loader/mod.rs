@@ -21,6 +21,7 @@ pub(super) struct Loader {
     pub(crate) source_overrides: IndexMap<dawn_language::identity::DocumentId, String>,
     pub(crate) operator_reconciliation:
         Option<BTreeMap<dawn_language::identity::DocumentId, Vec<OperatorDefinitionId>>>,
+    pub(crate) validate_semantics: bool,
 }
 
 impl Loader {
@@ -64,6 +65,7 @@ impl Loader {
             next_asset_id: 1,
             source_overrides: IndexMap::new(),
             operator_reconciliation: None,
+            validate_semantics: true,
         })
     }
 
@@ -83,6 +85,7 @@ impl Loader {
             document_definitions.sort_by(|left, right| left.0.object().cmp(right.0.object()));
         }
         loader.operator_reconciliation = Some(definitions);
+        loader.validate_semantics = false;
         Ok(loader)
     }
 
@@ -140,7 +143,7 @@ impl Loader {
             }))
         };
         self.validate_exported_objects(&mut typed)?;
-        if self.entrypoint.is_some() {
+        if self.entrypoint.is_some() && self.validate_semantics {
             let entrypoint =
                 self.entrypoint
                     .as_ref()
@@ -837,21 +840,25 @@ impl Loader {
         };
         project.definitions = self.definitions.clone();
 
-        let mut resolver = DomainResolver {
-            loader: self,
-            project: &mut project,
-        };
-        resolver.resolve_setup(entrypoint, &setup)?;
-        for sequence in sequences {
-            resolver.resolve_sequence(&sequence)?;
-        }
-        dawn_language::validation::validate_project(&project).map_err(|error| {
-            LoadProjectError::InvalidDocument {
-                path: entrypoint.path().to_path_buf(),
-                range: None,
-                message: format!("project validation failed: {error:?}"),
+        {
+            let mut resolver = DomainResolver {
+                loader: self,
+                project: &mut project,
+            };
+            resolver.resolve_setup(entrypoint, &setup)?;
+            for sequence in sequences {
+                resolver.resolve_sequence(&sequence)?;
             }
-        })?;
+        }
+        if self.validate_semantics {
+            dawn_language::validation::validate_project(&project).map_err(|error| {
+                LoadProjectError::InvalidDocument {
+                    path: entrypoint.path().to_path_buf(),
+                    range: None,
+                    message: format!("project validation failed: {error:?}"),
+                }
+            })?;
+        }
         Ok(project)
     }
 

@@ -171,6 +171,9 @@ Project IO loads reachable source files, validates imports and references, track
 
 At render time, `dawn-runtime` resolves element selections in tree order, composes color effects, evaluates typed control clips, applies explicit fixture behavior rules, and evaluates the prepared patch graph into exact controller-port buffers. Preview and live output consume that same `RenderedShowFrame`; neither reinterprets colors, fixture channels, or patch ordering. Live output is opt-in for each application run and fails closed by blacking out active ports and terminating E1.31 streams.
 
+The sequence-as-code validity rules, curve semantics, parser behavior, and runtime
+budgets are documented in [the sequence-as-code contract](docs/sequence_as_code.md).
+
 ## Status
 
 Dawn is an active prototype. The codebase emphasizes fast iteration, typed state, explicit validation, and a single project model shared by the editor, GUI workflows, and renderer.

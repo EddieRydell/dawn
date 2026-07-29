@@ -33,10 +33,15 @@ thread_local! {
 }
 
 mod package_update;
+mod path_refactor;
 mod source;
 pub use package_update::{
     PackageCompatibilityIssue, PackageCompatibilityIssueKind, PackageCompatibilityReport,
     analyze_package_candidate,
+};
+pub use path_refactor::{
+    PathChangeImpact, PathChangeOwnership, PathChangePlan, PathChangeSourceKind, apply_path_change,
+    plan_path_change,
 };
 pub use source::{
     ExportReport, ImportEdge, ImportSource, ProjectSession, ReferencedAsset, SaveReport,

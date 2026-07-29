@@ -9,8 +9,8 @@ use super::{
     project_diagnostics, refresh_clean_buffers, restored_active_buffers, workspace_entries,
 };
 use crate::dto::{
-    AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic,
-    ProjectTreeMode, SequenceAudio, WorkspaceEntryKind,
+    AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic, SequenceAudio,
+    WorkspaceEntryKind,
 };
 
 impl DesktopState {
@@ -93,15 +93,10 @@ impl DesktopState {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
             snapshot.package = package;
-            snapshot.project_tree_visible = restore
+            snapshot.workspace_explorer = restore
                 .as_ref()
-                .map(|restore| restore.session.project_tree_visible)
-                .unwrap_or(true);
-            match snapshot.settings.project_tree_mode {
-                ProjectTreeMode::Remember => {}
-                ProjectTreeMode::Show => snapshot.project_tree_visible = true,
-                ProjectTreeMode::Hide => snapshot.project_tree_visible = false,
-            }
+                .map(|restore| restore.session.workspace_explorer.clone())
+                .unwrap_or_default();
             snapshot.project_entries = entries;
             snapshot.tabs = active
                 .as_ref()

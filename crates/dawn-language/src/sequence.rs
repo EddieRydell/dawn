@@ -3,6 +3,7 @@ use crate::dsl::types::Identifier;
 use crate::effect::{EffectInst, EffectInstId};
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
+use crate::sampling::sample_curve;
 use crate::values::{Color, Curve, CurvePoint, DawnDuration, DawnTime};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -255,28 +256,6 @@ fn curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) 
             points
         },
     }
-}
-
-fn sample_curve(curve: &Curve, position: f64) -> f64 {
-    let Some(first) = curve.points.first() else {
-        return 0.0;
-    };
-    if position <= first.position {
-        return first.value;
-    }
-    for pair in curve.points.windows(2) {
-        let (left, right) = (&pair[0], &pair[1]);
-        if position <= right.position {
-            let span = right.position - left.position;
-            let amount = if span <= 0.0 {
-                0.0
-            } else {
-                (position - left.position) / span
-            };
-            return lerp(left.value, right.value, amount);
-        }
-    }
-    curve.points.last().map(|point| point.value).unwrap_or(0.0)
 }
 
 fn lerp(min: f64, max: f64, amount: f64) -> f64 {

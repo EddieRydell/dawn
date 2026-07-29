@@ -99,11 +99,9 @@ pub fn controls_overlap(left: &ControlClip, right: &ControlClip) -> bool {
 }
 
 fn valid_curve(curve: &Curve) -> bool {
-    !curve.points.is_empty()
-        && curve.points.iter().all(|point| {
-            point.position.is_finite()
-                && point.value.is_finite()
-                && (0.0..=1.0).contains(&point.position)
-                && (0.0..=1.0).contains(&point.value)
-        })
+    curve.validate().is_ok()
+        && curve
+            .points
+            .iter()
+            .all(|point| (0.0..=1.0).contains(&point.value))
 }

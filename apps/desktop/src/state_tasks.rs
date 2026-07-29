@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -66,6 +66,7 @@ pub(crate) struct GuiSavePayload {
     pub(crate) session: Arc<ProjectSession>,
     pub(crate) affected_paths: BTreeSet<String>,
     pub(crate) status_path: String,
+    pub(crate) filesystem: Arc<Mutex<()>>,
 }
 
 pub(crate) enum GuiSaveResult {
@@ -98,6 +99,11 @@ fn gui_save_worker(
         while let Ok(next) = receiver.recv_timeout(debounce) {
             pending = next;
         }
+        let _filesystem = pending
+            .payload
+            .filesystem
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let result = match save_project(&pending.payload.session) {
             Ok(_) => GuiSaveResult::Saved {
                 sequence: pending.sequence,

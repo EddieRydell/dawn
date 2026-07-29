@@ -40,13 +40,13 @@ impl SourceProject {
             .map(|module| match &module.origin {
                 dawn_package::ResolvedModuleOrigin::Project => SourceOwnership::ProjectOwned,
                 dawn_package::ResolvedModuleOrigin::PathDependency { declared_path, .. } => {
-                    SourceOwnership::DependencyReadOnly {
-                        package: format!("path:{declared_path}"),
+                    SourceOwnership::PathDependencyOwned {
+                        declared_path: declared_path.clone(),
                         module_id: document.module_id(),
                     }
                 }
                 dawn_package::ResolvedModuleOrigin::RegistryDependency { package, .. } => {
-                    SourceOwnership::DependencyReadOnly {
+                    SourceOwnership::RegistryReadOnly {
                         package: package.as_str().to_string(),
                         module_id: document.module_id(),
                     }
@@ -66,12 +66,26 @@ impl SourceProject {
     pub fn is_project_owned(&self, document: &DocumentId) -> bool {
         self.ownership(document) == Some(SourceOwnership::ProjectOwned)
     }
+
+    pub fn is_editable(&self, document: &DocumentId) -> bool {
+        matches!(
+            self.ownership(document),
+            Some(SourceOwnership::ProjectOwned | SourceOwnership::PathDependencyOwned { .. })
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceOwnership {
     ProjectOwned,
-    DependencyReadOnly { package: String, module_id: Uuid },
+    PathDependencyOwned {
+        declared_path: String,
+        module_id: Uuid,
+    },
+    RegistryReadOnly {
+        package: String,
+        module_id: Uuid,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

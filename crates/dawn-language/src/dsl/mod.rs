@@ -141,7 +141,10 @@ impl CompiledOperator {
         &self.params
     }
 
-    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundParams {
+    pub fn bind_params(
+        &self,
+        params: &IndexMap<Identifier, Value>,
+    ) -> Result<BoundParams, RuntimeError> {
         vm::bind_operator_params(self, params)
     }
 
@@ -149,7 +152,7 @@ impl CompiledOperator {
         &self,
         params: &IndexMap<Identifier, Value>,
         cache: &mut DslBindCache,
-    ) -> BoundParams {
+    ) -> Result<BoundParams, RuntimeError> {
         vm::bind_operator_params_cached(self, params, cache)
     }
 
@@ -208,12 +211,15 @@ impl CompiledEffect {
         params: &IndexMap<Identifier, Value>,
         context: &RunContext,
     ) -> Result<Color, RuntimeError> {
-        let bound = self.bind_params(params);
+        let bound = self.bind_params(params)?;
         let mut scratch = DslVmScratch::default();
         self.sample_bound(&bound, context, &mut scratch)
     }
 
-    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundParams {
+    pub fn bind_params(
+        &self,
+        params: &IndexMap<Identifier, Value>,
+    ) -> Result<BoundParams, RuntimeError> {
         vm::bind_effect_params(self, params)
     }
 
@@ -221,7 +227,7 @@ impl CompiledEffect {
         &self,
         params: &IndexMap<Identifier, Value>,
         cache: &mut DslBindCache,
-    ) -> BoundParams {
+    ) -> Result<BoundParams, RuntimeError> {
         vm::bind_effect_params_cached(self, params, cache)
     }
 

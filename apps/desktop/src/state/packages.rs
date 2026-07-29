@@ -14,7 +14,7 @@ use dawn_project_io::{
 use super::{DesktopState, lock_unpoisoned};
 use crate::dto::{
     AppSnapshot, PackageCacheState, PackageCompatibilityWarning, PackageDependencySource,
-    PackageDependencyStatus, PackageModuleStatus, PackageStatus,
+    PackageDependencyStatus, PackageModuleStatus, PackageReadiness, PackageStatus,
 };
 
 impl DesktopState {
@@ -68,6 +68,7 @@ impl DesktopState {
         let Some(root) = self.package_mutation_root() else {
             return self.snapshot();
         };
+        let _filesystem = lock_unpoisoned(&self.filesystem);
         let root = Utf8Path::new(&root);
         let original = match PackageManifest::read(root) {
             Ok(manifest) => manifest,
@@ -116,6 +117,7 @@ impl DesktopState {
         let Some(root) = self.package_mutation_root() else {
             return self.snapshot();
         };
+        let _filesystem = lock_unpoisoned(&self.filesystem);
         let root = Utf8Path::new(&root);
         let forked = PackageService::fork_dependency(
             root,
@@ -181,6 +183,7 @@ impl DesktopState {
                 snapshot.status = "Package operation blocked by unsaved edits".to_string();
             });
         }
+        let _filesystem = lock_unpoisoned(&self.filesystem);
 
         let root = Utf8Path::new(&root);
         let (candidate, candidate_session) = match prepare_loaded_candidate(
@@ -420,6 +423,7 @@ pub(crate) fn package_status(root: &Utf8Path, session: Option<&ProjectSession>) 
         Ok(lock) => lock,
         Err(error) => {
             return PackageStatus {
+                readiness: PackageReadiness::Invalid,
                 root: Some(root.to_string()),
                 manifest_valid: true,
                 lock_present: true,
@@ -487,7 +491,13 @@ pub(crate) fn package_status(root: &Utf8Path, session: Option<&ProjectSession>) 
     let lock_current = lock
         .as_ref()
         .is_some_and(|lock| lock.validate_local(root, &manifest).is_ok());
+    let readiness = if lock.is_none() || !lock_current {
+        PackageReadiness::NeedsSync
+    } else {
+        PackageReadiness::Ready
+    };
     PackageStatus {
+        readiness,
         root: Some(root.to_string()),
         manifest_valid: true,
         lock_present: lock.is_some(),
@@ -575,6 +585,9 @@ pub(crate) fn decorate_deprecation_status(
             breaking: false,
         });
     }
+    if !status.warnings.is_empty() {
+        status.readiness = PackageReadiness::Warning;
+    }
 }
 
 fn dependency_modules(session: Option<&ProjectSession>) -> Vec<PackageModuleStatus> {
@@ -627,6 +640,7 @@ fn read_optional_lock(root: &Utf8Path) -> Result<Option<Lockfile>, String> {
 
 fn invalid_status(root: &Utf8Path, lock_present: bool, message: String) -> PackageStatus {
     PackageStatus {
+        readiness: PackageReadiness::Invalid,
         root: Some(root.to_string()),
         manifest_valid: false,
         lock_present,

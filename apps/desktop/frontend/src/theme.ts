@@ -23,10 +23,6 @@ export const THEME_TYPOGRAPHY = {
   sequence: cssValue("--dawn-sequence-font")
 } as const;
 
-export const THEME_LAYOUT = {
-  projectTreeWidth: cssValue("--dawn-project-tree-width")
-} as const;
-
 export const THEME_COLORS = {
   defaultProjectColor: cssColor("--dawn-default-project-color"),
   background: cssColor("--dawn-bg"),
@@ -108,6 +104,7 @@ export const THEME_METRICS = {
   menuOffset: cssNumber("--dawn-menu-offset"),
   projectTreeIndent: cssNumber("--dawn-project-tree-indent"),
   projectTreeRowHeight: cssNumber("--dawn-project-tree-row-height"),
+  activityIconSize: cssNumber("--dawn-activity-icon-size"),
   projectTreeViewportInset: cssNumber("--dawn-project-tree-viewport-inset"),
   resizeHandleWidth: cssNumber("--dawn-resize-handle-width"),
   controlHeightSmall: cssNumber("--dawn-control-height-sm"),
@@ -121,6 +118,8 @@ export const THEME_METRICS = {
   workspaceKeyboardStep: cssNumber("--dawn-workspace-keyboard-step"),
   interactionDragThreshold: cssNumber("--dawn-interaction-drag-threshold"),
   workspaceLayoutSaveDelay: cssNumber("--dawn-workspace-layout-save-delay"),
+  tooltipDelayMs: cssNumber("--dawn-tooltip-delay-ms"),
+  searchDebounceMs: cssNumber("--dawn-search-debounce-ms"),
   sequenceLeftGutter: cssNumber("--dawn-sequence-left-gutter"),
   sequenceTop: cssNumber("--dawn-sequence-top"),
   sequenceAudioStripTop: cssNumber("--dawn-sequence-audio-strip-top"),

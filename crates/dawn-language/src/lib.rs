@@ -26,5 +26,6 @@ pub mod preview;
 pub mod sampling;
 pub mod sequence;
 pub mod setup;
+pub mod source_remap;
 pub mod validation;
 pub mod values;

@@ -44,6 +44,12 @@ function handleGuiEditResult(result: GuiEditResult) {
 
 export const commands = {
   ...generatedCommands,
+  searchProject: async (request: import("./types").ProjectSearchRequest) =>
+    unwrapResult(await generatedCommands.searchProject(request)),
+  planWorkspacePathChange: async (request: import("./types").WorkspacePathChangeRequest) =>
+    unwrapResult(await generatedCommands.planWorkspacePathChange(request)),
+  applyWorkspacePathChange: async (request: import("./types").WorkspacePathChangeRequest) =>
+    unwrapResult(await generatedCommands.applyWorkspacePathChange(request)),
   autosaveActiveText: async (path: string, text: string) => {
     const result = await generatedCommands.autosaveActiveText(path, text);
     if (result.status === "error") {
@@ -90,3 +96,8 @@ export const commands = {
     });
   }
 };
+
+function unwrapResult<T>(result: { status: "ok"; data: T } | { status: "error"; error: string }): T {
+  if (result.status === "error") throw new Error(result.error);
+  return result.data;
+}

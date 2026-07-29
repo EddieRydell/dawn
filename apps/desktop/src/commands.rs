@@ -7,10 +7,11 @@ use tauri_specta::{Builder, collect_commands};
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, GuiDocument,
     GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest,
-    OperatorRewriteResolution, OperatorRewriteValidation, SequenceAutomationMapping,
-    SequenceAutomationTarget, SequenceClipRasterRequest, SequenceClipRasterResponse,
-    SequenceClipRasterResultBatch, SequenceGuiEdit, SequenceSelectionEdit,
-    SequenceSelectionEditResult, WorkspaceLayoutState,
+    OperatorRewriteResolution, OperatorRewriteValidation, ProjectSearchRequest,
+    ProjectSearchResponse, SequenceAutomationMapping, SequenceAutomationTarget,
+    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
+    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceExplorerState,
+    WorkspaceLayoutState, WorkspacePathChangePlan, WorkspacePathChangeRequest,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
@@ -85,6 +86,42 @@ pub(crate) fn save_workspace_layout_state(
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
     state.save_workspace_layout_state(state_update)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn save_workspace_explorer_state(
+    state_update: WorkspaceExplorerState,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.save_workspace_explorer_state(state_update)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn search_project(
+    request: ProjectSearchRequest,
+    state: State<'_, DesktopState>,
+) -> Result<ProjectSearchResponse, String> {
+    state.search_project(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn plan_workspace_path_change(
+    request: WorkspacePathChangeRequest,
+    state: State<'_, DesktopState>,
+) -> Result<WorkspacePathChangePlan, String> {
+    state.plan_workspace_path_change(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn apply_workspace_path_change(
+    request: WorkspacePathChangeRequest,
+    state: State<'_, DesktopState>,
+) -> Result<AppSnapshot, String> {
+    state.apply_workspace_path_change(request)
 }
 
 #[tauri::command]
@@ -406,16 +443,6 @@ pub(crate) fn create_directory(
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn rename_path(
-    path: String,
-    new_name: String,
-    state: State<'_, DesktopState>,
-) -> AppSnapshot {
-    state.rename_path(&path, &new_name)
-}
-
-#[tauri::command]
-#[specta::specta]
 pub(crate) fn delete_path(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.delete_path(&path)
 }
@@ -430,7 +457,7 @@ pub(crate) fn reload_project(state: State<'_, DesktopState>) -> AppSnapshot {
 #[specta::specta]
 pub(crate) fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_snapshot(|snapshot| {
-        snapshot.project_tree_visible = !snapshot.project_tree_visible;
+        snapshot.workspace_layout.sidebar_collapsed = !snapshot.workspace_layout.sidebar_collapsed;
     })
 }
 
@@ -545,6 +572,10 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         open_package_page,
         update_app_settings,
         save_workspace_layout_state,
+        save_workspace_explorer_state,
+        search_project,
+        plan_workspace_path_change,
+        apply_workspace_path_change,
         get_restored_view_state,
         open_project_dialog,
         open_project,
@@ -577,7 +608,6 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         reload_active_buffer_from_disk,
         create_file,
         create_directory,
-        rename_path,
         delete_path,
         reload_project,
         toggle_project_tree,

@@ -28,7 +28,9 @@ fn bench_effect_vm(c: &mut Criterion) {
         "effect ConstantColor { color sample() { return #336699; } }",
     );
     let constant_params = IndexMap::new();
-    let constant_bound = constant.bind_params(&constant_params);
+    let constant_bound = constant
+        .bind_params(&constant_params)
+        .expect("valid params");
 
     c.bench_function("constant_color_floor", |b| {
         let context = sample_context();
@@ -186,7 +188,9 @@ fn bench_operator(c: &mut Criterion) {
     .into_iter()
     .next()
     .expect("Gain operator should exist");
-    let bound = operator.bind_params(&params([("amount", Value::Float(0.65))]));
+    let bound = operator
+        .bind_params(&params([("amount", Value::Float(0.65))]))
+        .expect("valid params");
     let context = sample_context();
     let mut sampler = ConstantSignalSampler;
     let mut scratch = DslVmScratch::default();
@@ -257,7 +261,7 @@ fn bench_sample(
     params: IndexMap<Identifier, Value>,
 ) {
     let effect = sample_effect(effect_name, source);
-    let bound = effect.bind_params(&params);
+    let bound = effect.bind_params(&params).expect("valid params");
     let context = sample_context();
     let mut scratch = DslVmScratch::default();
     effect
@@ -280,7 +284,13 @@ fn bench_binding(c: &mut Criterion) {
     let params = pulse_params();
 
     c.bench_function("bind_curve_params_uncached", |b| {
-        b.iter(|| black_box(effect.bind_params(black_box(&params))));
+        b.iter(|| {
+            black_box(
+                effect
+                    .bind_params(black_box(&params))
+                    .expect("valid params"),
+            )
+        });
     });
 
     c.bench_function("bind_curve_params_cached", |b| {

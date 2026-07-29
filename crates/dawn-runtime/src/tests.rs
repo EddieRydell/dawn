@@ -110,6 +110,20 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
 }
 
 #[test]
+fn starter_sequence_behavioral_checksums_run_in_the_normal_test_gate() {
+    let session = example("starter");
+    let sequence_id = session.project.root.sequences.get(1).unwrap();
+    let renderer = crate::PreparedSequenceRenderer::prepare(
+        &session.project,
+        &session.project.root.setup,
+        sequence_id,
+    )
+    .unwrap();
+    let rendered = renderer.render_frame(3594).unwrap();
+    assert_eq!(checksum_frame(&rendered), 0xaa28_e560_49eb_1e76);
+}
+
+#[test]
 fn logical_state_covers_every_element_leaf_in_tree_order() {
     let session = example("starter");
     let sequence_id = session.project.root.sequences.first().unwrap();
@@ -141,4 +155,30 @@ fn logical_state_covers_every_element_leaf_in_tree_order() {
             | RenderedElementState::Indexed { .. }
             | RenderedElementState::Fixture { .. }
     )));
+}
+
+fn checksum_frame(frame: &crate::RenderedFrame) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    hash = checksum_u64(hash, frame.frame_index);
+    for element in &frame.elements {
+        hash = checksum_u32(hash, element.element_id.0);
+        for color in &element.pixels {
+            for channel in [color.red, color.green, color.blue] {
+                hash = checksum_u8(hash, channel);
+            }
+        }
+    }
+    hash
+}
+
+fn checksum_u64(hash: u64, value: u64) -> u64 {
+    value.to_le_bytes().into_iter().fold(hash, checksum_u8)
+}
+
+fn checksum_u32(hash: u64, value: u32) -> u64 {
+    value.to_le_bytes().into_iter().fold(hash, checksum_u8)
+}
+
+fn checksum_u8(hash: u64, value: u8) -> u64 {
+    (hash ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3)
 }

@@ -13,6 +13,10 @@ export const commands = {
 	openPackagePage: (alias: string) => __TAURI_INVOKE<AppSnapshot>("open_package_page", { alias }),
 	updateAppSettings: (settings: AppSettings) => __TAURI_INVOKE<AppSnapshot>("update_app_settings", { settings }),
 	saveWorkspaceLayoutState: (stateUpdate: WorkspaceLayoutState) => __TAURI_INVOKE<AppSnapshot>("save_workspace_layout_state", { stateUpdate }),
+	saveWorkspaceExplorerState: (stateUpdate: WorkspaceExplorerState) => __TAURI_INVOKE<AppSnapshot>("save_workspace_explorer_state", { stateUpdate }),
+	searchProject: (request: ProjectSearchRequest) => typedError<ProjectSearchResponse, string>(__TAURI_INVOKE("search_project", { request })),
+	planWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<WorkspacePathChangePlan, string>(__TAURI_INVOKE("plan_workspace_path_change", { request })),
+	applyWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<AppSnapshot, string>(__TAURI_INVOKE("apply_workspace_path_change", { request })),
 	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,v]))}) as typeof v)),
 	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
 	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
@@ -45,7 +49,6 @@ export const commands = {
 	reloadActiveBufferFromDisk: () => __TAURI_INVOKE<AppSnapshot>("reload_active_buffer_from_disk"),
 	createFile: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_file", { parent, name }),
 	createDirectory: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_directory", { parent, name }),
-	renamePath: (path: string, newName: string) => __TAURI_INVOKE<AppSnapshot>("rename_path", { path, newName }),
 	deletePath: (path: string) => __TAURI_INVOKE<AppSnapshot>("delete_path", { path }),
 	reloadProject: () => __TAURI_INVOKE<AppSnapshot>("reload_project"),
 	toggleProjectTree: () => __TAURI_INVOKE<AppSnapshot>("toggle_project_tree"),
@@ -64,7 +67,6 @@ export const commands = {
 export type AppSettings = {
 	reopenLastProject: boolean,
 	editorViewMode?: EditorViewMode,
-	projectTreeMode: ProjectTreeMode,
 	reopenPreviewWindow: boolean,
 	autosaveTextEdits: boolean,
 	sequenceInitialZoomMode: SequenceInitialZoomMode,
@@ -76,9 +78,9 @@ export type AppSettings = {
 export type AppSnapshot = {
 	settings: AppSettings,
 	workspaceLayout: WorkspaceLayoutState,
+	workspaceExplorer: WorkspaceExplorerState,
 	projectRoot: string | null,
 	projectRevision: number,
-	projectTreeVisible: boolean,
 	projectEntries: WorkspaceEntry[],
 	tabs: EditorBuffer[],
 	activeFile: string | null,
@@ -381,7 +383,10 @@ export type PackageModuleStatus = {
 	documents: string[],
 };
 
+export type PackageReadiness = "noProject" | "invalid" | "needsSync" | "ready" | "warning";
+
 export type PackageStatus = {
+	readiness: PackageReadiness,
 	root: string | null,
 	manifestValid: boolean,
 	lockPresent: boolean,
@@ -464,7 +469,29 @@ export type ProjectRestoreState = {
 	sequenceViewports: { [key in string]: PersistedSequenceViewportState },
 };
 
-export type ProjectTreeMode = "remember" | "show" | "hide";
+export type ProjectSearchMatch = {
+	path: string,
+	line: number,
+	column: number,
+	preview: string,
+	kind: ProjectSearchMatchKind,
+};
+
+export type ProjectSearchMatchKind = "filename" | "content";
+
+export type ProjectSearchRequest = {
+	requestId: number,
+	query: string,
+	matchCase: boolean,
+};
+
+export type ProjectSearchResponse = {
+	requestId: number,
+	matches: ProjectSearchMatch[],
+	skippedBinary: number,
+	skippedOversized: number,
+	truncated: boolean,
+};
 
 export type PropDefinition = {
 	sourceRef: GuiObjectRef,
@@ -889,6 +916,8 @@ export type SetupPreviewLink = {
 	bindings: SetupElementCell[],
 };
 
+export type SidebarView = "explorer" | "search" | "packages" | "problems";
+
 export type TextPosition = {
 	line: number,
 	character: number,
@@ -910,17 +939,61 @@ export type WorkspaceEntry = {
 	kind: WorkspaceEntryKind,
 	name: string,
 	parent: string,
+	role: WorkspaceEntryRole,
+	ownership: WorkspaceEntryOwnership,
+	operations: WorkspaceOperation[],
+	operationExplanation: string | null,
 };
 
 export type WorkspaceEntryKind = "directory" | "file";
 
-export type WorkspaceLayoutState = {
-	projectTreeWidthPx: number,
-	inspectorWidthPx: number,
-	projectTreeCollapsed: boolean,
-	inspectorCollapsed: boolean,
-	projectTreeExpandedPaths?: string[] | null,
+export type WorkspaceEntryOwnership = "project" | "pathDependency" | "registry";
+
+export type WorkspaceEntryRole = "directory" | "project" | "entrypoint" | "setup" | "layout" | "fixture" | "patch" | "curve" | "gradient" | "effect" | "operator" | "sequence" | "manifest" | "lockfile" | "asset" | "pathDependency" | "file";
+
+export type WorkspaceExplorerState = {
+	expandedPaths: string[],
+	recentFiles: string[],
 };
+
+export type WorkspaceLayoutState = {
+	sidebarWidthPx: number,
+	inspectorWidthPx: number,
+	sidebarCollapsed: boolean,
+	inspectorCollapsed: boolean,
+	activeSidebarView: SidebarView,
+};
+
+export type WorkspaceOperation = "open" | "create" | "rename" | "delete" | "move";
+
+export type WorkspacePathChangeImpact = {
+	documents: string[],
+	imports: string[],
+	manifests: string[],
+	assets: string[],
+	modules: string[],
+	openFiles: string[],
+	recentFiles: string[],
+	persistedState: string[],
+};
+
+export type WorkspacePathChangePlan = {
+	request: WorkspacePathChangeRequest,
+	structural: boolean,
+	ownership: WorkspacePathOwnership,
+	impact: WorkspacePathChangeImpact,
+};
+
+export type WorkspacePathChangeRequest = {
+	source: string,
+	destination: string,
+	projectRevision: number,
+};
+
+export type WorkspacePathOwnership = "project" | { pathDependency: {
+	module_id: string,
+	module_root: string,
+} };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

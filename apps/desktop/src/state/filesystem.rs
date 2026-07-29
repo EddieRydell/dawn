@@ -41,25 +41,28 @@ impl DesktopState {
                 "Path is outside the loaded project",
             );
         };
-        let result = match kind {
-            FsEntryKind::File => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).and_then(|()| {
+        let result = {
+            let _filesystem = lock_unpoisoned(&self.filesystem);
+            match kind {
+                FsEntryKind::File => {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).and_then(|()| {
+                            fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(&path)
+                                .map(|_| ())
+                        })
+                    } else {
                         fs::OpenOptions::new()
                             .write(true)
                             .create_new(true)
                             .open(&path)
                             .map(|_| ())
-                    })
-                } else {
-                    fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)
-                        .map(|_| ())
+                    }
                 }
+                FsEntryKind::Directory => fs::create_dir_all(&path),
             }
-            FsEntryKind::Directory => fs::create_dir_all(&path),
         };
         match result {
             Ok(()) => self.after_workspace_changed(None, Some(relative_path.as_str())),
@@ -164,6 +167,7 @@ impl DesktopState {
             session,
             affected_paths,
             status_path,
+            filesystem: Arc::clone(&self.filesystem),
         };
         if !lock_unpoisoned(&self.gui_save).schedule(request) {
             self.snapshot_with_error(

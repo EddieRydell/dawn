@@ -1011,6 +1011,24 @@ impl ResolvedSourceGraph {
         Ok(graph)
     }
 
+    /// Builds a graph whose local module roots are the validated destinations
+    /// of an in-progress atomic filesystem transaction.
+    ///
+    /// All identity, ownership, manifest, dependency-edge, and reachability
+    /// invariants are checked. Physical-root existence is deferred until the
+    /// staged move commits.
+    pub fn from_modules_with_staged_roots(
+        project_module_id: Uuid,
+        modules: BTreeMap<Uuid, ResolvedModule>,
+    ) -> Result<Self, PackageError> {
+        let graph = Self {
+            project_module_id,
+            modules,
+        };
+        graph.validate_inner(false)?;
+        Ok(graph)
+    }
+
     pub fn from_lock(
         root: &Utf8Path,
         manifest: PackageManifest,
@@ -1187,6 +1205,10 @@ impl ResolvedSourceGraph {
     }
 
     pub fn validate(&self) -> Result<(), PackageError> {
+        self.validate_inner(true)
+    }
+
+    fn validate_inner(&self, require_physical_roots: bool) -> Result<(), PackageError> {
         let project = self.module(self.project_module_id)?;
         if project.origin != ResolvedModuleOrigin::Project {
             return Err(PackageError::Invalid(
@@ -1210,7 +1232,7 @@ impl ResolvedSourceGraph {
                     "resolved module key `{module_id}` does not match its manifest moduleId"
                 )));
             }
-            if !module.root.is_absolute() || !module.root.is_dir() {
+            if !module.root.is_absolute() || (require_physical_roots && !module.root.is_dir()) {
                 return Err(PackageError::Invalid(format!(
                     "resolved module `{module_id}` has an invalid physical root"
                 )));

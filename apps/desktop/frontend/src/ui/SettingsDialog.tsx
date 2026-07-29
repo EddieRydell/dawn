@@ -54,16 +54,6 @@ export function SettingsDialog() {
                 checked={draft.reopenPreviewWindow}
                 onChange={(reopenPreviewWindow) => void update({ ...draft, reopenPreviewWindow })}
               />
-              <Select
-                label="Project tree"
-                value={draft.projectTreeMode}
-                options={[
-                  ["remember", "Remember"],
-                  ["show", "Show"],
-                  ["hide", "Hide"]
-                ]}
-                onChange={(projectTreeMode) => void update({ ...draft, projectTreeMode })}
-              />
             </section>
 
             <section>

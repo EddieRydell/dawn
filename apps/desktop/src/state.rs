@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, ObjectKind, PackageStatus, ProjectDiagnostic, ProjectTreeMode,
-    WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
+    DocumentViewId, EditorBuffer, ObjectKind, PackageReadiness, PackageStatus, ProjectDiagnostic,
+    WorkspaceEntry, WorkspaceEntryKind, WorkspaceEntryOwnership, WorkspaceEntryRole,
+    WorkspaceExplorerState, WorkspaceLayoutState, WorkspaceOperation,
 };
 use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
@@ -32,6 +33,7 @@ pub(crate) struct DesktopState {
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
     pending_operator_rewrite: Mutex<Option<PendingOperatorRewriteState>>,
     next_operator_rewrite_token: Mutex<u32>,
+    filesystem: Arc<Mutex<()>>,
     persistence: PersistenceService,
 }
 
@@ -62,6 +64,7 @@ impl DesktopState {
             sequence_clipboard: Mutex::new(None),
             pending_operator_rewrite: Mutex::new(None),
             next_operator_rewrite_token: Mutex::new(1),
+            filesystem: Arc::new(Mutex::new(())),
             persistence: PersistenceService::new(),
         }
     }
@@ -125,13 +128,7 @@ impl DesktopState {
             return self.set_persistence_error(format!("Settings were not saved: {error}"));
         }
         self.update_snapshot(|snapshot| {
-            let tree_mode = settings.project_tree_mode.clone();
             snapshot.settings = settings;
-            match tree_mode {
-                ProjectTreeMode::Show => snapshot.project_tree_visible = true,
-                ProjectTreeMode::Hide => snapshot.project_tree_visible = false,
-                ProjectTreeMode::Remember => {}
-            }
         })
     }
 
@@ -224,18 +221,28 @@ mod packages;
 pub(crate) use packages::{decorate_deprecation_status, package_status};
 mod project_lifecycle;
 mod rendering;
+mod search;
 mod workspace;
 
 fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool {
-    let document_id = project.source.project_document(path.to_path_buf());
-    project.source.entrypoint.as_ref() == Some(&document_id)
-        || project.source.documents.values().any(|document| {
-            document.imports().iter().any(|edge| {
-                edge.targets().iter().any(|target| {
-                    target.module_id() == project.source.project_module_id()
-                        && (target.path() == path || target.path().starts_with(path))
-                })
-            })
+    project
+        .source
+        .entrypoint
+        .iter()
+        .chain(
+            project
+                .source
+                .documents
+                .values()
+                .flat_map(|document| document.imports().iter())
+                .flat_map(|edge| edge.targets().iter()),
+        )
+        .filter_map(|document_id| workspace_path_for_document(project, document_id))
+        .any(|document_path| {
+            document_path == path
+                || document_path
+                    .strip_prefix(path)
+                    .is_ok_and(|suffix| !suffix.as_str().is_empty())
         })
 }
 
@@ -243,9 +250,9 @@ fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
         settings: AppSettings::default(),
         workspace_layout: WorkspaceLayoutState::default(),
+        workspace_explorer: WorkspaceExplorerState::default(),
         project_root: None,
         project_revision: 0,
-        project_tree_visible: true,
         project_entries: Vec::new(),
         tabs: Vec::new(),
         active_file: None,
@@ -260,6 +267,7 @@ fn empty_snapshot() -> AppSnapshot {
         live_output: crate::live_output::disabled_snapshot(0),
         pending_operator_rewrite: None,
         package: PackageStatus {
+            readiness: PackageReadiness::NoProject,
             root: None,
             manifest_valid: false,
             lock_present: false,
@@ -295,11 +303,11 @@ pub(crate) enum PendingOperatorRewriteKind {
 
 fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {
     WorkspaceLayoutState {
-        project_tree_width_px: clamp_f64(state.project_tree_width_px, 220.0, 520.0),
+        sidebar_width_px: clamp_f64(state.sidebar_width_px, 220.0, 520.0),
         inspector_width_px: clamp_f64(state.inspector_width_px, 240.0, 560.0),
-        project_tree_collapsed: state.project_tree_collapsed,
+        sidebar_collapsed: state.sidebar_collapsed,
         inspector_collapsed: state.inspector_collapsed,
-        project_tree_expanded_paths: state.project_tree_expanded_paths,
+        active_sidebar_view: state.active_sidebar_view,
     }
 }
 
@@ -353,7 +361,7 @@ fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
     }
     paths
         .into_iter()
-        .map(|(path, kind)| workspace_entry(path, kind))
+        .map(|(path, kind)| workspace_entry(session, path, kind))
         .collect()
 }
 
@@ -401,12 +409,45 @@ fn insert_path_with_parents(paths: &mut BTreeMap<Utf8PathBuf, FsEntryKind>, path
     }
 }
 
-fn workspace_entry(path: Utf8PathBuf, kind: FsEntryKind) -> WorkspaceEntry {
+fn workspace_entry(
+    session: &ProjectSession,
+    path: Utf8PathBuf,
+    kind: FsEntryKind,
+) -> WorkspaceEntry {
     let name = path
         .file_name()
         .map(ToString::to_string)
         .unwrap_or_else(|| path.to_string());
     let parent = path.parent().map(Utf8Path::to_string).unwrap_or_default();
+    let (ownership, module_id, module_relative) = workspace_ownership(session, &path);
+    let role = workspace_role(session, &path, kind, module_id, module_relative.as_deref());
+    let fixed = matches!(
+        role,
+        WorkspaceEntryRole::Manifest | WorkspaceEntryRole::Lockfile
+    );
+    let structural = project_path_is_structural(session, &path);
+    let operations = match kind {
+        FsEntryKind::Directory => {
+            let mut operations = vec![WorkspaceOperation::Create];
+            if !fixed {
+                operations.extend([WorkspaceOperation::Rename, WorkspaceOperation::Move]);
+                if !structural {
+                    operations.push(WorkspaceOperation::Delete);
+                }
+            }
+            operations
+        }
+        FsEntryKind::File => {
+            let mut operations = vec![WorkspaceOperation::Open];
+            if !fixed {
+                operations.extend([WorkspaceOperation::Rename, WorkspaceOperation::Move]);
+                if !structural {
+                    operations.push(WorkspaceOperation::Delete);
+                }
+            }
+            operations
+        }
+    };
     WorkspaceEntry {
         path: canonical_relative_path(&path).to_string(),
         kind: match kind {
@@ -415,6 +456,152 @@ fn workspace_entry(path: Utf8PathBuf, kind: FsEntryKind) -> WorkspaceEntry {
         },
         name,
         parent,
+        role,
+        ownership,
+        operations,
+        operation_explanation: if fixed {
+            Some("Package manifests and lockfiles remain fixed at their module root.".to_string())
+        } else if structural {
+            Some(
+                "Imported documents cannot be deleted; rename or move them through the typed path workflow."
+                    .to_string(),
+            )
+        } else {
+            None
+        },
+    }
+}
+
+fn workspace_ownership(
+    session: &ProjectSession,
+    path: &Utf8Path,
+) -> (
+    WorkspaceEntryOwnership,
+    Option<uuid::Uuid>,
+    Option<Utf8PathBuf>,
+) {
+    let absolute = session.source.project_root().join(path);
+    let mut modules = session
+        .source
+        .source_graph
+        .modules()
+        .iter()
+        .filter(|(_, module)| {
+            !matches!(
+                module.origin,
+                dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+            ) && absolute.starts_with(&module.root)
+        })
+        .collect::<Vec<_>>();
+    modules.sort_by_key(|(_, module)| module.root.components().count());
+    let Some((module_id, module)) = modules.last() else {
+        return (WorkspaceEntryOwnership::Project, None, None);
+    };
+    let ownership = match module.origin {
+        dawn_package::ResolvedModuleOrigin::Project => WorkspaceEntryOwnership::Project,
+        dawn_package::ResolvedModuleOrigin::PathDependency { .. } => {
+            WorkspaceEntryOwnership::PathDependency
+        }
+        dawn_package::ResolvedModuleOrigin::RegistryDependency { .. } => {
+            WorkspaceEntryOwnership::Registry
+        }
+    };
+    (
+        ownership,
+        Some(**module_id),
+        absolute
+            .strip_prefix(&module.root)
+            .ok()
+            .map(Utf8Path::to_path_buf),
+    )
+}
+
+fn workspace_role(
+    session: &ProjectSession,
+    path: &Utf8Path,
+    kind: FsEntryKind,
+    module_id: Option<uuid::Uuid>,
+    module_relative: Option<&Utf8Path>,
+) -> WorkspaceEntryRole {
+    if matches!(kind, FsEntryKind::Directory) {
+        if session
+            .source
+            .source_graph
+            .modules()
+            .values()
+            .any(|module| {
+                matches!(
+                    module.origin,
+                    dawn_package::ResolvedModuleOrigin::PathDependency { .. }
+                ) && module.root == session.source.project_root().join(path)
+            })
+        {
+            return WorkspaceEntryRole::PathDependency;
+        }
+        return WorkspaceEntryRole::Directory;
+    }
+    let Some(module_id) = module_id else {
+        return WorkspaceEntryRole::File;
+    };
+    let Some(relative) = module_relative else {
+        return WorkspaceEntryRole::File;
+    };
+    if relative == Utf8Path::new(dawn_package::MANIFEST_FILE) {
+        return WorkspaceEntryRole::Manifest;
+    }
+    if relative == Utf8Path::new(dawn_package::LOCK_FILE) {
+        return WorkspaceEntryRole::Lockfile;
+    }
+    let document_id = dawn_language::identity::DocumentId::new(module_id, relative.to_path_buf());
+    if session.source.entrypoint.as_ref() == Some(&document_id) {
+        return WorkspaceEntryRole::Entrypoint;
+    }
+    if let Some(document) = session.source.documents.get(&document_id) {
+        return match document.kind() {
+            dawn_project_io::SourceDocumentKind::Effect { .. } => WorkspaceEntryRole::Effect,
+            dawn_project_io::SourceDocumentKind::Operator { .. } => WorkspaceEntryRole::Operator,
+            dawn_project_io::SourceDocumentKind::Dawn { .. } => document
+                .objects()
+                .iter()
+                .map(|object| match object.kind() {
+                    dawn_project_io::SourceObjectKind::Project => WorkspaceEntryRole::Project,
+                    dawn_project_io::SourceObjectKind::Setup => WorkspaceEntryRole::Setup,
+                    dawn_project_io::SourceObjectKind::PreviewLayout
+                    | dawn_project_io::SourceObjectKind::PropDefinition => {
+                        WorkspaceEntryRole::Layout
+                    }
+                    dawn_project_io::SourceObjectKind::FixtureProfile => {
+                        WorkspaceEntryRole::Fixture
+                    }
+                    dawn_project_io::SourceObjectKind::Patch => WorkspaceEntryRole::Patch,
+                    dawn_project_io::SourceObjectKind::Curve => WorkspaceEntryRole::Curve,
+                    dawn_project_io::SourceObjectKind::Gradient => WorkspaceEntryRole::Gradient,
+                    dawn_project_io::SourceObjectKind::Sequence => WorkspaceEntryRole::Sequence,
+                    dawn_project_io::SourceObjectKind::EffectDefinition
+                    | dawn_project_io::SourceObjectKind::EffectInstance => {
+                        WorkspaceEntryRole::Effect
+                    }
+                    dawn_project_io::SourceObjectKind::OperatorDefinition => {
+                        WorkspaceEntryRole::Operator
+                    }
+                    dawn_project_io::SourceObjectKind::Controller
+                    | dawn_project_io::SourceObjectKind::ElementTree => WorkspaceEntryRole::File,
+                })
+                .next()
+                .unwrap_or(WorkspaceEntryRole::File),
+        };
+    }
+    let module = session.source.source_graph.module(module_id).ok();
+    if module.is_some_and(|module| module.manifest.assets.contains_key(relative.as_str()))
+        || session
+            .source
+            .referenced_assets
+            .iter()
+            .any(|asset| asset.module_id == module_id && asset.relative_path == relative)
+    {
+        WorkspaceEntryRole::Asset
+    } else {
+        WorkspaceEntryRole::File
     }
 }
 
@@ -519,10 +706,8 @@ fn descriptor_for_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<DocumentDescriptor> {
-    session
-        .source
-        .documents
-        .get(&session.source.project_document(relative_path.to_path_buf()))
+    document_id_for_workspace_path(session, relative_path)
+        .and_then(|document_id| session.source.documents.get(&document_id))
         .map(|document| document_descriptor(relative_path, document))
         .or_else(|| {
             absolute_project_path(session, relative_path)
@@ -657,6 +842,55 @@ fn absolute_project_path(
         return None;
     }
     Some(session.source.project_root().join(relative_path))
+}
+
+fn document_id_for_workspace_path(
+    session: &ProjectSession,
+    relative_path: &Utf8Path,
+) -> Option<dawn_language::identity::DocumentId> {
+    let absolute = absolute_project_path(session, relative_path)?;
+    let (module_id, module) = session
+        .source
+        .source_graph
+        .modules()
+        .iter()
+        .filter(|(_, module)| {
+            !matches!(
+                module.origin,
+                dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+            ) && absolute.starts_with(&module.root)
+        })
+        .max_by_key(|(_, module)| module.root.components().count())?;
+    let module_relative = absolute.strip_prefix(&module.root).ok()?;
+    let document_id = dawn_language::identity::DocumentId::new(
+        *module_id,
+        Utf8PathBuf::from(module_relative.as_str().replace('\\', "/")),
+    );
+    session
+        .source
+        .documents
+        .contains_key(&document_id)
+        .then_some(document_id)
+}
+
+fn workspace_path_for_document(
+    session: &ProjectSession,
+    document_id: &dawn_language::identity::DocumentId,
+) -> Option<Utf8PathBuf> {
+    let module = session
+        .source
+        .source_graph
+        .module(document_id.module_id())
+        .ok()?;
+    if matches!(
+        module.origin,
+        dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+    ) {
+        return None;
+    }
+    let absolute = module.root.join(document_id.path());
+    let relative = absolute.strip_prefix(session.source.project_root()).ok()?;
+    Some(Utf8PathBuf::from(relative.as_str().replace('\\', "/")))
 }
 
 fn valid_child_name(name: &str) -> bool {

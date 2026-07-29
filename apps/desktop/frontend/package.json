@@ -23,14 +23,18 @@
     "@lezer/highlight": "catalog:",
     "@radix-ui/react-alert-dialog": "catalog:",
     "@radix-ui/react-context-menu": "catalog:",
+    "@radix-ui/react-dialog": "catalog:",
     "@radix-ui/react-dropdown-menu": "catalog:",
+    "@radix-ui/react-tooltip": "catalog:",
     "@tauri-apps/api": "catalog:",
     "@xyflow/react": "catalog:",
+    "cmdk": "catalog:",
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-arborist": "catalog:",
     "react-colorful": "catalog:",
     "react-dom": "catalog:",
+    "use-resize-observer": "catalog:",
     "zustand": "catalog:"
   },
   "devDependencies": {

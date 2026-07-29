@@ -37,6 +37,7 @@ use dawn_language::sequence::{
     SequenceCompositionGraph, SequenceId, SequenceLayerId, automation_value_at,
 };
 use dawn_language::setup::SetupId;
+use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, validate_sequence};
 use dawn_language::values::{Color, DawnTime, Marks};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
@@ -44,6 +45,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+pub const MAX_GENERATED_EFFECTS: usize = 100_000;
+pub const MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER: usize = 4_096;
 
 fn next_render_cache_id() -> u64 {
     NEXT_RENDER_CACHE_ID.fetch_add(1, Ordering::Relaxed)
@@ -217,6 +221,9 @@ impl PreparedSequenceRenderer {
                 .ok_or_else(|| RenderError::MissingSequence {
                     sequence_id: sequence_id.clone(),
                 })?;
+        validate_sequence(project, sequence).map_err(|error| RenderError::BadGraph {
+            message: error.message,
+        })?;
         prepare_timing(sequence)?;
 
         let (elements, groups) = prepare_elements(project, tree)?;
@@ -636,6 +643,9 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 .ok_or_else(|| RenderError::MissingSequence {
                     sequence_id: sequence_id.clone(),
                 })?;
+        validate_sequence(project, sequence).map_err(|error| RenderError::BadGraph {
+            message: error.message,
+        })?;
         prepare_timing(sequence)?;
 
         let (elements, groups) = prepare_elements(project, tree)?;
@@ -782,7 +792,7 @@ fn prepare_effect_inst(
                         .or_insert_with(|| Arc::new(compiled.clone()))
                         .clone();
                     PreparedEffectImplementation::Dsl {
-                        bound_params: compiled.bind_params_cached(&params, context.bind_cache),
+                        bound_params: compiled.bind_params_cached(&params, context.bind_cache)?,
                         definition: compiled,
                     }
                 }
@@ -840,7 +850,7 @@ fn prepare_effect_inst(
                             .or_insert_with(|| Arc::new(compiled.clone()))
                             .clone();
                         let bound =
-                            compiled.bind_params_cached(&params, generator_context.bind_cache);
+                            compiled.bind_params_cached(&params, generator_context.bind_cache)?;
                         expand_generator(
                             &mut generator_context,
                             &compiled,
@@ -978,7 +988,7 @@ fn prepare_composition_graph(
                 let automation = automation_for_composition_node(context.sequence, &node.id);
                 let bound_params = match (&definition.implementation, automation.is_empty()) {
                     (OperatorImplementation::Dsl(compiled), true) => {
-                        Some(compiled.bind_params(&params))
+                        Some(compiled.bind_params(&params)?)
                     }
                     _ => None,
                 };
@@ -1172,6 +1182,14 @@ fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
     if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
         return Err(RenderError::InvalidTiming {
             reason: "duration must be positive and finite".to_string(),
+        });
+    }
+    let prepared_frames = duration_seconds * f64::from(sequence.frame_rate);
+    if !prepared_frames.is_finite() || prepared_frames.ceil() > MAX_SEQUENCE_FRAME_COUNT as f64 {
+        return Err(RenderError::InvalidTiming {
+            reason: format!(
+                "sequence exceeds the prepared-frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
+            ),
         });
     }
     Ok(())
@@ -1661,7 +1679,7 @@ fn automation_param(binding: &AutomationBinding) -> &Identifier {
 }
 
 const MAX_GENERATOR_DEPTH: usize = 4;
-const MAX_GENERATED_CHILDREN: usize = 1_000_000;
+const MAX_GENERATED_CHILDREN: usize = MAX_GENERATED_EFFECTS;
 
 #[derive(Clone, Debug)]
 struct GeneratorExpansion {
@@ -1841,7 +1859,7 @@ fn prepare_generated_child(
                 .entry(effect_id.clone())
                 .or_insert_with(|| Arc::new(definition_compiled.clone()))
                 .clone();
-            let bound_params = compiled.bind_params_cached(&child.params, context.bind_cache);
+            let bound_params = compiled.bind_params_cached(&child.params, context.bind_cache)?;
             match definition.kind {
                 EffectKind::Sample => {
                     context.effects.push(PreparedEffect {
@@ -2418,7 +2436,7 @@ fn render_graph_operator(
         let bound = if let Some(bound) = prepared_bound_params {
             bound
         } else {
-            dynamic_bound_params = compiled.bind_params_cached(params, &mut scratch.bind_cache);
+            dynamic_bound_params = compiled.bind_params_cached(params, &mut scratch.bind_cache)?;
             &dynamic_bound_params
         };
         let duration = renderer.duration_seconds;
@@ -2429,7 +2447,7 @@ fn render_graph_operator(
             cache,
             flat_pixel_index: 0,
             duration,
-            samples: Vec::new(),
+            samples: HashMap::new(),
             scratch,
         };
         for (flat_pixel_index, pixel) in target.iter().enumerate() {
@@ -2596,7 +2614,7 @@ struct GraphSignalSampler<'a> {
     cache: &'a mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
     flat_pixel_index: usize,
     duration: f64,
-    samples: Vec<(GraphRenderCacheKey, Arc<Vec<Color>>)>,
+    samples: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
     scratch: &'a mut SequenceRenderScratch,
 }
 
@@ -2621,15 +2639,18 @@ impl SignalSampler for GraphSignalSampler<'_> {
             node_index: node,
             frame_key: (seconds * 1_000_000.0).round() as i64,
         };
-        if let Some((_, colors)) = self
-            .samples
-            .iter()
-            .find(|(sample_key, _)| *sample_key == key)
-        {
+        if let Some(colors) = self.samples.get(&key) {
             return Ok(colors
                 .get(self.flat_pixel_index)
                 .copied()
                 .unwrap_or_else(black));
+        }
+        if self.samples.len() >= MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER {
+            return Err(RuntimeError {
+                message: format!(
+                    "Signal sampling exceeded the per-operator budget of {MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER} unique times"
+                ),
+            });
         }
         let colors =
             render_graph_node_with_scratch(self.renderer, node, seconds, self.cache, self.scratch)
@@ -2640,7 +2661,7 @@ impl SignalSampler for GraphSignalSampler<'_> {
             .get(self.flat_pixel_index)
             .copied()
             .unwrap_or_else(black);
-        self.samples.push((key, colors));
+        self.samples.insert(key, colors);
         Ok(color)
     }
 }
@@ -2786,7 +2807,7 @@ fn effect_implementation_at(
         apply_automation_params(effect.params.clone(), &effect.automation, sample_seconds)?;
     Ok(Some(match &effect.implementation {
         PreparedEffectImplementation::Dsl { definition, .. } => PreparedEffectImplementation::Dsl {
-            bound_params: definition.bind_params_cached(&params, bind_cache),
+            bound_params: definition.bind_params_cached(&params, bind_cache)?,
             definition: Arc::clone(definition),
         },
         PreparedEffectImplementation::Native { builtin, .. } => match builtin {

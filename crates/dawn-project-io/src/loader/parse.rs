@@ -9,6 +9,7 @@ pub(crate) fn parse_sequence_layer(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<SequenceLayer, LoadProjectError> {
+    require_allowed_mapping_keys(path, value, &["id", "name", "color", "enabled"], "layer")?;
     Ok(SequenceLayer {
         id: SequenceLayerId(u32_field(path, value, "id")?),
         name: string_field(path, value, "name")?.to_string(),
@@ -38,6 +39,7 @@ pub(crate) fn parse_automation_binding(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<AutomationBinding, LoadProjectError> {
+    require_allowed_mapping_keys(path, value, &["target", "mapping"], "automation binding")?;
     let target = parse_automation_target(path, required_field(path, value, "target")?)?;
     Ok(AutomationBinding {
         target,
@@ -49,6 +51,12 @@ pub(crate) fn parse_detached_automation_binding(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<DetachedAutomationBinding, LoadProjectError> {
+    require_allowed_mapping_keys(
+        path,
+        value,
+        &["target", "mapping", "reason"],
+        "detached automation binding",
+    )?;
     let target = parse_automation_target(path, required_field(path, value, "target")?)?;
     let reason = match string_field(path, value, "reason")? {
         "target_deleted" => AutomationDetachmentReason::TargetDeleted,
@@ -73,6 +81,12 @@ pub(crate) fn parse_automation_target(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<AutomationTarget, LoadProjectError> {
+    require_allowed_mapping_keys(
+        path,
+        value,
+        &["type", "effect_id", "node_id", "param"],
+        "automation target",
+    )?;
     Ok(match string_field(path, value, "type")? {
         "effect_param" => AutomationTarget::EffectParam {
             effect_id: EffectInstId(u32_field(path, value, "effect_id")?),
@@ -96,6 +110,12 @@ pub(crate) fn parse_automation_mapping(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<AutomationMapping, LoadProjectError> {
+    require_allowed_mapping_keys(
+        path,
+        value,
+        &["type", "min", "max", "values"],
+        "automation mapping",
+    )?;
     Ok(match string_field(path, value, "type")? {
         "float" => AutomationMapping::Float {
             min: f64_field(path, value, "min")?,
@@ -409,6 +429,36 @@ fn require_exact_mapping_keys(
     Ok(())
 }
 
+pub(crate) fn require_allowed_mapping_keys(
+    path: &Utf8Path,
+    value: &Value,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), LoadProjectError> {
+    let mapping = mapping(value).ok_or_else(|| LoadProjectError::InvalidDocument {
+        path: path.to_path_buf(),
+        range: source_range_for_value(path, value),
+        message: format!("{label} must be a mapping"),
+    })?;
+    for key in mapping.keys() {
+        let key = key
+            .as_str()
+            .ok_or_else(|| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: format!("{label} keys must be strings"),
+            })?;
+        if !allowed.contains(&key) {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: format!("{label} has an unknown field `{key}`"),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_import_document_path(document: &Utf8Path, value: &str) -> Result<(), LoadProjectError> {
     let path = Utf8Path::new(value);
     if value.is_empty()
@@ -558,21 +608,33 @@ pub(crate) fn parse_prop_definition(
 }
 
 pub(crate) fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError> {
+    require_allowed_mapping_keys(path, value, &["type", "points", "curve"], "curve")?;
     let points = sequence_values(path, value, "points")?
         .iter()
         .map(|point| {
+            require_allowed_mapping_keys(path, point, &["position", "value"], "curve point")?;
             let position = f64_field(path, point, "position")?;
             let value = f64_field(path, point, "value")?;
             Ok(CurvePoint { position, value })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Curve { points })
+    let curve = Curve { points };
+    curve
+        .validate()
+        .map_err(|error| LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, "points"),
+            message: format!("invalid curve: {error:?}"),
+        })?;
+    Ok(curve)
 }
 
 pub(crate) fn parse_gradient(path: &Utf8Path, value: &Value) -> Result<Gradient, LoadProjectError> {
+    require_allowed_mapping_keys(path, value, &["type", "stops", "gradient"], "gradient")?;
     let stops = sequence_values(path, value, "stops")?
         .iter()
         .map(|stop| {
+            require_allowed_mapping_keys(path, stop, &["position", "color"], "gradient stop")?;
             let position = f64_field(path, stop, "position")?;
             let color = parse_color(string_field(path, stop, "color")?).map_err(|error| {
                 with_yaml_location(
@@ -612,11 +674,37 @@ pub(crate) fn parse_scale3(value: &Value) -> Result<Scale3, LoadProjectError> {
 }
 
 pub(crate) fn parse_duration(value: &str) -> Result<DawnDuration, LoadProjectError> {
-    Ok(DawnDuration::from_seconds_f64(parse_seconds(value)?))
+    DawnDuration::try_from_seconds_f64(parse_seconds(value)?).map_err(|error| {
+        LoadProjectError::InvalidDocument {
+            path: Utf8PathBuf::from("<duration>"),
+            range: None,
+            message: match error {
+                dawn_language::values::SecondsError::NotFinite => {
+                    format!("duration must be finite: {value}")
+                }
+                dawn_language::values::SecondsError::Negative => {
+                    format!("duration must not be negative: {value}")
+                }
+            },
+        }
+    })
 }
 
 pub(crate) fn parse_duration_as_time(value: &str) -> Result<DawnTime, LoadProjectError> {
-    Ok(DawnTime::from_seconds_f64(parse_seconds(value)?))
+    DawnTime::try_from_seconds_f64(parse_seconds(value)?).map_err(|error| {
+        LoadProjectError::InvalidDocument {
+            path: Utf8PathBuf::from("<duration>"),
+            range: None,
+            message: match error {
+                dawn_language::values::SecondsError::NotFinite => {
+                    format!("duration must be finite: {value}")
+                }
+                dawn_language::values::SecondsError::Negative => {
+                    format!("duration must not be negative: {value}")
+                }
+            },
+        }
+    })
 }
 
 pub(crate) fn parse_seconds(value: &str) -> Result<f64, LoadProjectError> {
@@ -669,12 +757,38 @@ pub(crate) fn optional_field<'a>(value: &'a Value, key: &str) -> Option<&'a Valu
     mapping(value).and_then(|mapping| mapping.get(Value::String(key.to_string())))
 }
 
-pub(crate) fn optional_mapping<'a>(value: &'a Value, key: &str) -> Option<&'a Mapping> {
-    optional_field(value, key).and_then(mapping)
+pub(crate) fn optional_mapping<'a>(
+    path: &Utf8Path,
+    value: &'a Value,
+    key: &str,
+) -> Result<Option<&'a Mapping>, LoadProjectError> {
+    optional_field(value, key)
+        .map(|field| {
+            mapping(field).ok_or_else(|| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, key),
+                message: format!("field `{key}` must be a mapping"),
+            })
+        })
+        .transpose()
 }
 
-pub(crate) fn optional_sequence<'a>(value: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
-    optional_field(value, key).and_then(Value::as_sequence)
+pub(crate) fn optional_sequence<'a>(
+    path: &Utf8Path,
+    value: &'a Value,
+    key: &str,
+) -> Result<Option<&'a Vec<Value>>, LoadProjectError> {
+    optional_field(value, key)
+        .map(|field| {
+            field
+                .as_sequence()
+                .ok_or_else(|| LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, key),
+                    message: format!("field `{key}` must be a sequence"),
+                })
+        })
+        .transpose()
 }
 
 pub(crate) fn sequence_values<'a>(
