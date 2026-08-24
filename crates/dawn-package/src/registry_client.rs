@@ -9,8 +9,9 @@ use crate::{
     CacheStatus, CacheStore, Dependency, DeviceIdentityResponse, DeviceLoginRequest,
     DeviceStartResponse, DeviceTokenResponse, Lockfile, PackageError, PackageId, PackageManifest,
     PublishFinalizeRequest, PublishFinalizeResponse, PublishManagementAction, PublishStageRequest,
-    PublishStageResponse, RegistryDiscovery, RegistryDownloadResponse, RegistryRelease,
-    RegistryResolveResponse, ResolutionPin, resolve_registry_with_pins, sha256_hex,
+    PublishStageResponse, REGISTRY_PROTOCOL_VERSION, RegistryDiscovery, RegistryDownloadResponse,
+    RegistryRelease, RegistryResolveResponse, ResolutionPin, resolve_registry_with_pins,
+    sha256_hex,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,7 +56,7 @@ impl RegistryClient {
             http.get(discovery_url).send().map_err(registry_error)?,
             "registry discovery",
         )?;
-        if discovery.registry_version != 1 {
+        if discovery.registry_version != REGISTRY_PROTOCOL_VERSION {
             return Err(PackageError::Invalid(format!(
                 "registry protocol version {} is unsupported",
                 discovery.registry_version
@@ -135,7 +136,7 @@ impl RegistryClient {
     ) -> Result<DeviceStartResponse, PackageError> {
         self.post_device(
             &DeviceLoginRequest::Start {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
                 client_name: client_name.into(),
             },
             None,
@@ -150,7 +151,7 @@ impl RegistryClient {
             .http
             .post(self.device_login_url.clone())
             .json(&DeviceLoginRequest::Poll {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
                 device_code: device_code.to_string(),
             })
             .send()
@@ -169,7 +170,7 @@ impl RegistryClient {
     ) -> Result<DeviceTokenResponse, PackageError> {
         let token = self.post_device(
             &DeviceLoginRequest::Refresh {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
                 refresh_credential: refresh_credential.to_string(),
             },
             None,
@@ -183,7 +184,7 @@ impl RegistryClient {
             .http
             .post(self.device_login_url.clone())
             .json(&DeviceLoginRequest::Revoke {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
                 refresh_credential: refresh_credential.to_string(),
             })
             .send()
@@ -195,11 +196,11 @@ impl RegistryClient {
     pub fn identity(&self, access_token: &str) -> Result<DeviceIdentityResponse, PackageError> {
         let identity: DeviceIdentityResponse = self.post_device(
             &DeviceLoginRequest::WhoAmI {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
             },
             Some(access_token),
         )?;
-        if identity.registry_version != 1 {
+        if identity.registry_version != REGISTRY_PROTOCOL_VERSION {
             return Err(PackageError::Invalid(
                 "registry returned an unsupported identity response".to_string(),
             ));
@@ -218,7 +219,7 @@ impl RegistryClient {
                 .post(self.publish_stage_url.clone())
                 .bearer_auth(access_token)
                 .json(&PublishStageRequest {
-                    registry_version: 1,
+                    registry_version: REGISTRY_PROTOCOL_VERSION,
                     action: PublishManagementAction::Stage,
                     original_filename: filename.to_string(),
                     size_bytes: archive.len() as u64,
@@ -227,7 +228,7 @@ impl RegistryClient {
                 .map_err(registry_error)?,
             "publish staging response",
         )?;
-        if stage.registry_version != 1 {
+        if stage.registry_version != REGISTRY_PROTOCOL_VERSION {
             return Err(PackageError::Invalid(
                 "registry returned an unsupported publish staging response".to_string(),
             ));
@@ -248,14 +249,14 @@ impl RegistryClient {
                 .post(self.publish_finalize_url.clone())
                 .bearer_auth(access_token)
                 .json(&PublishFinalizeRequest {
-                    registry_version: 1,
+                    registry_version: REGISTRY_PROTOCOL_VERSION,
                     upload_id: stage.upload_id,
                 })
                 .send()
                 .map_err(registry_error)?,
             "publish finalization response",
         )?;
-        if finalized.registry_version != 1 {
+        if finalized.registry_version != REGISTRY_PROTOCOL_VERSION {
             return Err(PackageError::Invalid(
                 "registry returned an unsupported publish finalization response".to_string(),
             ));
@@ -351,7 +352,7 @@ impl RegistryClient {
                 self.http.get(endpoint).send().map_err(registry_error)?,
                 "release download metadata",
             )?;
-            if download.registry_version != 1
+            if download.registry_version != REGISTRY_PROTOCOL_VERSION
                 || download.package != package
                 || download.version != locked.version
                 || download.module_id != locked.module_id
@@ -431,7 +432,7 @@ impl RegistryClient {
             self.http.get(endpoint).send().map_err(registry_error)?,
             "package metadata",
         )?;
-        if response.registry_version != 1 || response.package != *package {
+        if response.registry_version != REGISTRY_PROTOCOL_VERSION || response.package != *package {
             return Err(PackageError::Invalid(format!(
                 "registry returned mismatched metadata for `{package}`"
             )));
@@ -559,7 +560,7 @@ fn locked_package_install_order(lockfile: &Lockfile) -> Result<Vec<PackageId>, P
 }
 
 fn validate_token_response(token: &DeviceTokenResponse) -> Result<(), PackageError> {
-    if token.registry_version != 1
+    if token.registry_version != REGISTRY_PROTOCOL_VERSION
         || token.access_token.is_empty()
         || token.refresh_credential.is_empty()
         || token.expires_in == 0

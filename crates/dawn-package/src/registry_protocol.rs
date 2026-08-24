@@ -4,6 +4,8 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const REGISTRY_PROTOCOL_VERSION: u8 = 1;
+
 use super::{
     Dependency, LANGUAGE_VERSION, MAX_ARCHIVE_BYTES, MAX_EXPANDED_BYTES, MAX_FILES, PackageError,
     PackageId, ReleaseExportGroup, current_dawn_version, is_bounded_version_requirement,
