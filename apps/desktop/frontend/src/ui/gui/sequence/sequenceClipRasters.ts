@@ -43,17 +43,15 @@ export function useSequenceClipRasters(
 ): ClipRasterState {
   const projectRevision = useAppStore((store) => store.snapshot?.projectRevision ?? null);
   const requestKey = `${document.path}:${document.objectKey}`;
-  const rasterSettings = settings?.effectRaster ?? {
-    renderScale: 1,
-    maxColumns: 256,
-    maxRows: 50,
-    minFrameStride: 4
-  };
-  const rasterSettingsKey = `${rasterSettings.renderScale}:${rasterSettings.maxColumns}:${rasterSettings.maxRows}:${rasterSettings.minFrameStride}`;
+  const rasterSettings = settings?.effectRaster ?? null;
+  const rasterSettingsKey = rasterSettings === null
+    ? "unavailable"
+    : `${rasterSettings.renderScale}:${rasterSettings.maxColumns}:${rasterSettings.maxRows}:${rasterSettings.minFrameStride}`;
   const rasterRequestKey = `${requestKey}:${rasterSettingsKey}`;
   const effectIds = useMemo(() => document.effects.map((effect) => effect.id), [document.effects]);
   const effectIdsKey = effectIds.join(",");
   const visibleRequestItems = useMemo(() => {
+    if (rasterSettings === null) return [];
     const dpr = (window.devicePixelRatio || 1) * rasterSettings.renderScale;
     const displayRowCount = Math.max(1, Math.ceil(laneHeight * dpr));
     const items: ClipRasterRequestItem[] = [];
@@ -71,7 +69,7 @@ export function useSequenceClipRasters(
       requested.add(clip.effect.id);
     }
     return items;
-  }, [document.frameRate, laneHeight, rasterSettings.maxColumns, rasterSettings.minFrameStride, rasterSettings.renderScale, visibleClips]);
+  }, [document.frameRate, laneHeight, rasterSettings, visibleClips]);
   const visibleRequestItemsKey = visibleRequestItems.map((item) => `${item.effectId}:${item.displayColumnCount}:${item.requestedColumns}:${item.requestedRows}`).join(",");
   const visibleRequestItemsRef = useRef<ClipRasterRequestItem[]>(visibleRequestItems);
   const rasters = useRef<Map<string, DecodedClipRaster>>(new Map());
@@ -97,7 +95,7 @@ export function useSequenceClipRasters(
   }, [projectRevision]);
 
   useEffect(() => {
-    if (projectRevision === null) return;
+    if (projectRevision === null || rasterSettings === null) return;
     const abortController = new AbortController();
     let pollTimeout: number | null = null;
     let requestTimeout: number | null = null;
@@ -267,7 +265,7 @@ export function useSequenceClipRasters(
       window.clearTimeout(requestTimeout);
       if (decodeFrame !== null) window.cancelAnimationFrame(decodeFrame);
     };
-  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, rasterRequestKey, rasterSettings.renderScale, rasterSettingsKey, visibleRequestItemsKey]);
+  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, rasterRequestKey, rasterSettings, rasterSettingsKey, visibleRequestItemsKey]);
 
   return state.requestKey === rasterRequestKey ? state : {
     requestKey: rasterRequestKey,
