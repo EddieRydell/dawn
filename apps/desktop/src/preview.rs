@@ -79,7 +79,7 @@ impl PreviewWindowService {
                 if closing_for_main_shutdown.load(Ordering::Acquire) {
                     return;
                 }
-                let state = close_app.state::<crate::state::DesktopState>();
+                let state = close_app.state::<crate::desktop_state::DesktopState>();
                 let geometry = close_app
                     .get_window(PREVIEW_LABEL)
                     .and_then(|window| crate::persistence::read_window_state(&window));
@@ -98,7 +98,7 @@ impl PreviewWindowService {
                 close_flag.store(false, Ordering::Release);
             }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
-                let state = close_app.state::<crate::state::DesktopState>();
+                let state = close_app.state::<crate::desktop_state::DesktopState>();
                 let geometry = close_app
                     .get_window(PREVIEW_LABEL)
                     .and_then(|window| crate::persistence::read_window_state(&window));
@@ -736,7 +736,7 @@ fn run_preview_loop(
             Err(_) => break,
         };
 
-        let state = app.state::<crate::state::DesktopState>();
+        let state = app.state::<crate::desktop_state::DesktopState>();
         match state.preview_scene_revision() {
             Some(revision)
                 if cached_scene

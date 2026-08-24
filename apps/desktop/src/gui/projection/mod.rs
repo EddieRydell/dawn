@@ -183,7 +183,8 @@ pub(super) fn project_sequence(
             control_clips,
             composition_graph,
             automation_clips: automation_clips(sequence),
-            degraded: false,
+            mode: crate::dto::GuiDocumentMode::Editable,
+            recovery_items: Vec::new(),
         },
     }
 }

@@ -13,9 +13,13 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
     <Tooltip.Provider delayDuration={THEME_METRICS.tooltipDelayMs}>
       <footer className="status-bar">
         <StatusChip
-          label={projectName}
-          tooltip={snapshot.projectRoot ?? "No project is open"}
+          label={snapshot.projectHealth === "recovery" ? `${projectName} · Recovery` : projectName}
+          tooltip={projectHealthTooltip(snapshot)}
           icon={<FolderOpen size={THEME_METRICS.iconSizeSmall} />}
+          tone={`project-health-${snapshot.projectHealth}`}
+          {...(snapshot.projectHealth === "recovery"
+            ? { onClick: () => { focusSidebar("problems"); } }
+            : {})}
         />
         <StatusChip
           label={packageLabel(snapshot.package.readiness)}
@@ -44,6 +48,13 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
       </footer>
     </Tooltip.Provider>
   );
+}
+
+function projectHealthTooltip(snapshot: AppSnapshot): string {
+  if (snapshot.projectHealth === "recovery") {
+    return "The project has model-blocking errors. Text, Search, Explorer, and Problems remain available.";
+  }
+  return snapshot.projectRoot ?? "No project is open";
 }
 
 function StatusChip({

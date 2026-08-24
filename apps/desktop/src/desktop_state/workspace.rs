@@ -7,10 +7,10 @@ use dawn_project_io::{
 };
 
 use super::{
-    DesktopState, FsEntryKind, PendingOperatorRewriteKind, absolute_project_path,
-    descriptor_for_path, document_id_for_workspace_path, editor_buffer_for_path, lock_unpoisoned,
-    path_matches_or_is_child, project_diagnostic, project_path_is_structural, upsert_tab,
-    valid_child_name,
+    DesktopState, FsEntryKind, LoadedProject, PendingOperatorRewriteKind, absolute_project_path,
+    absolute_root_path, descriptor_for_path, editor_buffer_for_path, lock_unpoisoned,
+    path_matches_or_is_child, project_diagnostic, recovery_descriptor_for_path,
+    recovery_editor_buffer, upsert_tab, valid_child_name,
 };
 use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
 use crate::dto::{
@@ -83,22 +83,30 @@ impl DesktopState {
     }
 
     pub fn open_file_path(&self, path: &str) -> AppSnapshot {
-        let Some(project) = self.project_session() else {
-            return self.snapshot();
-        };
         let relative_path = Utf8PathBuf::from(path);
-        let Some(buffer) = editor_buffer_for_path(&project, &relative_path) else {
+        let (buffer, descriptor) = match &*lock_unpoisoned(&self.project) {
+            LoadedProject::Ready(project) => (
+                editor_buffer_for_path(project, &relative_path),
+                descriptor_for_path(project, &relative_path),
+            ),
+            LoadedProject::Recovery(recovery) => (
+                recovery_editor_buffer(recovery, &relative_path),
+                recovery_descriptor_for_path(recovery, &relative_path),
+            ),
+            LoadedProject::Closed => (None, None),
+        };
+        let Some(buffer) = buffer else {
             return self.snapshot_with_error(
                 "file.open",
                 path,
-                "File is not part of the loaded project",
+                "File is not part of the open project",
             );
         };
-        let Some(descriptor) = descriptor_for_path(&project, &relative_path) else {
+        let Some(descriptor) = descriptor else {
             return self.snapshot_with_error(
                 "file.open",
                 path,
-                "File is not part of the loaded project",
+                "File is not part of the open project",
             );
         };
         self.update_snapshot(|snapshot| {
@@ -221,7 +229,8 @@ impl DesktopState {
         let root = candidate.source.project_root().to_string();
         self.persistence
             .remap_project_paths(&root, &request.source, &request.destination)?;
-        *lock_unpoisoned(&self.project) = Some(std::sync::Arc::new(candidate.clone()));
+        *lock_unpoisoned(&self.project) =
+            LoadedProject::Ready(std::sync::Arc::new(candidate.clone()));
         lock_unpoisoned(&self.gui_history).clear();
         *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         let entries = super::workspace_entries(&candidate);
@@ -272,16 +281,23 @@ impl DesktopState {
     }
 
     pub fn set_active_file_path(&self, path: &str) -> AppSnapshot {
-        let Some(project) = self.project_session() else {
-            return self.snapshot();
-        };
         let relative_path = Utf8PathBuf::from(path);
-        let buffer = self
+        let current_buffer = self
             .snapshot()
             .tabs
             .into_iter()
-            .find(|tab| tab.path == path)
-            .or_else(|| editor_buffer_for_path(&project, &relative_path));
+            .find(|tab| tab.path == path);
+        let (buffer, descriptor) = match &*lock_unpoisoned(&self.project) {
+            LoadedProject::Ready(project) => (
+                current_buffer.or_else(|| editor_buffer_for_path(project, &relative_path)),
+                descriptor_for_path(project, &relative_path),
+            ),
+            LoadedProject::Recovery(recovery) => (
+                current_buffer.or_else(|| recovery_editor_buffer(recovery, &relative_path)),
+                recovery_descriptor_for_path(recovery, &relative_path),
+            ),
+            LoadedProject::Closed => (None, None),
+        };
         let Some(buffer) = buffer else {
             return self.snapshot_with_error(
                 "file.activate",
@@ -289,7 +305,7 @@ impl DesktopState {
                 "File is not part of the loaded project",
             );
         };
-        let Some(descriptor) = descriptor_for_path(&project, &relative_path) else {
+        let Some(descriptor) = descriptor else {
             return self.snapshot_with_error(
                 "file.activate",
                 path,
@@ -326,6 +342,12 @@ impl DesktopState {
                 snapshot.active_document_descriptor = self
                     .project_session()
                     .and_then(|project| descriptor_for_path(&project, Utf8Path::new(&next.path)));
+                if snapshot.active_document_descriptor.is_none() {
+                    snapshot.active_document_descriptor =
+                        self.project_recovery().and_then(|recovery| {
+                            recovery_descriptor_for_path(&recovery, Utf8Path::new(&next.path))
+                        });
+                }
                 snapshot.active_buffer = Some(next);
             } else {
                 snapshot.active_file = None;
@@ -349,12 +371,15 @@ impl DesktopState {
                 self.project_session().map_or_else(
                     || check_document_text(Utf8Path::new(path), &text),
                     |project| {
-                        document_id_for_workspace_path(&project, Utf8Path::new(path)).map_or_else(
-                            || check_document_text(Utf8Path::new(path), &text),
-                            |document_id| {
-                                check_project_document_text(&project, &document_id, &text)
-                            },
-                        )
+                        project
+                            .source
+                            .document_for_workspace_path(Utf8Path::new(path))
+                            .map_or_else(
+                                || check_document_text(Utf8Path::new(path), &text),
+                                |document_id| {
+                                    check_project_document_text(&project, &document_id, &text)
+                                },
+                            )
                     },
                 )
             })
@@ -409,23 +434,27 @@ impl DesktopState {
         let Some(buffer) = snapshot.active_buffer.as_ref() else {
             return Err("No active text buffer to autosave".to_string());
         };
-        if is_operator_document(&buffer.path) {
+        if is_operator_document(&buffer.path) && self.project_session().is_some() {
             return Ok(snapshot);
         }
-        let Some(project) = self.project_session() else {
-            return Err("No project is open".to_string());
-        };
+        let root = self
+            .project_root_path()
+            .ok_or_else(|| "No project is open".to_string())?;
         let relative_path = Utf8PathBuf::from(&buffer.path);
-        let Some(path) = absolute_project_path(&project, &relative_path) else {
-            return Err("File path is outside the loaded project".to_string());
+        let Some(path) = absolute_root_path(&root, &relative_path) else {
+            return Err("File path is outside the open project".to_string());
         };
         {
             let _filesystem = lock_unpoisoned(&self.filesystem);
             fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
         }
         self.after_file_saved(&buffer.path);
-        let root = project.source.project_root();
-        Ok(self.apply_project_refresh_check(root.as_str(), check_package(root)))
+        if !self.schedule_project_analysis(root) {
+            return Err("Project analysis worker is unavailable".to_string());
+        }
+        Ok(self.update_snapshot(|snapshot| {
+            snapshot.status = format!("Saved {}; analyzing project", buffer.path);
+        }))
     }
 
     pub fn set_editor_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
@@ -439,18 +468,20 @@ impl DesktopState {
         let Some(buffer) = snapshot.active_buffer else {
             return snapshot;
         };
-        let Some(project) = self.project_session() else {
+        let Some(root) = self.project_root_path() else {
             return self.snapshot();
         };
-        match self.save_operator_draft(&buffer.path, &buffer.text) {
-            Ok(Some(snapshot)) => return snapshot,
-            Ok(None) => {}
-            Err(error) => {
-                return self.snapshot_with_error("file.save", &buffer.path, &error);
+        if self.project_session().is_some() {
+            match self.save_operator_draft(&buffer.path, &buffer.text) {
+                Ok(Some(snapshot)) => return snapshot,
+                Ok(None) => {}
+                Err(error) => {
+                    return self.snapshot_with_error("file.save", &buffer.path, &error);
+                }
             }
         }
         let relative_path = Utf8PathBuf::from(&buffer.path);
-        let Some(path) = absolute_project_path(&project, &relative_path) else {
+        let Some(path) = absolute_root_path(&root, &relative_path) else {
             return self.snapshot_with_error(
                 "file.save",
                 &buffer.path,
@@ -464,8 +495,7 @@ impl DesktopState {
         match result {
             Ok(()) => {
                 self.after_file_saved(&buffer.path);
-                let root = project.source.project_root();
-                self.apply_project_refresh_check(root.as_str(), check_package(root))
+                self.apply_project_refresh_check(root.as_str(), check_package(&root))
             }
             Err(error) => self.snapshot_with_error("file.save", &buffer.path, &error.to_string()),
         }
@@ -575,7 +605,7 @@ impl DesktopState {
             return self.snapshot();
         };
         let relative_path = Utf8PathBuf::from(path);
-        if project_path_is_structural(&project, &relative_path) {
+        if project.source.is_structural_workspace_path(&relative_path) {
             return self.snapshot_with_error(
                 "file.delete",
                 path,
@@ -604,11 +634,10 @@ impl DesktopState {
     }
 
     pub fn reload_project(&self) -> AppSnapshot {
-        let Some(project) = self.project_session() else {
+        let Some(root) = self.project_root_path() else {
             return self.snapshot();
         };
-        let root = project.source.project_root();
-        self.apply_project_refresh_check(root.as_str(), check_package(root))
+        self.apply_project_refresh_check(root.as_str(), check_package(&root))
     }
 }
 

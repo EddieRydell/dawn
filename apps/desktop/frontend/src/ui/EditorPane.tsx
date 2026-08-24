@@ -10,13 +10,13 @@ import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands, setCurrentGuiRequest } from "../api";
 import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange, WorkspaceLayoutState } from "../types";
-import { commandRegistry } from "../commandRegistry";
+import { commandRegistry, FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
 import { effectiveEditorViewMode } from "../editorViewMode";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
 import { THEME_METRICS } from "../theme";
-import { NAVIGATE_TO_TEXT_EVENT, type TextNavigation } from "../workspace/navigation";
+import { NAVIGATE_TO_TEXT_EVENT, navigateToText, type TextNavigation } from "../workspace/navigation";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
@@ -59,6 +59,8 @@ export function EditorPane({
   const nextGuiObjectKey = activeGuiRequest?.objectKey ?? null;
   const activeSequenceDocument =
     viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
+  const editableSequenceDocument =
+    activeSequenceDocument?.mode === "editable" ? activeSequenceDocument : null;
   const sequenceTransport = useSequenceTransport(snapshot.audioTransport);
   const activeSequenceAudio = activeSequenceDocument?.audio ?? null;
   const activeSequenceAudioKey =
@@ -210,6 +212,9 @@ export function EditorPane({
             }
             const text = update.state.doc.toString();
             setLocalText(text);
+            if (activePath !== null) {
+              scheduleDocumentAnalysis(activePath, text);
+            }
             if (activePath !== null && snapshot.settings.autosaveTextEdits) {
               scheduleAutosave(activePath, text);
             }
@@ -286,7 +291,7 @@ export function EditorPane({
   }
 
   return (
-    <section className={`editor-shell ${activeSequenceDocument !== null ? "has-editor-toolbar" : ""} ${activeConflicted ? "has-conflict-banner" : ""}`}>
+    <section className={`editor-shell ${editableSequenceDocument !== null ? "has-editor-toolbar" : ""} ${activeConflicted ? "has-conflict-banner" : ""}`}>
       <div className="tab-strip">
         {snapshot.tabs.map((tab) => (
           <button
@@ -308,10 +313,38 @@ export function EditorPane({
           </button>
         ))}
       </div>
-      {activeSequenceDocument !== null && (
+      {snapshot.projectHealth === "recovery" && (
+        <div className="recovery-banner">
+          <span>The project model has errors. GUI views are read-only; text editing and Problems remain available.</span>
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent(FOCUS_SIDEBAR_EVENT, { detail: "problems" }));
+            }}
+          >
+            Open Problems
+          </button>
+          {activePath !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                const diagnostic = snapshot.diagnostics.find((item) =>
+                  item.path === activePath
+                  || item.path.endsWith(`/${activePath}`)
+                  || item.path.endsWith(`\\${activePath}`)
+                );
+                void navigateToText(activePath, diagnostic?.range ?? null);
+              }}
+            >
+              Edit Text
+            </button>
+          )}
+        </div>
+      )}
+      {editableSequenceDocument !== null && (
         <div className="editor-toolbar">
           <SequenceTransportControls
-            document={activeSequenceDocument}
+            document={editableSequenceDocument}
             transport={sequenceTransport}
             previewOpen={snapshot.previewOpen}
             liveOutput={snapshot.liveOutput}
@@ -571,8 +604,28 @@ function EditorScrollbar({
 }
 
 let autosaveTimer: number | undefined;
+let documentAnalysisTimer: number | undefined;
 let editorViewStateTimer: number | undefined;
 let autosaveQueue = Promise.resolve();
+let documentAnalysisQueue = Promise.resolve();
+
+function scheduleDocumentAnalysis(path: string, text: string) {
+  window.clearTimeout(documentAnalysisTimer);
+  documentAnalysisTimer = window.setTimeout(() => {
+    documentAnalysisQueue = documentAnalysisQueue
+      .catch(() => undefined)
+      .then(async () => {
+        const current = useAppStore.getState();
+        if (current.snapshot?.activeFile !== path || current.localText !== text) return;
+        const snapshot = await commands.updateActiveText(text);
+        useAppStore.getState().setSnapshot(snapshot, "command", true);
+        useAppStore.getState().setError(null);
+      })
+      .catch((error: unknown) => {
+        useAppStore.getState().setError(String(error));
+      });
+  }, THEME_METRICS.documentAnalysisDelayMs);
+}
 
 function scheduleAutosave(path: string, text: string) {
   window.clearTimeout(autosaveTimer);
@@ -580,16 +633,36 @@ function scheduleAutosave(path: string, text: string) {
     autosaveQueue = autosaveQueue
       .catch(() => undefined)
       .then(async () => {
+        await documentAnalysisQueue.catch(() => undefined);
         const current = useAppStore.getState();
         if (current.snapshot?.activeFile !== path || current.localText !== text) return;
         const snapshot = await commands.autosaveActiveText(path, text);
         useAppStore.getState().setSnapshot(snapshot, "command", true);
         useAppStore.getState().setError(null);
+        await refreshAfterProjectAnalysis(path, snapshot.projectRevision);
       })
       .catch((error: unknown) => {
         useAppStore.getState().setError(String(error));
       });
   }, 450);
+}
+
+async function refreshAfterProjectAnalysis(path: string, projectRevision: number) {
+  for (const delayMultiplier of [1, 2, 4, 8]) {
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, THEME_METRICS.projectAnalysisPollDelayMs * delayMultiplier);
+    });
+    const current = useAppStore.getState();
+    if (current.snapshot?.activeFile !== path) return;
+    const snapshot = await commands.getSnapshot();
+    if (
+      snapshot.projectRevision !== projectRevision
+      || !snapshot.status.includes("analyzing project")
+    ) {
+      useAppStore.getState().setSnapshot(snapshot, "command", true);
+      return;
+    }
+  }
 }
 
 function scheduleEditorViewStateSave(path: string, state: PersistedEditorViewState) {

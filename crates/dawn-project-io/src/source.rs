@@ -59,6 +59,57 @@ impl SourceProject {
             .map(|module| module.root.join(document.path()))
     }
 
+    pub fn document_for_workspace_path(&self, relative_path: &Utf8Path) -> Option<DocumentId> {
+        let absolute = self.project_root().join(relative_path);
+        let (module_id, module) = self
+            .source_graph
+            .modules()
+            .iter()
+            .filter(|(_, module)| {
+                !matches!(
+                    module.origin,
+                    dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+                ) && absolute.starts_with(&module.root)
+            })
+            .max_by_key(|(_, module)| module.root.components().count())?;
+        let module_relative = absolute.strip_prefix(&module.root).ok()?;
+        let document_id = DocumentId::new(*module_id, module_relative.to_path_buf());
+        self.documents
+            .contains_key(&document_id)
+            .then_some(document_id)
+    }
+
+    pub fn workspace_path_for_document(&self, document: &DocumentId) -> Option<Utf8PathBuf> {
+        let module = self.module(document.module_id())?;
+        if matches!(
+            module.origin,
+            dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+        ) {
+            return None;
+        }
+        let absolute = module.root.join(document.path());
+        let relative = absolute.strip_prefix(self.project_root()).ok()?;
+        Some(relative.to_path_buf())
+    }
+
+    pub fn is_structural_workspace_path(&self, path: &Utf8Path) -> bool {
+        self.entrypoint
+            .iter()
+            .chain(
+                self.documents
+                    .values()
+                    .flat_map(|document| document.imports().iter())
+                    .flat_map(|edge| edge.targets().iter()),
+            )
+            .filter_map(|document_id| self.workspace_path_for_document(document_id))
+            .any(|document_path| {
+                document_path == path
+                    || document_path
+                        .strip_prefix(path)
+                        .is_ok_and(|suffix| !suffix.as_str().is_empty())
+            })
+    }
+
     pub fn project_document(&self, path: Utf8PathBuf) -> DocumentId {
         DocumentId::new(self.project_module_id(), path)
     }

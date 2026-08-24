@@ -60,6 +60,8 @@ pub(crate) fn dsl_diagnostic(
         severity: IoDiagnosticSeverity::Error,
         code,
         message: diagnostic.message,
+        detail: None,
+        related: Vec::new(),
     }
 }
 
@@ -71,6 +73,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::DawnLoad,
             message: "invalid entrypoint".to_string(),
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::Io { path, source } => IoDiagnostic {
             path,
@@ -78,6 +82,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::IoRead,
             message: source.to_string(),
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::ParseYaml {
             path,
@@ -89,6 +95,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::YamlParse,
             message,
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::InvalidDocument {
             path,
@@ -100,6 +108,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::DawnLoad,
             message,
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::InvalidReference {
             path,
@@ -111,6 +121,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::DawnReference,
             message: format!("invalid reference {reference}"),
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::InvalidEffect { path, diagnostics } => IoDiagnostic {
             path,
@@ -122,6 +134,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
                 .map(|diagnostic| diagnostic.message)
                 .collect::<Vec<_>>()
                 .join(", "),
+            detail: None,
+            related: Vec::new(),
         },
         LoadProjectError::InvalidOperator { path, diagnostics } => IoDiagnostic {
             path,
@@ -133,6 +147,8 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
                 .map(|diagnostic| diagnostic.message)
                 .collect::<Vec<_>>()
                 .join(", "),
+            detail: None,
+            related: Vec::new(),
         },
     }
 }

@@ -9,6 +9,7 @@ pub struct AppSnapshot {
     pub workspace_layout: WorkspaceLayoutState,
     pub workspace_explorer: WorkspaceExplorerState,
     pub project_root: Option<String>,
+    pub project_health: ProjectHealth,
     pub project_revision: u32,
     pub project_entries: Vec<WorkspaceEntry>,
     pub tabs: Vec<EditorBuffer>,
@@ -24,6 +25,14 @@ pub struct AppSnapshot {
     pub live_output: LiveOutputSnapshot,
     pub pending_operator_rewrite: Option<PendingOperatorRewrite>,
     pub package: PackageStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectHealth {
+    Closed,
+    Ready,
+    Recovery,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -738,6 +747,26 @@ impl From<&SourceObjectKind> for ObjectKind {
     }
 }
 
+impl ObjectKind {
+    pub(crate) fn document_view(&self) -> Option<DocumentViewId> {
+        match self {
+            Self::Setup => Some(DocumentViewId::Setup),
+            Self::Preview => Some(DocumentViewId::Preview),
+            Self::Prop => Some(DocumentViewId::Prop),
+            Self::Sequence => Some(DocumentViewId::Sequence),
+            Self::Project
+            | Self::Controller
+            | Self::ElementTree
+            | Self::FixtureProfile
+            | Self::Patch
+            | Self::Curve
+            | Self::Gradient
+            | Self::Effect
+            | Self::Operator => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SequenceEffectParamKind {
@@ -805,6 +834,26 @@ pub enum WorkspaceEntryRole {
     Asset,
     PathDependency,
     File,
+}
+
+pub(crate) fn workspace_role_for_source_object(kind: &SourceObjectKind) -> WorkspaceEntryRole {
+    match kind {
+        SourceObjectKind::Project => WorkspaceEntryRole::Project,
+        SourceObjectKind::Setup => WorkspaceEntryRole::Setup,
+        SourceObjectKind::PreviewLayout | SourceObjectKind::PropDefinition => {
+            WorkspaceEntryRole::Layout
+        }
+        SourceObjectKind::FixtureProfile => WorkspaceEntryRole::Fixture,
+        SourceObjectKind::Patch => WorkspaceEntryRole::Patch,
+        SourceObjectKind::Curve => WorkspaceEntryRole::Curve,
+        SourceObjectKind::Gradient => WorkspaceEntryRole::Gradient,
+        SourceObjectKind::Sequence => WorkspaceEntryRole::Sequence,
+        SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => {
+            WorkspaceEntryRole::Effect
+        }
+        SourceObjectKind::OperatorDefinition => WorkspaceEntryRole::Operator,
+        SourceObjectKind::Controller | SourceObjectKind::ElementTree => WorkspaceEntryRole::File,
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Type)]
@@ -1169,6 +1218,16 @@ pub struct ProjectDiagnostic {
     pub severity: DiagnosticSeverity,
     pub code: String,
     pub message: String,
+    pub detail: Option<String>,
+    pub related: Vec<RelatedDiagnosticLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedDiagnosticLocation {
+    pub path: String,
+    pub range: Option<TextRange>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1248,7 +1307,62 @@ pub struct SequenceGuiDocument {
     pub control_clips: Vec<SequenceControlClip>,
     pub composition_graph: SequenceCompositionGraph,
     pub automation_clips: Vec<SequenceAutomationClip>,
-    pub degraded: bool,
+    pub mode: GuiDocumentMode,
+    pub recovery_items: Vec<InvalidSequencePlaceholder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GuiDocumentMode {
+    Editable,
+    Recovery,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct InvalidSequencePlaceholder {
+    pub kind: InvalidSequencePlaceholderKind,
+    pub id: String,
+    pub placement: InvalidSequencePlacement,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum InvalidSequencePlaceholderKind {
+    Effect,
+    AutomationClip,
+    ControlClip,
+    GraphNode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum InvalidSequencePlacement {
+    Timeline {
+        start_seconds: f64,
+        duration_seconds: f64,
+        lane: InvalidSequenceLane,
+    },
+    Graph {
+        x: f64,
+        y: f64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum InvalidSequenceLane {
+    Layer { layer_id: u32 },
+    Lane { lane_index: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

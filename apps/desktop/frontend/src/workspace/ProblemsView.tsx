@@ -17,7 +17,21 @@ export function ProblemsView({ snapshot }: { snapshot: AppSnapshot }) {
       group.push(diagnostic);
       values.set(path, group);
     }
-    return [...values.entries()];
+    return [...values.entries()].map(([path, diagnostics]) => [
+      path,
+      [...diagnostics].sort((left, right) => {
+        const leftPosition = left.range?.start ?? {
+          line: Number.MAX_SAFE_INTEGER,
+          character: Number.MAX_SAFE_INTEGER
+        };
+        const rightPosition = right.range?.start ?? {
+          line: Number.MAX_SAFE_INTEGER,
+          character: Number.MAX_SAFE_INTEGER
+        };
+        return leftPosition.line - rightPosition.line
+          || leftPosition.character - rightPosition.character;
+      })
+    ] as const);
   }, [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]);
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = snapshot.diagnostics.length - errors;
@@ -34,22 +48,38 @@ export function ProblemsView({ snapshot }: { snapshot: AppSnapshot }) {
             {diagnostics.map((diagnostic, index) => {
               const Icon = diagnostic.severity === "error" ? CircleX : AlertTriangle;
               return (
-                <button
-                  type="button"
-                  key={`${diagnostic.code}:${index}`}
-                  onClick={() => void navigateToText(path, diagnostic.range)}
-                >
-                  <Icon size={THEME_METRICS.iconSizeSmall} />
-                  <span>
-                    {diagnostic.message}
-                    <small>
-                      {diagnostic.code}
-                      {diagnostic.range !== null
-                        ? ` · ${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`
+                <div className="problem-entry" key={`${diagnostic.code}:${index}`}>
+                  <button
+                    type="button"
+                    className="problem-primary-location"
+                    onClick={() => void navigateToText(path, diagnostic.range)}
+                  >
+                    <Icon size={THEME_METRICS.iconSizeSmall} />
+                    <span>
+                      {diagnostic.message}
+                      {diagnostic.detail !== null && <em>{diagnostic.detail}</em>}
+                      <small>
+                        {diagnostic.code}
+                        {diagnostic.range !== null
+                          ? ` · ${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1}`
+                          : ""}
+                      </small>
+                    </span>
+                  </button>
+                  {diagnostic.related.map((related, relatedIndex) => (
+                    <button
+                      type="button"
+                      className="problem-related-location"
+                      key={`${related.path}:${relatedIndex}`}
+                      onClick={() => void navigateToText(related.path, related.range)}
+                    >
+                      {related.message} · {related.path}
+                      {related.range !== null
+                        ? `:${related.range.start.line + 1}:${related.range.start.character + 1}`
                         : ""}
-                    </small>
-                  </span>
-                </button>
+                    </button>
+                  ))}
+                </div>
               );
             })}
           </section>

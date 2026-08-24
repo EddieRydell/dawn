@@ -1,4 +1,4 @@
-mod parse;
+pub(crate) mod parse;
 mod resolve;
 
 pub(crate) use parse::mapping;

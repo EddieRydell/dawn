@@ -16,10 +16,9 @@ impl DesktopState {
         &self,
         request: ProjectSearchRequest,
     ) -> Result<ProjectSearchResponse, String> {
-        let project = self
-            .project_session()
+        let root = self
+            .project_root_path()
             .ok_or_else(|| "No project is open.".to_string())?;
-        let root = project.source.project_root();
         let open_buffers = self
             .snapshot()
             .tabs
@@ -42,7 +41,7 @@ impl DesktopState {
             return Ok(response);
         }
 
-        for entry in WalkBuilder::new(root)
+        for entry in WalkBuilder::new(&root)
             .standard_filters(true)
             .follow_links(false)
             .build()
@@ -52,7 +51,7 @@ impl DesktopState {
             let Some(path) = camino::Utf8Path::from_path(entry.path()) else {
                 continue;
             };
-            let Ok(relative) = path.strip_prefix(root) else {
+            let Ok(relative) = path.strip_prefix(&root) else {
                 continue;
             };
             let relative = relative.as_str().replace('\\', "/");

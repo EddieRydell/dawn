@@ -5,32 +5,28 @@ use camino::Utf8Path;
 use dawn_project_io::{ProjectCheckReport, ProjectSession, SourceObjectKind};
 
 use super::{
-    DesktopState, descriptor_for_path, editor_buffer, lock_unpoisoned, package_status,
-    project_diagnostics, refresh_clean_buffers, restored_active_buffers, workspace_entries,
+    DesktopState, LoadedProject, descriptor_for_path, editor_buffer, lock_unpoisoned,
+    package_status, project_diagnostics, recovery_descriptor_for_path, recovery_editor_buffer,
+    recovery_workspace_entries, refresh_clean_buffers, restored_active_buffers, workspace_entries,
 };
 use crate::dto::{
-    AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic, SequenceAudio,
-    WorkspaceEntryKind,
+    AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic, ProjectHealth,
+    SequenceAudio, WorkspaceEntryKind,
 };
 
 impl DesktopState {
     pub(super) fn apply_project_open_check(
         &self,
-        entrypoint: &str,
+        _entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        lock_unpoisoned(&self.project_analysis).invalidate_pending();
         *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.replace_project(session, diagnostics),
-            None => self.update_snapshot(|snapshot| {
-                let root = Utf8Path::new(entrypoint);
-                snapshot.project_root = Some(entrypoint.to_string());
-                snapshot.package = package_status(root, None);
-                snapshot.diagnostics = diagnostics;
-                snapshot.status = format!("Failed to open project {entrypoint}");
-            }),
+            None => self.replace_with_recovery(report.recovery, diagnostics, true),
         }
     }
 
@@ -39,16 +35,115 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        lock_unpoisoned(&self.project_analysis).invalidate_pending();
         *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.refresh_project(session, diagnostics),
-            None => self.update_snapshot(|snapshot| {
-                snapshot.diagnostics = diagnostics;
-                snapshot.status = format!("Project check failed for {entrypoint}");
-            }),
+            None => {
+                let _ = entrypoint;
+                self.replace_with_recovery(report.recovery, diagnostics, false)
+            }
         }
+    }
+
+    fn replace_with_recovery(
+        &self,
+        recovery: dawn_project_io::ProjectRecovery,
+        diagnostics: Vec<ProjectDiagnostic>,
+        opening: bool,
+    ) -> AppSnapshot {
+        self.suspend_live_output();
+        lock_unpoisoned(&self.gui_save).invalidate_pending();
+        lock_unpoisoned(&self.render_refresh).invalidate_pending();
+        self.unload_render_session();
+        let audio_transport = lock_unpoisoned(&self.audio).unload();
+        lock_unpoisoned(&self.gui_history).clear();
+        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
+        *lock_unpoisoned(&self.sequence_clipboard) = None;
+        *lock_unpoisoned(&self.sequence_clip_raster) =
+            crate::sequence_clip_raster::SequenceClipRasterService::new();
+
+        let entries = recovery_workspace_entries(&recovery);
+        let root = recovery.root.to_string();
+        let package = package_status(Utf8Path::new(&root), None);
+        let recovery = Arc::new(recovery);
+        let current = self.snapshot();
+        let root_changed = current.project_root.as_deref() != Some(root.as_str());
+        let valid_paths = entries
+            .iter()
+            .filter(|entry| matches!(entry.kind, WorkspaceEntryKind::File))
+            .map(|entry| entry.path.clone())
+            .collect();
+        let restore = (opening || root_changed)
+            .then(|| self.persistence.restore_for_project(&root, &valid_paths))
+            .flatten();
+        let restored = restore
+            .as_ref()
+            .and_then(|restore| restored_recovery_buffers(&recovery, &restore.session));
+        let fallback_path = recovery
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.project.as_ref())
+            .map(|project| project.entrypoint.clone())
+            .filter(|path| recovery.root.join(path).is_file())
+            .or_else(|| {
+                recovery
+                    .documents
+                    .keys()
+                    .find(|path| recovery.root.join(path).is_file())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                recovery
+                    .root
+                    .join(dawn_package::MANIFEST_FILE)
+                    .is_file()
+                    .then(|| dawn_package::MANIFEST_FILE.to_string())
+            });
+        let fallback = fallback_path.as_deref().and_then(|path| {
+            recovery_editor_buffer(&recovery, Utf8Path::new(path))
+                .map(|buffer| (vec![buffer.clone()], buffer.path))
+        });
+        let active = if opening || root_changed {
+            restored.or(fallback)
+        } else {
+            None
+        };
+        *lock_unpoisoned(&self.project) = LoadedProject::Recovery(Arc::clone(&recovery));
+        self.update_snapshot(|snapshot| {
+            snapshot.project_root = Some(root);
+            snapshot.project_health = ProjectHealth::Recovery;
+            snapshot.package = package;
+            snapshot.project_entries = entries;
+            if let Some((buffers, active_path)) = &active {
+                snapshot.tabs = buffers.clone();
+                snapshot.active_file = Some(active_path.clone());
+                snapshot.active_buffer = buffers
+                    .iter()
+                    .find(|buffer| buffer.path == *active_path)
+                    .cloned();
+            } else if root_changed {
+                snapshot.tabs.clear();
+                snapshot.active_file = None;
+                snapshot.active_buffer = None;
+            }
+            snapshot.active_document_descriptor = snapshot
+                .active_file
+                .as_deref()
+                .and_then(|path| recovery_descriptor_for_path(&recovery, Utf8Path::new(path)));
+            snapshot.diagnostics = diagnostics;
+            snapshot.status = format!(
+                "Project recovery mode: {} actionable diagnostics",
+                snapshot.diagnostics.len()
+            );
+            snapshot.render_error = None;
+            snapshot.preview_error = None;
+            snapshot.pending_operator_rewrite = None;
+            snapshot.audio_transport = audio_transport;
+            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
+        })
     }
 
     pub(super) fn replace_project(
@@ -87,11 +182,12 @@ impl DesktopState {
         let active_descriptor = active
             .as_ref()
             .and_then(|(_, active_path)| descriptor_for_path(&session, Utf8Path::new(active_path)));
-        *lock_unpoisoned(&self.project) = Some(Arc::new(session));
+        *lock_unpoisoned(&self.project) = LoadedProject::Ready(Arc::new(session));
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
+            snapshot.project_health = ProjectHealth::Ready;
             snapshot.package = package;
             snapshot.workspace_explorer = restore
                 .as_ref()
@@ -165,10 +261,11 @@ impl DesktopState {
             .active_file
             .as_deref()
             .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
-        *lock_unpoisoned(&self.project) = Some(Arc::new(session));
+        *lock_unpoisoned(&self.project) = LoadedProject::Ready(Arc::new(session));
         let snapshot = self.update_snapshot(|snapshot| {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
+            snapshot.project_health = ProjectHealth::Ready;
             snapshot.package = package;
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {
@@ -210,11 +307,12 @@ impl DesktopState {
             .active_file
             .as_deref()
             .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
-        *lock_unpoisoned(&self.project) = Some(Arc::clone(&session));
+        *lock_unpoisoned(&self.project) = LoadedProject::Ready(Arc::clone(&session));
         self.schedule_render_refresh(Arc::clone(&session));
         self.update_snapshot(|snapshot| {
             snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
+            snapshot.project_health = ProjectHealth::Ready;
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {
                 snapshot.active_document_descriptor = active_descriptor;
@@ -226,7 +324,25 @@ impl DesktopState {
     }
 
     pub(super) fn project_session(&self) -> Option<Arc<ProjectSession>> {
-        lock_unpoisoned(&self.project).clone()
+        match &*lock_unpoisoned(&self.project) {
+            LoadedProject::Ready(session) => Some(Arc::clone(session)),
+            LoadedProject::Closed | LoadedProject::Recovery(_) => None,
+        }
+    }
+
+    pub(super) fn project_recovery(&self) -> Option<Arc<dawn_project_io::ProjectRecovery>> {
+        match &*lock_unpoisoned(&self.project) {
+            LoadedProject::Recovery(recovery) => Some(Arc::clone(recovery)),
+            LoadedProject::Closed | LoadedProject::Ready(_) => None,
+        }
+    }
+
+    pub(super) fn project_root_path(&self) -> Option<camino::Utf8PathBuf> {
+        match &*lock_unpoisoned(&self.project) {
+            LoadedProject::Ready(session) => Some(session.source.project_root().to_path_buf()),
+            LoadedProject::Recovery(recovery) => Some(recovery.root.clone()),
+            LoadedProject::Closed => None,
+        }
     }
 
     pub(super) fn dirty_affected_path(&self, affected_paths: &BTreeSet<String>) -> Option<String> {
@@ -239,6 +355,28 @@ impl DesktopState {
 
     pub(super) fn project_revision(&self) -> u64 {
         lock_unpoisoned(&self.snapshot).project_revision.into()
+    }
+
+    pub(super) fn schedule_project_analysis(&self, root: camino::Utf8PathBuf) -> bool {
+        let payload = crate::state_tasks::ProjectAnalysisPayload {
+            root,
+            project_revision: self.snapshot().project_revision,
+            filesystem: Arc::clone(&self.filesystem),
+        };
+        lock_unpoisoned(&self.project_analysis).schedule(payload)
+    }
+
+    pub(super) fn drain_project_analysis_results(&self) {
+        let results = lock_unpoisoned(&self.project_analysis).drain_current_results();
+        for result in results {
+            let snapshot = lock_unpoisoned(&self.snapshot).clone();
+            if snapshot.project_revision != result.project_revision
+                || snapshot.project_root.as_deref() != Some(result.root.as_str())
+            {
+                continue;
+            }
+            self.apply_project_refresh_check(result.root.as_str(), result.report);
+        }
     }
 
     pub(super) fn active_sequence_gui_request(&self) -> Option<GuiDocumentRequest> {
@@ -297,4 +435,26 @@ impl DesktopState {
                 )
             })
     }
+}
+
+fn restored_recovery_buffers(
+    recovery: &dawn_project_io::ProjectRecovery,
+    restore: &crate::persistence::PersistedProjectSession,
+) -> Option<(Vec<crate::dto::EditorBuffer>, String)> {
+    let mut buffers = Vec::new();
+    for path in &restore.tabs {
+        if let Some(buffer) = recovery_editor_buffer(recovery, Utf8Path::new(path)) {
+            buffers.push(buffer);
+        }
+    }
+    if buffers.is_empty() {
+        return None;
+    }
+    let active_file = restore
+        .active_file
+        .as_ref()
+        .filter(|path| buffers.iter().any(|buffer| &buffer.path == *path))
+        .cloned()
+        .unwrap_or_else(|| buffers[0].path.clone());
+    Some((buffers, active_file))
 }

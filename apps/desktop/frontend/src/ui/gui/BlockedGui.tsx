@@ -1,4 +1,6 @@
 import type { ProjectDiagnostic } from "../../types";
+import { FOCUS_SIDEBAR_EVENT } from "../../commandRegistry";
+import { navigateToText } from "../../workspace/navigation";
 
 export function BlockedGui({
   reason,
@@ -7,6 +9,7 @@ export function BlockedGui({
   reason: string;
   diagnostics: ProjectDiagnostic[];
 }) {
+  const primaryDiagnostic = diagnostics[0];
   return (
     <div className="gui-blocked">
       <strong>{reason}</strong>
@@ -20,6 +23,24 @@ export function BlockedGui({
           ))}
         </div>
       )}
+      <div className="gui-blocked-actions">
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent(FOCUS_SIDEBAR_EVENT, { detail: "problems" }));
+          }}
+        >
+          Open Problems
+        </button>
+        {primaryDiagnostic !== undefined && (
+          <button
+            type="button"
+            onClick={() => void navigateToText(primaryDiagnostic.path, primaryDiagnostic.range)}
+          >
+            Show in Text
+          </button>
+        )}
+      </div>
     </div>
   );
 }

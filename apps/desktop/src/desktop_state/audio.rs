@@ -84,8 +84,7 @@ impl DesktopState {
     }
 
     pub fn preview_scene(&self) -> Option<crate::preview::PreviewScene> {
-        let project = lock_unpoisoned(&self.project);
-        let session = project.as_ref()?;
+        let session = self.project_session()?;
         Some(crate::preview::PreviewScene::from_project(
             self.project_revision(),
             &session.project,
@@ -93,8 +92,6 @@ impl DesktopState {
     }
 
     pub fn preview_scene_revision(&self) -> Option<u64> {
-        lock_unpoisoned(&self.project)
-            .as_ref()
-            .map(|_| self.project_revision())
+        self.project_session().map(|_| self.project_revision())
     }
 }

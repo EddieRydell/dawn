@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn path_change_rejects_stale_revision() {
         let (_temporary, root) = starter_copy();
-        let state = crate::state::DesktopState::new();
+        let state = crate::desktop_state::DesktopState::new();
         let snapshot = state.open_project_path(root.as_str());
         let error = state
             .plan_workspace_path_change(WorkspacePathChangeRequest {
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn structural_path_change_rejects_dirty_open_text() {
         let (_temporary, root) = starter_copy();
-        let state = crate::state::DesktopState::new();
+        let state = crate::desktop_state::DesktopState::new();
         state.open_project_path(root.as_str());
         state.open_file_path("sequences/layer_test.sequence.dawn");
         state.update_active_text("dirty text".to_string());

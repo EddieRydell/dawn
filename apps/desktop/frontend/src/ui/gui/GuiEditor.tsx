@@ -13,6 +13,7 @@ import { GuiInspector } from "./GuiInspector";
 import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
+import { RecoverySequenceView } from "./sequence/RecoverySequenceView";
 import { useAppStore } from "../../store";
 import { THEME_METRICS } from "../../theme";
 
@@ -55,6 +56,13 @@ export function GuiEditor({
   }
   if (gui.type === "setup") {
     return <SetupEditor document={gui.document} />;
+  }
+  if (gui.type === "sequence" && gui.document.mode === "recovery") {
+    return (
+      <div className="gui-editor-shell recovery-gui-shell">
+        <RecoverySequenceView document={gui.document} />
+      </div>
+    );
   }
 
   const editorKey = `${guiEditorKey(snapshot.activeFile, gui)}:${resetRevision}`;

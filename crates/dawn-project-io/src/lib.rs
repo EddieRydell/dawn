@@ -32,9 +32,15 @@ thread_local! {
         RefCell::new(IndexMap::new());
 }
 
+mod analysis;
 mod package_update;
 mod path_refactor;
 mod source;
+pub use analysis::{
+    ProjectRecovery, RecoveryDocument, RecoveryDocumentKind, RecoveryMarkCollection,
+    RecoveryObject, RecoverySequence, RecoverySequenceItem, RecoverySequenceItemKind,
+    RecoverySequenceLayer, RecoverySequencePlacement, RecoveryTimelineLane,
+};
 pub use package_update::{
     PackageCompatibilityIssue, PackageCompatibilityIssueKind, PackageCompatibilityReport,
     analyze_package_candidate,
@@ -75,6 +81,7 @@ pub struct CompiledPackage {
 
 #[derive(Debug)]
 pub enum PackageLoadError {
+    Analysis(Vec<IoDiagnostic>),
     Package(dawn_package::PackageError),
     Project(LoadProjectError),
 }
@@ -82,6 +89,22 @@ pub enum PackageLoadError {
 impl std::fmt::Display for PackageLoadError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Analysis(diagnostics) => write!(
+                formatter,
+                "project analysis failed: {}",
+                diagnostics
+                    .iter()
+                    .map(|diagnostic| {
+                        let location = diagnostic
+                            .range
+                            .as_ref()
+                            .map(|range| format!(":{}", range.start.line + 1))
+                            .unwrap_or_default();
+                        format!("{}{location}: {}", diagnostic.path, diagnostic.message)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Self::Package(error) => write!(formatter, "package error: {error}"),
             Self::Project(error) => write!(formatter, "project error: {error:?}"),
         }
@@ -103,14 +126,39 @@ impl From<LoadProjectError> for PackageLoadError {
 }
 
 pub fn load_package(root: &Utf8Path) -> Result<LoadedPackageProject, PackageLoadError> {
-    let manifest = dawn_package::PackageManifest::read(root)?;
+    let report = check_package(root);
+    let session = report
+        .session
+        .ok_or(PackageLoadError::Analysis(report.diagnostics))?;
+    let manifest = report.recovery.manifest.ok_or_else(|| {
+        PackageLoadError::Analysis(vec![IoDiagnostic {
+            path: Utf8PathBuf::from(dawn_package::MANIFEST_FILE),
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::ManifestSyntax,
+            message: "project analysis produced no package manifest".to_string(),
+            detail: None,
+            related: Vec::new(),
+        }])
+    })?;
     let lockfile = dawn_package::Lockfile::read(root)?;
-    let cache = package_cache_for_lock(root, &lockfile)?;
-    load_package_with_cache(root, manifest, lockfile, &cache)
+    Ok(LoadedPackageProject {
+        manifest,
+        lockfile,
+        session,
+    })
 }
 
 pub fn compile_package(root: &Utf8Path) -> Result<CompiledPackage, PackageLoadError> {
-    let manifest = dawn_package::PackageManifest::read(root)?;
+    let report = check_package(root);
+    let manifest = report
+        .recovery
+        .manifest
+        .clone()
+        .ok_or_else(|| PackageLoadError::Analysis(report.diagnostics.clone()))?;
+    if manifest.project.is_some() && report.session.is_none() {
+        return Err(PackageLoadError::Analysis(report.diagnostics));
+    }
     let lockfile = dawn_package::Lockfile::read(root)?;
     let cache = package_cache_for_lock(root, &lockfile)?;
     compile_package_with_cache(root, manifest, lockfile, &cache)
@@ -473,9 +521,10 @@ pub fn load_package_with_cache(
     lockfile: dawn_package::Lockfile,
     cache: &dawn_package::CacheStore,
 ) -> Result<LoadedPackageProject, PackageLoadError> {
-    let source_graph =
-        dawn_package::ResolvedSourceGraph::from_lock(root, manifest.clone(), &lockfile, cache)?;
-    let session = load_source_graph(source_graph)?;
+    let report = check_package_with_cache(root, manifest.clone(), lockfile.clone(), cache);
+    let session = report
+        .session
+        .ok_or(PackageLoadError::Analysis(report.diagnostics))?;
     Ok(LoadedPackageProject {
         manifest,
         lockfile,
@@ -518,15 +567,29 @@ pub fn compile_source_graph(
 
 pub fn check_source_graph(source_graph: dawn_package::ResolvedSourceGraph) -> ProjectCheckReport {
     let mut diagnostics = Vec::new();
+    let project_module = source_graph.project_module();
+    let root = project_module.root.clone();
+    let manifest = project_module.manifest.clone();
+    let recovery = analysis::analyze_project_documents(&root, Some(manifest), &mut diagnostics);
     match load_source_graph(source_graph) {
-        Ok(session) => ProjectCheckReport {
-            session: Some(session),
-            diagnostics,
-        },
+        Ok(session) => {
+            analysis::sort_diagnostics(&mut diagnostics);
+            let session = (!diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == IoDiagnosticSeverity::Error))
+            .then_some(session);
+            ProjectCheckReport {
+                session,
+                recovery,
+                diagnostics,
+            }
+        }
         Err(error) => {
             push_load_error_diagnostics(&mut diagnostics, error);
+            analysis::sort_diagnostics(&mut diagnostics);
             ProjectCheckReport {
                 session: None,
+                recovery,
                 diagnostics,
             }
         }
@@ -534,19 +597,117 @@ pub fn check_source_graph(source_graph: dawn_package::ResolvedSourceGraph) -> Pr
 }
 
 pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
-    let manifest = match dawn_package::PackageManifest::read(root) {
-        Ok(manifest) => manifest,
-        Err(error) => return package_check_error(root, error),
+    let mut diagnostics = Vec::new();
+    let manifest = match dawn_package::PackageManifest::read_for_analysis(root) {
+        Ok(manifest) => {
+            diagnostics.extend(analysis::package_validation_diagnostics(
+                dawn_package::MANIFEST_FILE,
+                manifest.validation_issues(root),
+                IoDiagnosticCode::ManifestField,
+            ));
+            Some(manifest)
+        }
+        Err(error) => {
+            if root.join(dawn_package::MANIFEST_FILE).is_file() {
+                diagnostics.push(analysis::package_parse_diagnostic(
+                    dawn_package::MANIFEST_FILE,
+                    error,
+                    IoDiagnosticCode::ManifestSyntax,
+                ));
+            } else {
+                diagnostics.push(IoDiagnostic {
+                    path: Utf8PathBuf::from(dawn_package::MANIFEST_FILE),
+                    range: None,
+                    severity: IoDiagnosticSeverity::Error,
+                    code: IoDiagnosticCode::DawnLoad,
+                    message: error.to_string(),
+                    detail: None,
+                    related: Vec::new(),
+                });
+            }
+            None
+        }
     };
-    let lockfile = match dawn_package::Lockfile::read(root) {
-        Ok(lockfile) => lockfile,
-        Err(error) => return package_check_error(root, error),
+    let lockfile = match dawn_package::Lockfile::read_for_analysis(root) {
+        Ok(lockfile) => {
+            if let Some(manifest) = &manifest {
+                diagnostics.extend(analysis::package_validation_diagnostics(
+                    dawn_package::LOCK_FILE,
+                    lockfile.validation_issues(manifest),
+                    IoDiagnosticCode::LockField,
+                ));
+            }
+            Some(lockfile)
+        }
+        Err(error) => {
+            diagnostics.push(analysis::package_parse_diagnostic(
+                dawn_package::LOCK_FILE,
+                error,
+                IoDiagnosticCode::LockSyntax,
+            ));
+            None
+        }
     };
-    let cache = match package_cache_for_lock(root, &lockfile) {
-        Ok(cache) => cache,
-        Err(error) => return package_check_error(root, error),
+
+    let recovery = analysis::analyze_project_documents(root, manifest.clone(), &mut diagnostics);
+    let package_files_valid = !diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code,
+            IoDiagnosticCode::ManifestField
+                | IoDiagnosticCode::ManifestSyntax
+                | IoDiagnosticCode::LockField
+                | IoDiagnosticCode::LockSyntax
+        )
+    });
+    let session = if package_files_valid {
+        match (manifest, lockfile) {
+            (Some(manifest), Some(lockfile)) => {
+                match package_cache_for_lock(root, &lockfile).and_then(|cache| {
+                    dawn_package::ResolvedSourceGraph::from_lock(root, manifest, &lockfile, &cache)
+                }) {
+                    Ok(source_graph) => match load_source_graph(source_graph) {
+                        Ok(session) => Some(session),
+                        Err(error) => {
+                            push_load_error_diagnostics(&mut diagnostics, error);
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        push_diagnostic(
+                            &mut diagnostics,
+                            IoDiagnostic {
+                                path: Utf8PathBuf::from(dawn_package::LOCK_FILE),
+                                range: None,
+                                severity: IoDiagnosticSeverity::Error,
+                                code: IoDiagnosticCode::LockField,
+                                message: error.to_string(),
+                                detail: None,
+                                related: Vec::new(),
+                            },
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
     };
-    check_package_with_cache(root, manifest, lockfile, &cache)
+    analysis::sort_diagnostics(&mut diagnostics);
+    let session = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == IoDiagnosticSeverity::Error)
+    {
+        None
+    } else {
+        session
+    };
+    ProjectCheckReport {
+        session,
+        recovery,
+        diagnostics,
+    }
 }
 
 pub fn check_package_with_cache(
@@ -555,10 +716,33 @@ pub fn check_package_with_cache(
     lockfile: dawn_package::Lockfile,
     cache: &dawn_package::CacheStore,
 ) -> ProjectCheckReport {
+    let recovery_manifest = manifest.clone();
     let source_graph =
         match dawn_package::ResolvedSourceGraph::from_lock(root, manifest, &lockfile, cache) {
             Ok(source_graph) => source_graph,
-            Err(error) => return package_check_error(root, error),
+            Err(error) => {
+                let mut diagnostics = Vec::new();
+                let recovery = analysis::analyze_project_documents(
+                    root,
+                    Some(recovery_manifest),
+                    &mut diagnostics,
+                );
+                diagnostics.push(IoDiagnostic {
+                    path: Utf8PathBuf::from(dawn_package::LOCK_FILE),
+                    range: None,
+                    severity: IoDiagnosticSeverity::Error,
+                    code: IoDiagnosticCode::LockField,
+                    message: error.to_string(),
+                    detail: None,
+                    related: Vec::new(),
+                });
+                analysis::sort_diagnostics(&mut diagnostics);
+                return ProjectCheckReport {
+                    session: None,
+                    recovery,
+                    diagnostics,
+                };
+            }
         };
     check_source_graph(source_graph)
 }
@@ -575,19 +759,6 @@ fn package_cache_for_lock(
     Ok(dawn_package::DawnDirectories::discover()?.package_cache())
 }
 
-fn package_check_error(root: &Utf8Path, error: dawn_package::PackageError) -> ProjectCheckReport {
-    ProjectCheckReport {
-        session: None,
-        diagnostics: vec![IoDiagnostic {
-            path: root.join(dawn_package::MANIFEST_FILE),
-            range: None,
-            severity: IoDiagnosticSeverity::Error,
-            code: IoDiagnosticCode::DawnLoad,
-            message: error.to_string(),
-        }],
-    }
-}
-
 pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
     if path
         .file_name()
@@ -601,6 +772,12 @@ pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
     {
         return operator_diagnostics(path, text);
     }
+    if path
+        .file_name()
+        .is_some_and(|file_name| file_name.ends_with(".dawn"))
+    {
+        return analysis::check_dawn_document_text(path, text);
+    }
 
     match parse_yaml_value(path, text) {
         Ok(_) => Vec::new(),
@@ -610,6 +787,8 @@ pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::YamlParse,
             message,
+            detail: None,
+            related: Vec::new(),
         }],
         Err(error) => vec![load_error_diagnostic(error)],
     }
@@ -620,6 +799,18 @@ pub fn check_project_document_text(
     document: &dawn_language::identity::DocumentId,
     text: &str,
 ) -> Vec<IoDiagnostic> {
+    let local_diagnostics = check_document_text(document.path(), text);
+    if local_diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.code,
+            IoDiagnosticCode::YamlParse
+                | IoDiagnosticCode::EffectCompile
+                | IoDiagnosticCode::OperatorCompile
+        )
+    }) {
+        return local_diagnostics;
+    }
+
     let loader = match Loader::new(session.source.source_graph.clone()) {
         Ok(mut loader) => {
             loader
@@ -630,10 +821,22 @@ pub fn check_project_document_text(
         Err(error) => return vec![load_error_diagnostic(error)],
     };
     match loader.load() {
-        Ok(_) => Vec::new(),
+        Ok(_) => local_diagnostics,
         Err(error) => {
             let mut diagnostics = Vec::new();
             push_load_error_diagnostics(&mut diagnostics, error);
+            let additional = local_diagnostics
+                .into_iter()
+                .filter(|local| {
+                    !diagnostics.iter().any(|canonical| {
+                        canonical.path == local.path
+                            && canonical.range == local.range
+                            && canonical.message == local.message
+                    })
+                })
+                .collect::<Vec<_>>();
+            diagnostics.extend(additional);
+            analysis::sort_diagnostics(&mut diagnostics);
             diagnostics
         }
     }
@@ -684,6 +887,8 @@ pub fn compile_operator_document(
                     severity: IoDiagnosticSeverity::Error,
                     code: IoDiagnosticCode::OperatorCompile,
                     message,
+                    detail: None,
+                    related: Vec::new(),
                 }]
             })?,
         );
@@ -702,6 +907,8 @@ pub fn compile_operator_document(
             severity: IoDiagnosticSeverity::Error,
             code: IoDiagnosticCode::OperatorCompile,
             message,
+            detail: None,
+            related: Vec::new(),
         }]
     })?;
     Ok(CompiledOperatorDocument {
@@ -733,6 +940,7 @@ pub fn apply_compiled_operator_document(
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectCheckReport {
     pub session: Option<ProjectSession>,
+    pub recovery: ProjectRecovery,
     pub diagnostics: Vec<IoDiagnostic>,
 }
 
@@ -742,6 +950,15 @@ pub struct IoDiagnostic {
     pub range: Option<TextRange>,
     pub severity: IoDiagnosticSeverity,
     pub code: IoDiagnosticCode,
+    pub message: String,
+    pub detail: Option<String>,
+    pub related: Vec<IoRelatedLocation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct IoRelatedLocation {
+    pub path: Utf8PathBuf,
+    pub range: Option<TextRange>,
     pub message: String,
 }
 
@@ -758,6 +975,12 @@ pub enum IoDiagnosticCode {
     EffectCompile,
     OperatorCompile,
     IoRead,
+    ManifestField,
+    ManifestSyntax,
+    LockField,
+    LockSyntax,
+    SequenceField,
+    SequenceItem,
     YamlParse,
 }
 
@@ -769,6 +992,12 @@ impl IoDiagnosticCode {
             Self::EffectCompile => "effect.compile",
             Self::OperatorCompile => "operator.compile",
             Self::IoRead => "io.read",
+            Self::ManifestField => "manifest.field",
+            Self::ManifestSyntax => "manifest.syntax",
+            Self::LockField => "lock.field",
+            Self::LockSyntax => "lock.syntax",
+            Self::SequenceField => "sequence.field",
+            Self::SequenceItem => "sequence.item",
             Self::YamlParse => "yaml.parse",
         }
     }
@@ -1347,7 +1576,7 @@ impl std::error::Error for LoadProjectError {}
 mod diagnostics;
 use diagnostics::{
     effect_diagnostics, load_error_diagnostic, node_range, operator_diagnostics, parse_yaml_value,
-    push_load_error_diagnostics,
+    push_diagnostic, push_load_error_diagnostics,
 };
 
 impl fmt::Display for ExportProjectError {

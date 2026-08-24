@@ -34,6 +34,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["blocking
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"
+serde_path_to_error = "0.1.20"
 sha2 = "0.10.9"
 spdx = "0.13.4"
 specta = { version = "2.0.0-rc.25", features = ["derive"] }

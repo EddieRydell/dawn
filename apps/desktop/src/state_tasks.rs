@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use camino::Utf8PathBuf;
 use dawn_project_io::{ProjectSession, save_project};
 
 struct Sequenced<T> {
@@ -174,6 +175,61 @@ fn render_refresh_worker(
                 sequence: pending.sequence,
                 message: format!("{error:?}"),
             },
+        };
+        if sender.send(result).is_err() {
+            break;
+        }
+    }
+}
+
+pub(crate) type ProjectAnalysisScheduler =
+    LatestScheduler<ProjectAnalysisPayload, ProjectAnalysisResult>;
+
+pub(crate) fn project_analysis_scheduler() -> ProjectAnalysisScheduler {
+    LatestScheduler::new(project_analysis_worker)
+}
+
+pub(crate) struct ProjectAnalysisPayload {
+    pub(crate) root: Utf8PathBuf,
+    pub(crate) project_revision: u32,
+    pub(crate) filesystem: Arc<Mutex<()>>,
+}
+
+pub(crate) struct ProjectAnalysisResult {
+    sequence: u64,
+    pub(crate) root: Utf8PathBuf,
+    pub(crate) project_revision: u32,
+    pub(crate) report: dawn_project_io::ProjectCheckReport,
+}
+
+impl SequenceResult for ProjectAnalysisResult {
+    fn sequence(&self) -> u64 {
+        self.sequence
+    }
+}
+
+fn project_analysis_worker(
+    receiver: mpsc::Receiver<Sequenced<ProjectAnalysisPayload>>,
+    sender: mpsc::Sender<ProjectAnalysisResult>,
+) {
+    let debounce = Duration::from_millis(125);
+    while let Ok(mut pending) = receiver.recv() {
+        while let Ok(next) = receiver.recv_timeout(debounce) {
+            pending = next;
+        }
+        let report = {
+            let _filesystem = pending
+                .payload
+                .filesystem
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            dawn_project_io::check_package(&pending.payload.root)
+        };
+        let result = ProjectAnalysisResult {
+            sequence: pending.sequence,
+            root: pending.payload.root,
+            project_revision: pending.payload.project_revision,
+            report,
         };
         if sender.send(result).is_err() {
             break;

@@ -4,27 +4,32 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
-    DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, ObjectKind, PackageReadiness, PackageStatus, ProjectDiagnostic,
-    WorkspaceEntry, WorkspaceEntryKind, WorkspaceEntryOwnership, WorkspaceEntryRole,
-    WorkspaceExplorerState, WorkspaceLayoutState, WorkspaceOperation,
+    DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
+    EditorBuffer, ObjectKind, PackageReadiness, PackageStatus, ProjectHealth, WorkspaceEntry,
+    WorkspaceEntryKind, WorkspaceEntryOwnership, WorkspaceEntryRole, WorkspaceExplorerState,
+    WorkspaceLayoutState, WorkspaceOperation,
 };
 use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
-    GuiHistory, GuiSaveScheduler, RenderRefreshScheduler, gui_save_scheduler,
-    render_refresh_scheduler,
+    GuiHistory, GuiSaveScheduler, ProjectAnalysisScheduler, RenderRefreshScheduler,
+    gui_save_scheduler, project_analysis_scheduler, render_refresh_scheduler,
 };
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_project_io::{
-    IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
-    source_document_text as generated_source_document_text,
-};
+use dawn_project_io::{ProjectRecovery, ProjectSession, SourceDocument, SourceObjectKind};
+
+#[derive(Clone)]
+pub(crate) enum LoadedProject {
+    Closed,
+    Ready(Arc<ProjectSession>),
+    Recovery(Arc<ProjectRecovery>),
+}
 
 pub(crate) struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
-    project: Mutex<Option<Arc<ProjectSession>>>,
+    project: Mutex<LoadedProject>,
     gui_history: Mutex<GuiHistory>,
     gui_save: Mutex<GuiSaveScheduler>,
+    project_analysis: Mutex<ProjectAnalysisScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
     audio: Arc<Mutex<crate::audio::AudioEngine>>,
     show_render: Arc<Mutex<crate::show_render::ShowRenderService>>,
@@ -51,9 +56,10 @@ impl DesktopState {
             crate::live_output::LiveOutputService::new(audio.clone(), show_render.clone());
         Self {
             snapshot: Mutex::new(empty_snapshot()),
-            project: Mutex::new(None),
+            project: Mutex::new(LoadedProject::Closed),
             gui_history: Mutex::new(GuiHistory::new(100)),
             gui_save: Mutex::new(gui_save_scheduler()),
+            project_analysis: Mutex::new(project_analysis_scheduler()),
             render_refresh: Mutex::new(render_refresh_scheduler()),
             audio,
             show_render,
@@ -84,6 +90,7 @@ impl DesktopState {
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.drain_gui_save_results();
+        self.drain_project_analysis_results();
         self.drain_render_refresh_results();
         let live_output = lock_unpoisoned(&self.live_output).snapshot();
         let mut snapshot = lock_unpoisoned(&self.snapshot).clone();
@@ -214,6 +221,10 @@ impl DesktopState {
 }
 
 mod audio;
+mod diagnostics;
+pub(super) use diagnostics::{project_diagnostic, project_diagnostics};
+mod editor_projection;
+pub(super) use editor_projection::{generated_source_texts, refresh_clean_buffers, upsert_tab};
 mod filesystem;
 mod gui_editing;
 mod operator_rewrite;
@@ -222,29 +233,13 @@ pub(crate) use packages::{decorate_deprecation_status, package_status};
 mod project_lifecycle;
 mod rendering;
 mod search;
+mod settings;
+pub(super) use settings::{sanitize_app_settings, sanitize_workspace_layout};
 mod workspace;
-
-fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool {
-    project
-        .source
-        .entrypoint
-        .iter()
-        .chain(
-            project
-                .source
-                .documents
-                .values()
-                .flat_map(|document| document.imports().iter())
-                .flat_map(|edge| edge.targets().iter()),
-        )
-        .filter_map(|document_id| workspace_path_for_document(project, document_id))
-        .any(|document_path| {
-            document_path == path
-                || document_path
-                    .strip_prefix(path)
-                    .is_ok_and(|suffix| !suffix.as_str().is_empty())
-        })
-}
+mod workspace_projection;
+pub(super) use workspace_projection::{
+    FsEntryKind, canonical_relative_path, collect_workspace_paths, insert_path_with_parents,
+};
 
 fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
@@ -252,6 +247,7 @@ fn empty_snapshot() -> AppSnapshot {
         workspace_layout: WorkspaceLayoutState::default(),
         workspace_explorer: WorkspaceExplorerState::default(),
         project_root: None,
+        project_health: ProjectHealth::Closed,
         project_revision: 0,
         project_entries: Vec::new(),
         tabs: Vec::new(),
@@ -301,56 +297,6 @@ pub(crate) enum PendingOperatorRewriteKind {
     },
 }
 
-fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {
-    WorkspaceLayoutState {
-        sidebar_width_px: clamp_f64(state.sidebar_width_px, 220.0, 520.0),
-        inspector_width_px: clamp_f64(state.inspector_width_px, 240.0, 560.0),
-        sidebar_collapsed: state.sidebar_collapsed,
-        inspector_collapsed: state.inspector_collapsed,
-        active_sidebar_view: state.active_sidebar_view,
-    }
-}
-
-fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
-    if !value.is_finite() {
-        return min;
-    }
-    value.clamp(min, max)
-}
-
-fn project_diagnostic(diagnostic: &IoDiagnostic) -> ProjectDiagnostic {
-    ProjectDiagnostic {
-        path: diagnostic.path.to_string(),
-        range: diagnostic
-            .range
-            .as_ref()
-            .map(|range| crate::dto::TextRange {
-                start: crate::dto::TextPosition {
-                    line: range.start.line,
-                    character: range.start.character,
-                },
-                end: crate::dto::TextPosition {
-                    line: range.end.line,
-                    character: range.end.character,
-                },
-            }),
-        severity: match diagnostic.severity {
-            IoDiagnosticSeverity::Error => DiagnosticSeverity::Error,
-            IoDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
-        },
-        code: diagnostic.code.as_str().to_string(),
-        message: diagnostic.message.clone(),
-    }
-}
-
-fn project_diagnostics(report: &ProjectCheckReport) -> Vec<ProjectDiagnostic> {
-    report
-        .diagnostics
-        .iter()
-        .map(project_diagnostic)
-        .collect::<Vec<_>>()
-}
-
 fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
     let mut paths = BTreeMap::new();
     collect_workspace_paths(session.source.project_root(), Utf8Path::new(""), &mut paths);
@@ -365,47 +311,82 @@ fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
         .collect()
 }
 
-fn collect_workspace_paths(
-    root: &Utf8Path,
-    relative: &Utf8Path,
-    paths: &mut BTreeMap<Utf8PathBuf, FsEntryKind>,
-) {
-    let absolute = root.join(relative);
-    let Ok(entries) = fs::read_dir(absolute) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        let path = canonical_relative_path(&relative.join(name));
-        let kind = if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-            FsEntryKind::Directory
-        } else {
-            FsEntryKind::File
-        };
-        paths.insert(path.clone(), kind);
-        if matches!(kind, FsEntryKind::Directory) {
-            collect_workspace_paths(root, &path, paths);
-        }
-    }
+fn recovery_workspace_entries(recovery: &ProjectRecovery) -> Vec<WorkspaceEntry> {
+    let mut paths = BTreeMap::new();
+    collect_workspace_paths(&recovery.root, Utf8Path::new(""), &mut paths);
+    paths
+        .into_iter()
+        .map(|(path, kind)| {
+            let name = path
+                .file_name()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| path.to_string());
+            let parent = path.parent().map(Utf8Path::to_string).unwrap_or_default();
+            let role = recovery_workspace_role(recovery, &path, kind);
+            let fixed = matches!(
+                role,
+                WorkspaceEntryRole::Manifest | WorkspaceEntryRole::Lockfile
+            );
+            WorkspaceEntry {
+                path: canonical_relative_path(&path).to_string(),
+                kind: match kind {
+                    FsEntryKind::Directory => WorkspaceEntryKind::Directory,
+                    FsEntryKind::File => WorkspaceEntryKind::File,
+                },
+                name,
+                parent,
+                role,
+                ownership: WorkspaceEntryOwnership::Project,
+                operations: match kind {
+                    FsEntryKind::File => vec![WorkspaceOperation::Open],
+                    FsEntryKind::Directory => Vec::new(),
+                },
+                operation_explanation: Some(if fixed {
+                    "Package manifests and lockfiles remain fixed at the project root.".to_string()
+                } else {
+                    "Project-model operations are disabled until project errors are fixed."
+                        .to_string()
+                }),
+            }
+        })
+        .collect()
 }
 
-fn insert_path_with_parents(paths: &mut BTreeMap<Utf8PathBuf, FsEntryKind>, path: &Utf8Path) {
-    let mut current = Utf8PathBuf::new();
-    let path = canonical_relative_path(path);
-    for component in path.components() {
-        let camino::Utf8Component::Normal(part) = component else {
-            continue;
-        };
-        current.push(part);
-        current = canonical_relative_path(&current);
-        let kind = if current == path {
-            FsEntryKind::File
+fn recovery_workspace_role(
+    recovery: &ProjectRecovery,
+    path: &Utf8Path,
+    kind: FsEntryKind,
+) -> WorkspaceEntryRole {
+    if matches!(kind, FsEntryKind::Directory) {
+        return WorkspaceEntryRole::Directory;
+    }
+    if path == Utf8Path::new(dawn_package::MANIFEST_FILE) {
+        return WorkspaceEntryRole::Manifest;
+    }
+    if path == Utf8Path::new(dawn_package::LOCK_FILE) {
+        return WorkspaceEntryRole::Lockfile;
+    }
+    let Some(document) = recovery.documents.get(path) else {
+        return if recovery
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.assets.contains_key(path.as_str()))
+        {
+            WorkspaceEntryRole::Asset
         } else {
-            FsEntryKind::Directory
+            WorkspaceEntryRole::File
         };
-        paths.entry(current.clone()).or_insert(kind);
+    };
+    match document.kind {
+        dawn_project_io::RecoveryDocumentKind::Effect => WorkspaceEntryRole::Effect,
+        dawn_project_io::RecoveryDocumentKind::Operator => WorkspaceEntryRole::Operator,
+        dawn_project_io::RecoveryDocumentKind::Other => WorkspaceEntryRole::File,
+        dawn_project_io::RecoveryDocumentKind::Dawn => document
+            .objects
+            .iter()
+            .map(|object| crate::dto::workspace_role_for_source_object(&object.kind))
+            .next()
+            .unwrap_or(WorkspaceEntryRole::File),
     }
 }
 
@@ -425,7 +406,7 @@ fn workspace_entry(
         role,
         WorkspaceEntryRole::Manifest | WorkspaceEntryRole::Lockfile
     );
-    let structural = project_path_is_structural(session, &path);
+    let structural = session.source.is_structural_workspace_path(&path);
     let operations = match kind {
         FsEntryKind::Directory => {
             let mut operations = vec![WorkspaceOperation::Create];
@@ -563,30 +544,7 @@ fn workspace_role(
             dawn_project_io::SourceDocumentKind::Dawn { .. } => document
                 .objects()
                 .iter()
-                .map(|object| match object.kind() {
-                    dawn_project_io::SourceObjectKind::Project => WorkspaceEntryRole::Project,
-                    dawn_project_io::SourceObjectKind::Setup => WorkspaceEntryRole::Setup,
-                    dawn_project_io::SourceObjectKind::PreviewLayout
-                    | dawn_project_io::SourceObjectKind::PropDefinition => {
-                        WorkspaceEntryRole::Layout
-                    }
-                    dawn_project_io::SourceObjectKind::FixtureProfile => {
-                        WorkspaceEntryRole::Fixture
-                    }
-                    dawn_project_io::SourceObjectKind::Patch => WorkspaceEntryRole::Patch,
-                    dawn_project_io::SourceObjectKind::Curve => WorkspaceEntryRole::Curve,
-                    dawn_project_io::SourceObjectKind::Gradient => WorkspaceEntryRole::Gradient,
-                    dawn_project_io::SourceObjectKind::Sequence => WorkspaceEntryRole::Sequence,
-                    dawn_project_io::SourceObjectKind::EffectDefinition
-                    | dawn_project_io::SourceObjectKind::EffectInstance => {
-                        WorkspaceEntryRole::Effect
-                    }
-                    dawn_project_io::SourceObjectKind::OperatorDefinition => {
-                        WorkspaceEntryRole::Operator
-                    }
-                    dawn_project_io::SourceObjectKind::Controller
-                    | dawn_project_io::SourceObjectKind::ElementTree => WorkspaceEntryRole::File,
-                })
+                .map(|object| crate::dto::workspace_role_for_source_object(object.kind()))
                 .next()
                 .unwrap_or(WorkspaceEntryRole::File),
         };
@@ -605,55 +563,12 @@ fn workspace_role(
     }
 }
 
-fn canonical_relative_path(path: &Utf8Path) -> Utf8PathBuf {
-    Utf8PathBuf::from(path.as_str().replace(std::path::MAIN_SEPARATOR, "/"))
-}
-
-fn generated_source_texts(
-    session: &ProjectSession,
-    paths: &BTreeSet<String>,
-) -> Result<BTreeMap<String, String>, String> {
-    let mut texts = BTreeMap::new();
-    for path in paths {
-        let document_id = session.source.project_document(Utf8PathBuf::from(path));
-        match generated_source_document_text(session, &document_id) {
-            Ok(Some(text)) => {
-                texts.insert(path.clone(), text);
-            }
-            Ok(None) => {}
-            Err(error) => return Err(error.to_string()),
-        }
-    }
-    Ok(texts)
-}
-
-fn refresh_clean_buffers(snapshot: &mut AppSnapshot, generated_text: &BTreeMap<String, String>) {
-    for (path, text) in generated_text {
-        if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == *path) {
-            if tab.dirty {
-                tab.external_state = BufferExternalState::ChangedOnDisk;
-            } else {
-                tab.text = text.clone();
-                tab.external_state = BufferExternalState::Current;
-            }
-        }
-        if let Some(buffer) = snapshot
-            .active_buffer
-            .as_mut()
-            .filter(|buffer| buffer.path == *path)
-        {
-            if buffer.dirty {
-                buffer.external_state = BufferExternalState::ChangedOnDisk;
-            } else {
-                buffer.text = text.clone();
-                buffer.external_state = BufferExternalState::Current;
-            }
-        }
-    }
-}
-
 fn editor_buffer(session: &ProjectSession, relative_path: &Utf8Path) -> Option<EditorBuffer> {
-    let disk_path = session.source.project_root().join(relative_path);
+    editor_buffer_at_root(session.source.project_root(), relative_path)
+}
+
+fn editor_buffer_at_root(root: &Utf8Path, relative_path: &Utf8Path) -> Option<EditorBuffer> {
+    let disk_path = root.join(relative_path);
     let text = fs::read_to_string(&disk_path).ok()?;
     Some(EditorBuffer {
         path: relative_path.to_string(),
@@ -665,6 +580,16 @@ fn editor_buffer(session: &ProjectSession, relative_path: &Utf8Path) -> Option<E
         dirty: false,
         external_state: BufferExternalState::Current,
     })
+}
+
+fn recovery_editor_buffer(
+    recovery: &ProjectRecovery,
+    relative_path: &Utf8Path,
+) -> Option<EditorBuffer> {
+    let path = absolute_root_path(&recovery.root, relative_path)?;
+    path.is_file()
+        .then(|| editor_buffer_at_root(&recovery.root, relative_path))
+        .flatten()
 }
 
 fn editor_buffer_for_path(
@@ -706,11 +631,45 @@ fn descriptor_for_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<DocumentDescriptor> {
-    document_id_for_workspace_path(session, relative_path)
+    absolute_project_path(session, relative_path)
+        .and_then(|_| session.source.document_for_workspace_path(relative_path))
         .and_then(|document_id| session.source.documents.get(&document_id))
         .map(|document| document_descriptor(relative_path, document))
         .or_else(|| {
             absolute_project_path(session, relative_path)
+                .is_some_and(|path| path.is_file())
+                .then(|| empty_document_descriptor(relative_path))
+        })
+}
+
+fn recovery_descriptor_for_path(
+    recovery: &ProjectRecovery,
+    relative_path: &Utf8Path,
+) -> Option<DocumentDescriptor> {
+    recovery
+        .documents
+        .get(relative_path)
+        .map(|document| {
+            let objects = document
+                .objects
+                .iter()
+                .filter(|object| {
+                    object.kind != SourceObjectKind::Sequence || object.sequence.is_some()
+                })
+                .map(|object| DocumentObjectDescriptor {
+                    key: object.key.clone(),
+                    kind: ObjectKind::from(&object.kind),
+                })
+                .collect::<Vec<_>>();
+            DocumentDescriptor {
+                path: relative_path.to_string(),
+                available_views: available_views(&objects),
+                default_object_keys: default_object_keys(&objects),
+                objects,
+            }
+        })
+        .or_else(|| {
+            absolute_root_path(&recovery.root, relative_path)
                 .is_some_and(|path| path.is_file())
                 .then(|| empty_document_descriptor(relative_path))
         })
@@ -747,15 +706,9 @@ fn empty_document_descriptor(path: &Utf8Path) -> DocumentDescriptor {
 fn available_views(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentViewId> {
     let mut views = vec![DocumentViewId::Text];
     for object in objects {
-        let view = match object.kind {
-            ObjectKind::Setup => Some(DocumentViewId::Setup),
-            ObjectKind::Preview => Some(DocumentViewId::Preview),
-            ObjectKind::Prop => Some(DocumentViewId::Prop),
-            ObjectKind::Sequence => Some(DocumentViewId::Sequence),
-            _ => None,
-        };
+        let view = object.kind.document_view();
         if let Some(view) = view
-            && !views.iter().any(|existing| same_view(existing, &view))
+            && !views.contains(&view)
         {
             views.push(view);
         }
@@ -767,13 +720,7 @@ fn default_object_keys(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentDefa
     objects
         .iter()
         .filter_map(|object| {
-            let view = match object.kind {
-                ObjectKind::Setup => DocumentViewId::Setup,
-                ObjectKind::Preview => DocumentViewId::Preview,
-                ObjectKind::Prop => DocumentViewId::Prop,
-                ObjectKind::Sequence => DocumentViewId::Sequence,
-                _ => return None,
-            };
+            let view = object.kind.document_view()?;
             Some(DocumentDefaultObjectKey {
                 view,
                 object_key: object.key.clone(),
@@ -782,56 +729,14 @@ fn default_object_keys(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentDefa
         .collect()
 }
 
-fn same_view(left: &DocumentViewId, right: &DocumentViewId) -> bool {
-    matches!(
-        (left, right),
-        (DocumentViewId::Text, DocumentViewId::Text)
-            | (DocumentViewId::Setup, DocumentViewId::Setup)
-            | (DocumentViewId::Preview, DocumentViewId::Preview)
-            | (DocumentViewId::Prop, DocumentViewId::Prop)
-            | (DocumentViewId::Sequence, DocumentViewId::Sequence)
-    )
-}
-
-fn sanitize_app_settings(mut settings: AppSettings) -> AppSettings {
-    if !settings.sequence_initial_px_per_second.is_finite() {
-        settings.sequence_initial_px_per_second = 80.0;
-    }
-    if !settings.sequence_initial_lane_height_px.is_finite() {
-        settings.sequence_initial_lane_height_px = 42.0;
-    }
-    if !settings.effect_raster.render_scale.is_finite() {
-        settings.effect_raster.render_scale = 1.0;
-    }
-    settings.sequence_initial_px_per_second =
-        settings.sequence_initial_px_per_second.clamp(20.0, 12000.0);
-    settings.sequence_initial_lane_height_px =
-        settings.sequence_initial_lane_height_px.clamp(24.0, 120.0);
-    settings.effect_raster.render_scale = settings.effect_raster.render_scale.clamp(0.25, 2.0);
-    settings.effect_raster.max_columns = settings.effect_raster.max_columns.clamp(16, 1024);
-    settings.effect_raster.max_rows = settings.effect_raster.max_rows.clamp(1, 200);
-    settings.effect_raster.min_frame_stride = settings.effect_raster.min_frame_stride.clamp(1, 16);
-    settings
-}
-
-fn upsert_tab(tabs: &mut Vec<EditorBuffer>, buffer: EditorBuffer) {
-    if let Some(tab) = tabs.iter_mut().find(|tab| tab.path == buffer.path) {
-        *tab = buffer;
-    } else {
-        tabs.push(buffer);
-    }
-}
-
-#[derive(Clone, Copy)]
-enum FsEntryKind {
-    File,
-    Directory,
-}
-
 fn absolute_project_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<Utf8PathBuf> {
+    absolute_root_path(session.source.project_root(), relative_path)
+}
+
+fn absolute_root_path(root: &Utf8Path, relative_path: &Utf8Path) -> Option<Utf8PathBuf> {
     if relative_path.as_str().is_empty()
         || relative_path.is_absolute()
         || relative_path.as_str().contains('\\')
@@ -841,56 +746,7 @@ fn absolute_project_path(
     {
         return None;
     }
-    Some(session.source.project_root().join(relative_path))
-}
-
-fn document_id_for_workspace_path(
-    session: &ProjectSession,
-    relative_path: &Utf8Path,
-) -> Option<dawn_language::identity::DocumentId> {
-    let absolute = absolute_project_path(session, relative_path)?;
-    let (module_id, module) = session
-        .source
-        .source_graph
-        .modules()
-        .iter()
-        .filter(|(_, module)| {
-            !matches!(
-                module.origin,
-                dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
-            ) && absolute.starts_with(&module.root)
-        })
-        .max_by_key(|(_, module)| module.root.components().count())?;
-    let module_relative = absolute.strip_prefix(&module.root).ok()?;
-    let document_id = dawn_language::identity::DocumentId::new(
-        *module_id,
-        Utf8PathBuf::from(module_relative.as_str().replace('\\', "/")),
-    );
-    session
-        .source
-        .documents
-        .contains_key(&document_id)
-        .then_some(document_id)
-}
-
-fn workspace_path_for_document(
-    session: &ProjectSession,
-    document_id: &dawn_language::identity::DocumentId,
-) -> Option<Utf8PathBuf> {
-    let module = session
-        .source
-        .source_graph
-        .module(document_id.module_id())
-        .ok()?;
-    if matches!(
-        module.origin,
-        dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
-    ) {
-        return None;
-    }
-    let absolute = module.root.join(document_id.path());
-    let relative = absolute.strip_prefix(session.source.project_root()).ok()?;
-    Some(Utf8PathBuf::from(relative.as_str().replace('\\', "/")))
+    Some(root.join(relative_path))
 }
 
 fn valid_child_name(name: &str) -> bool {

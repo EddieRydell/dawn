@@ -4,6 +4,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_specta::{Builder, collect_commands};
 
+use crate::desktop_state::DesktopState;
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, GuiDocument,
     GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest,
@@ -17,7 +18,6 @@ use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
     PersistedSequenceViewportStateUpdate, ProjectRestoreState,
 };
-use crate::state::DesktopState;
 
 #[tauri::command]
 #[specta::specta]

@@ -9,8 +9,23 @@ use crate::state_tasks::GuiHistoryEntry;
 
 impl DesktopState {
     pub fn get_gui_document(&self, request: GuiDocumentRequest) -> GuiDocument {
-        let project = self.project_session();
-        crate::gui::project_gui_document(project.as_deref(), &request)
+        if let Some(project) = self.project_session() {
+            return crate::gui::project_gui_document(Some(&project), &request);
+        }
+        if let Some(recovery) = self.project_recovery() {
+            let diagnostics = self
+                .snapshot()
+                .diagnostics
+                .into_iter()
+                .filter(|diagnostic| {
+                    diagnostic.path == request.path
+                        || diagnostic.path.ends_with(&format!("/{}", request.path))
+                        || diagnostic.path.ends_with(&format!("\\{}", request.path))
+                })
+                .collect();
+            return crate::gui::project_recovery_gui_document(&recovery, &request, diagnostics);
+        }
+        crate::gui::blocked("No project is loaded.", Vec::new())
     }
 
     pub fn request_sequence_clip_rasters(

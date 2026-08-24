@@ -152,6 +152,8 @@ impl DesktopState {
                 severity: DiagnosticSeverity::Error,
                 code: code.to_string(),
                 message: message.to_string(),
+                detail: None,
+                related: Vec::new(),
             }];
         })
     }

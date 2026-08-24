@@ -1,6 +1,5 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { convertFileSrc } from "@tauri-apps/api/core";
-
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { Trash2 } from "lucide-react";

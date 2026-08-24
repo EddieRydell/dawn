@@ -77,6 +77,155 @@ pub fn project_gui_document(
     }
 }
 
+pub fn project_recovery_gui_document(
+    recovery: &dawn_project_io::ProjectRecovery,
+    request: &GuiDocumentRequest,
+    diagnostics: Vec<ProjectDiagnostic>,
+) -> GuiDocument {
+    if !matches!(request.view, DocumentViewId::Sequence) {
+        return blocked(
+            "This GUI requires a complete project model. Use the text editor and Problems while the project is recovering.",
+            diagnostics,
+        );
+    }
+    let path = Utf8Path::new(&request.path);
+    let Some(document) = recovery.documents.get(path) else {
+        return blocked(
+            "The recovery analysis did not find this document.",
+            diagnostics,
+        );
+    };
+    let sequence = document.objects.iter().find(|object| {
+        object.kind == SourceObjectKind::Sequence
+            && request
+                .object_key
+                .as_deref()
+                .is_none_or(|key| key == object.key)
+    });
+    let Some(object) = sequence else {
+        return blocked(
+            "This sequence does not have a trustworthy identity in the recovery analysis.",
+            diagnostics,
+        );
+    };
+    let Some(sequence) = &object.sequence else {
+        return blocked(
+            "Sequence identity, duration, frame rate, or canvas coordinates are invalid. Fix the first sequence diagnostic in text.",
+            diagnostics,
+        );
+    };
+    let Some(module_id) = recovery
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.module_id)
+    else {
+        return blocked(
+            "The manifest module identity is required for a sequence recovery view.",
+            diagnostics,
+        );
+    };
+    GuiDocument::Sequence {
+        document: crate::dto::SequenceGuiDocument {
+            path: request.path.clone(),
+            source_ref: GuiObjectRef {
+                module_id: module_id.to_string(),
+                path: request.path.clone(),
+                object_key: object.key.clone(),
+                kind: ObjectKind::Sequence,
+                id: object.key.clone(),
+            },
+            object_key: object.key.clone(),
+            duration_seconds: sequence.duration_seconds,
+            frame_rate: sequence.frame_rate,
+            audio: None,
+            mark_collections: sequence
+                .mark_collections
+                .iter()
+                .map(|collection| crate::dto::SequenceMarkCollection {
+                    key: collection.key.clone(),
+                    name: collection.name.clone(),
+                    color: collection.color.clone(),
+                    marks_seconds: collection.marks_seconds.clone(),
+                })
+                .collect(),
+            lanes: Vec::new(),
+            effect_definitions: Vec::new(),
+            curve_library: Vec::new(),
+            gradient_library: Vec::new(),
+            layers: sequence
+                .layers
+                .iter()
+                .map(|layer| crate::dto::SequenceLayer {
+                    id: layer.id,
+                    name: layer.name.clone(),
+                    color: layer.color.clone(),
+                    enabled: layer.enabled,
+                    is_default: layer.id == 0,
+                })
+                .collect(),
+            effects: Vec::new(),
+            control_clips: Vec::new(),
+            composition_graph: crate::dto::SequenceCompositionGraph {
+                id: 0,
+                operator_catalog: Vec::new(),
+                nodes: Vec::new(),
+                edges: Vec::new(),
+            },
+            automation_clips: Vec::new(),
+            mode: crate::dto::GuiDocumentMode::Recovery,
+            recovery_items: sequence
+                .items
+                .iter()
+                .map(|item| crate::dto::InvalidSequencePlaceholder {
+                    kind: match item.kind {
+                        dawn_project_io::RecoverySequenceItemKind::Effect => {
+                            crate::dto::InvalidSequencePlaceholderKind::Effect
+                        }
+                        dawn_project_io::RecoverySequenceItemKind::AutomationClip => {
+                            crate::dto::InvalidSequencePlaceholderKind::AutomationClip
+                        }
+                        dawn_project_io::RecoverySequenceItemKind::ControlClip => {
+                            crate::dto::InvalidSequencePlaceholderKind::ControlClip
+                        }
+                        dawn_project_io::RecoverySequenceItemKind::GraphNode => {
+                            crate::dto::InvalidSequencePlaceholderKind::GraphNode
+                        }
+                    },
+                    id: item.id.clone(),
+                    placement: match &item.placement {
+                        dawn_project_io::RecoverySequencePlacement::Timeline {
+                            start_seconds,
+                            duration_seconds,
+                            lane,
+                        } => crate::dto::InvalidSequencePlacement::Timeline {
+                            start_seconds: *start_seconds,
+                            duration_seconds: *duration_seconds,
+                            lane: match lane {
+                                dawn_project_io::RecoveryTimelineLane::Layer(layer_id) => {
+                                    crate::dto::InvalidSequenceLane::Layer {
+                                        layer_id: *layer_id,
+                                    }
+                                }
+                                dawn_project_io::RecoveryTimelineLane::Lane(lane_index) => {
+                                    crate::dto::InvalidSequenceLane::Lane {
+                                        lane_index: *lane_index,
+                                    }
+                                }
+                            },
+                        },
+                        dawn_project_io::RecoverySequencePlacement::Graph { x, y } => {
+                            crate::dto::InvalidSequencePlacement::Graph { x: *x, y: *y }
+                        }
+                    },
+                    message: item.message.clone().or_else(|| {
+                        Some("Read-only while the project model has errors.".to_string())
+                    }),
+                })
+                .collect(),
+        },
+    }
+}
+
 pub fn affected_paths(
     session: &ProjectSession,
     request: &GuiDocumentRequest,
@@ -354,5 +503,7 @@ fn gui_diagnostic(path: &str, code: &str, message: &str) -> ProjectDiagnostic {
         severity: DiagnosticSeverity::Error,
         message: message.to_string(),
         range: None,
+        detail: None,
+        related: Vec::new(),
     }
 }

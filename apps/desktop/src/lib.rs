@@ -16,6 +16,7 @@ pub mod audio;
 pub mod bindings;
 pub mod commands;
 mod desktop_foundation_tests;
+pub mod desktop_state;
 pub mod dto;
 pub mod gui;
 mod gui_geometry;
@@ -26,24 +27,23 @@ mod project_templates;
 pub mod sequence_clip_raster;
 mod sequence_integrity;
 pub mod show_render;
-pub mod state;
 mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {
     let bindings = bindings::builder();
 
     tauri::Builder::default()
-        .manage(state::DesktopState::new())
+        .manage(desktop_state::DesktopState::new())
         .manage(preview::PreviewWindowService::new())
         .register_uri_scheme_protocol("dawn-raster", |context, request| {
             raster_protocol_response(
-                context.app_handle().state::<state::DesktopState>().inner(),
+                context.app_handle().state::<desktop_state::DesktopState>().inner(),
                 request,
             )
         })
         .setup(|app| {
             let handle = app.handle().clone();
-            let state = app.state::<state::DesktopState>();
+                            let state = app.state::<desktop_state::DesktopState>();
             match state.persistence().load(&handle) {
                 Ok(last_project) => {
                     let settings_snapshot = state.apply_persisted_settings();
@@ -58,14 +58,14 @@ pub fn run() -> Result<(), tauri::Error> {
                             if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                                 return;
                             }
-                            let state = close_app.state::<state::DesktopState>();
+                            let state = close_app.state::<desktop_state::DesktopState>();
                             if let Some(main) = close_app
                                 .get_window("main")
                                 .and_then(|window| persistence::read_window_state(&window))
                             {
                                 let _ = state.persistence().record_main_window(main);
                             }
-                            let preview = close_app.state::<preview::PreviewWindowService>();
+                        let preview = close_app.state::<preview::PreviewWindowService>();
                             let _ = preview.close_for_main_shutdown(&close_app, state.persistence());
                             state.shutdown_live_output();
                         });
@@ -103,7 +103,7 @@ pub fn run() -> Result<(), tauri::Error> {
 }
 
 fn raster_protocol_response(
-    state: &state::DesktopState,
+    state: &desktop_state::DesktopState,
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
     let token = request.uri().path().trim_start_matches('/');
