@@ -2757,7 +2757,7 @@ mod tests {
         assert!(matches!(
             device_start_request,
             DeviceLoginRequest::Start {
-                registry_version: 1,
+                registry_version: REGISTRY_PROTOCOL_VERSION,
                 ..
             }
         ));
@@ -2779,7 +2779,7 @@ mod tests {
         assert!(matches!(
             whoami_request,
             DeviceLoginRequest::WhoAmI {
-                registry_version: 1
+                registry_version: REGISTRY_PROTOCOL_VERSION
             }
         ));
         let _: DeviceIdentityResponse = serde_json::from_str(include_str!(concat!(

@@ -50,7 +50,7 @@ fn compiler_rejection_prevents_registry_artifact_acceptance() {
         dependencies: BTreeMap::new(),
     };
     let lock = Lockfile {
-        lock_version: 1,
+        lock_version: dawn_package::LOCK_VERSION,
         manifest_sha256: "b".repeat(64),
         registry: "https://registry.dawn.dev".to_string(),
         packages: BTreeMap::from([(package.clone(), locked.clone())]),
