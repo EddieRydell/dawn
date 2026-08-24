@@ -715,7 +715,7 @@ mod tests {
         let foundation = PackageId::new("test/foundation").expect("package");
         let library = PackageId::new("test/library").expect("package");
         let lock = Lockfile {
-            lock_version: 1,
+            lock_version: crate::LOCK_VERSION,
             manifest_sha256: "b".repeat(64),
             registry: "https://registry.dawn.dev".to_string(),
             packages: BTreeMap::from([
@@ -742,7 +742,7 @@ mod tests {
         let left = PackageId::new("test/left").expect("package");
         let right = PackageId::new("test/right").expect("package");
         let lock = Lockfile {
-            lock_version: 1,
+            lock_version: crate::LOCK_VERSION,
             manifest_sha256: "b".repeat(64),
             registry: "https://registry.dawn.dev".to_string(),
             packages: BTreeMap::from([

@@ -42,6 +42,8 @@ pub use service::{
 pub const MANIFEST_FILE: &str = "dawn-package.json";
 pub const LOCK_FILE: &str = "dawn.lock";
 pub const MANIFEST_VERSION: u8 = 2;
+pub const LOCK_VERSION: u8 = 1;
+pub const RELEASE_RECEIPT_VERSION: u8 = 1;
 pub const LANGUAGE_VERSION: &str = "0.1";
 pub const MAX_ARCHIVE_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_EXPANDED_BYTES: u64 = 50 * 1024 * 1024;
@@ -882,7 +884,7 @@ impl Lockfile {
 
     pub fn validation_issues(&self, manifest: &PackageManifest) -> Vec<PackageValidationIssue> {
         let mut issues = Vec::new();
-        if self.lock_version != 1 {
+        if self.lock_version != LOCK_VERSION {
             push_package_validation_issue(
                 &mut issues,
                 "lockVersion",
@@ -1050,7 +1052,7 @@ impl Lockfile {
         registry: impl Into<String>,
     ) -> Result<Self, PackageError> {
         Ok(Self {
-            lock_version: 1,
+            lock_version: LOCK_VERSION,
             manifest_sha256: manifest_hash(manifest)?,
             registry: registry.into(),
             packages: BTreeMap::new(),
@@ -1081,7 +1083,7 @@ impl Lockfile {
     }
 
     pub fn validate_manifest(&self, manifest: &PackageManifest) -> Result<(), PackageError> {
-        if self.lock_version != 1 {
+        if self.lock_version != LOCK_VERSION {
             return Err(PackageError::Invalid(
                 "unsupported lockfile version".to_string(),
             ));
@@ -2052,7 +2054,7 @@ pub fn pack_directory_with_plan(
     }
     let file_count = files.len();
     let receipt = ReleaseReceipt {
-        receipt_version: 1,
+        receipt_version: RELEASE_RECEIPT_VERSION,
         module_id: manifest.module_id,
         package: publication.package.clone(),
         version: publication.version.clone(),
@@ -2359,7 +2361,7 @@ pub fn inspect_archive(bytes: &[u8]) -> Result<ReleaseReceipt, PackageError> {
             "release receipt manifest hash mismatch".to_string(),
         ));
     }
-    if receipt.receipt_version != 1 {
+    if receipt.receipt_version != RELEASE_RECEIPT_VERSION {
         return Err(PackageError::Archive(
             "unsupported release receipt version".to_string(),
         ));
@@ -2513,7 +2515,7 @@ mod tests {
         let entrypoint = root.join("main.dawn");
         fs::write(&entrypoint, "project: {}").expect("fixture");
         PackageManifest {
-            manifest_version: 2,
+            manifest_version: MANIFEST_VERSION,
             module_id: Uuid::new_v4(),
             language_version: "0.1".to_string(),
             requires_dawn: VersionReq::parse(">=0.1.0, <1.0.0").expect("version"),
