@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { AppSettings, ElementTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
+import type { AppSettings, ElementTarget, PersistedSequenceViewportState, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -16,9 +16,31 @@ import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfte
 import { targetsEqual } from "./sequenceTargets";
 import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
 import { drawClipRaster, useSequenceClipRasters } from "./sequenceClipRasters";
+import {
+  automationClipsWithDrafts,
+  automationCurvePointFromCanvas,
+  automationHoverEqual,
+  automationLaneRowHeight,
+  automationRowCounts,
+  buildAutomationClipLayout,
+  drawAutomationCurve,
+  expandedLaneRowIndex,
+  expandedLaneTop,
+  expandedTimelineHeight,
+  hitAutomationClip,
+  hitAutomationCurvePoint,
+  laneIndexFromCanvasY,
+  remapEffectClipLayout,
+  removeAutomationCurvePoint,
+  replaceAutomationCurvePoint,
+  sortAutomationCurve,
+  type AutomationCurveDraft,
+  type AutomationDraft,
+  type AutomationHover
+} from "./sequenceAutomationLayout";
 import { THEME_COLORS, THEME_METRICS, THEME_TYPOGRAPHY } from "../../../theme";
 
-import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceClipLayout, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
+import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
 const SEQUENCE_CANVAS = {
   leftGutterPx: THEME_METRICS.sequenceLeftGutter,
@@ -78,21 +100,6 @@ type SequenceDragState =
   | { kind: "mark"; collectionKey: string; index: number; startX: number; startY: number; active: boolean; originalTimeSeconds: number }
   | { kind: "marquee"; state: SequenceMarquee }
   | { kind: "sequenceScrub" };
-
-type AutomationDraft = {
-  id: number;
-  startSeconds: number;
-  durationSeconds: number;
-  anchorLaneIndex: number;
-  laneIndex: number;
-};
-
-type AutomationHover = { kind: "automation"; clipId: number; resize: "left" | "right" | "none" };
-
-type AutomationCurveDraft = {
-  id: number;
-  curve: Array<{ time: number; value: number }>;
-};
 
 let sequenceViewportStateTimer: number | undefined;
 
@@ -1494,320 +1501,6 @@ export function SequenceCanvas({
     </div>
   );
 }
-
-
-type AutomationClipLayout = {
-  clip: SequenceAutomationClip;
-  rect: { x: number; y: number; width: number; height: number };
-};
-
-function automationLaneRowHeight(laneHeight: number): number {
-  return Math.max(THEME_METRICS.automationRowMinHeight, laneHeight * 0.42);
-}
-
-function automationRowCounts(clips: SequenceAutomationClip[], laneCount: number): number[] {
-  const rows = Array.from({ length: laneCount }, () => 0);
-  for (const clip of clips) {
-    if (clip.anchorLaneIndex < 0 || clip.anchorLaneIndex >= laneCount) continue;
-    rows[clip.anchorLaneIndex] = Math.max(rows[clip.anchorLaneIndex] ?? 0, clip.laneIndex + 1);
-  }
-  return rows;
-}
-
-function expandedLaneTop(laneIndex: number, rowsByLane: number[], laneHeight: number, automationRowHeight: number): number {
-  let top = 0;
-  for (let index = 0; index < laneIndex; index += 1) {
-    top += laneHeight + (rowsByLane[index] ?? 0) * automationRowHeight;
-  }
-  return top;
-}
-
-function expandedLaneRowIndex(laneIndex: number, rowsByLane: number[]): number {
-  let rowIndex = 0;
-  for (let index = 0; index < laneIndex; index += 1) {
-    rowIndex += 1 + (rowsByLane[index] ?? 0);
-  }
-  return rowIndex;
-}
-
-function expandedTimelineHeight(laneCount: number, rowsByLane: number[], laneHeight: number, automationRowHeight: number): number {
-  return expandedLaneTop(laneCount, rowsByLane, laneHeight, automationRowHeight);
-}
-
-function laneIndexFromCanvasY(
-  y: number,
-  top: number,
-  scrollY: number,
-  laneCount: number,
-  rowsByLane: number[],
-  laneHeight: number,
-  automationRowHeight: number
-): number {
-  const contentY = Math.max(0, y - top + scrollY);
-  let cursor = 0;
-  for (let index = 0; index < laneCount; index += 1) {
-    const blockHeight = laneHeight + (rowsByLane[index] ?? 0) * automationRowHeight;
-    if (contentY < cursor + blockHeight) return index;
-    cursor += blockHeight;
-  }
-  return Math.max(0, laneCount - 1);
-}
-
-function remapEffectClipLayout(
-  clip: SequenceClipLayout,
-  rowsByLane: number[],
-  automationRowHeight: number,
-  viewport: SequenceViewport,
-  top: number
-): SequenceClipLayout {
-  const originalLaneTop = top + clip.laneIndex * viewport.laneHeight - viewport.scrollY;
-  const laneLocalY = clip.rect.y - originalLaneTop;
-  return {
-    ...clip,
-    rect: {
-      ...clip.rect,
-      y: top + expandedLaneTop(clip.laneIndex, rowsByLane, viewport.laneHeight, automationRowHeight) - viewport.scrollY + laneLocalY
-    }
-  };
-}
-
-function buildAutomationClipLayout(
-  clips: SequenceAutomationClip[],
-  rowsByLane: number[],
-  rowHeight: number,
-  viewport: SequenceViewport,
-  left: number,
-  top: number,
-  bounds: { width: number; height: number }
-): AutomationClipLayout[] {
-  const visibleStartSeconds = viewport.scrollXSeconds;
-  const visibleEndSeconds = viewport.scrollXSeconds + Math.max(1, bounds.width - left) / viewport.pxPerSecond;
-  const byAutomationLane = new Map<string, SequenceAutomationClip[]>();
-  for (const clip of clips) {
-    if (clip.startSeconds + clip.durationSeconds < visibleStartSeconds || clip.startSeconds > visibleEndSeconds) continue;
-    const key = `${clip.anchorLaneIndex}:${clip.laneIndex}`;
-    const laneClips = byAutomationLane.get(key) ?? [];
-    laneClips.push(clip);
-    byAutomationLane.set(key, laneClips);
-  }
-
-  const layouts: AutomationClipLayout[] = [];
-  for (const laneClips of byAutomationLane.values()) {
-    for (const group of groupOverlappingAutomationClips(laneClips)) {
-      const assigned = assignAutomationOverlapSlots(group);
-      const slotCount = Math.max(1, Math.max(...assigned.map((clip) => clip.slot)) + 1);
-      const slotHeight = rowHeight / slotCount;
-      for (const clip of assigned) {
-        const laneIndex = clip.anchorLaneIndex;
-        const x = left + (clip.startSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
-        layouts.push({
-          clip,
-          rect: {
-            x,
-            y: top + expandedLaneTop(laneIndex, rowsByLane, viewport.laneHeight, rowHeight) - viewport.scrollY + viewport.laneHeight + clip.laneIndex * rowHeight + clip.slot * slotHeight + THEME_METRICS.sequenceClipSlotOffset,
-            width: Math.max(THEME_METRICS.sequenceClipMinWidth, clip.durationSeconds * viewport.pxPerSecond),
-            height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
-          }
-        });
-      }
-    }
-  }
-  return layouts;
-}
-
-function automationClipsWithDrafts(
-  clips: SequenceAutomationClip[],
-  draft: AutomationDraft | null,
-  curveDraft: AutomationCurveDraft | null
-): SequenceAutomationClip[] {
-  return clips.map((clip) =>
-    clip.id === draft?.id
-      ? {
-          ...clip,
-          startSeconds: draft.startSeconds,
-          durationSeconds: draft.durationSeconds,
-          anchorLaneIndex: draft.anchorLaneIndex,
-          laneIndex: draft.laneIndex,
-          curve: curveDraft?.id === clip.id ? curveDraft.curve : clip.curve
-        }
-      : curveDraft?.id === clip.id
-        ? { ...clip, curve: curveDraft.curve }
-      : clip
-  );
-}
-
-function automationHoverEqual(left: AutomationHover | null, right: AutomationHover | null) {
-  if (left === right) return true;
-  if (left === null || right === null) return false;
-  return left.clipId === right.clipId && left.resize === right.resize;
-}
-
-function groupOverlappingAutomationClips(clips: SequenceAutomationClip[]) {
-  const sorted = [...clips].sort(compareAutomationClipsByTime);
-  const groups: SequenceAutomationClip[][] = [];
-  let current: SequenceAutomationClip[] = [];
-  let currentEnd = -Infinity;
-  for (const clip of sorted) {
-    const end = clip.startSeconds + clip.durationSeconds;
-    if (current.length === 0 || clip.startSeconds < currentEnd) {
-      current.push(clip);
-      currentEnd = Math.max(currentEnd, end);
-      continue;
-    }
-    groups.push(current);
-    current = [clip];
-    currentEnd = end;
-  }
-  if (current.length > 0) groups.push(current);
-  return groups;
-}
-
-function assignAutomationOverlapSlots(group: SequenceAutomationClip[]) {
-  const sorted = [...group].sort(compareAutomationClipsByTime);
-  const slotEnds: number[] = [];
-  return sorted.map((clip) => {
-    const start = clip.startSeconds;
-    const end = clip.startSeconds + clip.durationSeconds;
-    let slot = slotEnds.findIndex((slotEnd) => slotEnd <= start);
-    if (slot === -1) slot = slotEnds.length;
-    slotEnds[slot] = end;
-    return { ...clip, slot };
-  });
-}
-
-function compareAutomationClipsByTime(left: SequenceAutomationClip, right: SequenceAutomationClip) {
-  return (
-    left.startSeconds - right.startSeconds ||
-    left.startSeconds + left.durationSeconds - (right.startSeconds + right.durationSeconds) ||
-    left.id - right.id
-  );
-}
-
-function hitAutomationClip(clips: AutomationClipLayout[], x: number, y: number) {
-  for (const clip of [...clips].reverse()) {
-    const { rect } = clip;
-    if (x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height) {
-      const resize: "left" | "right" | "none" = x - rect.x < THEME_METRICS.sequenceEffectResizeHitWidth ? "left" : rect.x + rect.width - x < THEME_METRICS.sequenceEffectResizeHitWidth ? "right" : "none";
-      return { ...clip, resize };
-    }
-  }
-  return null;
-}
-
-function drawAutomationCurve(
-  ctx: CanvasRenderingContext2D,
-  clip: SequenceAutomationClip,
-  rect: { x: number; y: number; width: number; height: number }
-) {
-  const graph = automationCurveGraphRect(rect);
-  ctx.fillStyle = SEQUENCE_COLORS.automationGraph;
-  ctx.fillRect(graph.x, graph.y, graph.width, graph.height);
-  ctx.lineWidth = THEME_METRICS.visualLineWidth;
-  ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGrid;
-  ctx.beginPath();
-  const columns = THEME_METRICS.automationGridColumns;
-  const rows = THEME_METRICS.automationGridRows;
-  for (let column = 1; column < columns; column += 1) {
-    const x = graph.x + (graph.width * column) / columns + THEME_METRICS.visualHairlineOffset;
-    ctx.moveTo(x, graph.y);
-    ctx.lineTo(x, graph.y + graph.height);
-  }
-  for (let row = 1; row < rows; row += 1) {
-    const y = graph.y + (graph.height * row) / rows + THEME_METRICS.visualHairlineOffset;
-    ctx.moveTo(graph.x, y);
-    ctx.lineTo(graph.x + graph.width, y);
-  }
-  ctx.stroke();
-  ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGridMajor;
-  ctx.beginPath();
-  ctx.moveTo(graph.x, graph.y + graph.height / 2 + THEME_METRICS.visualHairlineOffset);
-  ctx.lineTo(graph.x + graph.width, graph.y + graph.height / 2 + THEME_METRICS.visualHairlineOffset);
-  ctx.moveTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y);
-      ctx.lineTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y + graph.height);
-  ctx.stroke();
-  ctx.strokeStyle = SEQUENCE_COLORS.grid;
-  ctx.strokeRect(graph.x + THEME_METRICS.visualHairlineOffset, graph.y + THEME_METRICS.visualHairlineOffset, Math.max(0, graph.width - THEME_METRICS.visualLineWidth), Math.max(0, graph.height - THEME_METRICS.visualLineWidth));
-  if (clip.curve.length === 0) return;
-  const curvePoints = automationCurveCanvasPoints(clip.curve, rect);
-  ctx.strokeStyle = SEQUENCE_COLORS.accent;
-  ctx.lineWidth = THEME_METRICS.automationCurveWidth;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  curvePoints.forEach((point, index) => {
-    const { x, y } = point;
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-  ctx.lineCap = "butt";
-  ctx.lineJoin = "miter";
-  for (const point of curvePoints) {
-    ctx.fillStyle = THEME_COLORS.text;
-    ctx.strokeStyle = SEQUENCE_COLORS.page;
-    ctx.lineWidth = THEME_METRICS.visualLineWidthStrong;
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, THEME_METRICS.automationPointRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-}
-
-function automationCurveGraphRect(rect: { x: number; y: number; width: number; height: number }) {
-  const padding = Math.min(THEME_METRICS.automationGraphPaddingMax, Math.max(THEME_METRICS.automationGraphPaddingMin, rect.height * THEME_METRICS.automationGraphPaddingRatio));
-  return {
-    x: rect.x + padding,
-    y: rect.y + padding,
-    width: Math.max(THEME_METRICS.visualMinSize, rect.width - padding * 2),
-    height: Math.max(THEME_METRICS.visualMinSize, rect.height - padding * 2)
-  };
-}
-
-function automationCurveCanvasPoints(curve: Array<{ time: number; value: number }>, rect: { x: number; y: number; width: number; height: number }) {
-  const graph = automationCurveGraphRect(rect);
-  return sortAutomationCurve(curve)
-    .map((point) => ({
-      x: graph.x + clamp(point.time, 0, 1) * graph.width,
-      y: graph.y + (1 - clamp(point.value, 0, 1)) * graph.height
-    }));
-}
-
-function hitAutomationCurvePoint(clip: AutomationClipLayout, x: number, y: number): number | null {
-  const points = automationCurveCanvasPoints(clip.clip.curve, clip.rect);
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    const point = points[index];
-    if (point === undefined) continue;
-    if (Math.hypot(point.x - x, point.y - y) <= 7) return index;
-  }
-  return null;
-}
-
-function automationCurvePointFromCanvas(rect: { x: number; y: number; width: number; height: number }, x: number, y: number) {
-  const graph = automationCurveGraphRect(rect);
-  return {
-    time: roundToNanosecond(clamp((x - graph.x) / graph.width, 0, 1)),
-    value: Math.round(clamp(1 - (y - graph.y) / graph.height, 0, 1) * 1000) / 1000
-  };
-}
-
-function replaceAutomationCurvePoint(curve: Array<{ time: number; value: number }>, index: number, point: { time: number; value: number }) {
-  return curve
-    .map((candidate, candidateIndex) => (candidateIndex === index ? point : candidate))
-    .filter((candidate) => Number.isFinite(candidate.time) && Number.isFinite(candidate.value))
-    .sort((left, right) => left.time - right.time);
-}
-
-function removeAutomationCurvePoint(curve: Array<{ time: number; value: number }>, index: number) {
-  return sortAutomationCurve(curve)
-    .filter((_, candidateIndex) => candidateIndex !== index)
-    .filter((candidate) => Number.isFinite(candidate.time) && Number.isFinite(candidate.value));
-}
-
-function sortAutomationCurve(curve: Array<{ time: number; value: number }>) {
-  return [...curve].sort((left, right) => left.time - right.time);
-}
-
-
 function scheduleSequenceViewportStateSave(path: string, objectKey: string, state: PersistedSequenceViewportState) {
   window.clearTimeout(sequenceViewportStateTimer);
   sequenceViewportStateTimer = window.setTimeout(() => {
