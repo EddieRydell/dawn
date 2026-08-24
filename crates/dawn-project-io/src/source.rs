@@ -59,7 +59,10 @@ impl SourceProject {
             .map(|module| module.root.join(document.path()))
     }
 
-    pub fn document_for_workspace_path(&self, relative_path: &Utf8Path) -> Option<DocumentId> {
+    pub fn workspace_module_for_path(
+        &self,
+        relative_path: &Utf8Path,
+    ) -> Option<(Uuid, Utf8PathBuf)> {
         let absolute = self.project_root().join(relative_path);
         let (module_id, module) = self
             .source_graph
@@ -73,7 +76,12 @@ impl SourceProject {
             })
             .max_by_key(|(_, module)| module.root.components().count())?;
         let module_relative = absolute.strip_prefix(&module.root).ok()?;
-        let document_id = DocumentId::new(*module_id, module_relative.to_path_buf());
+        Some((*module_id, module_relative.to_path_buf()))
+    }
+
+    pub fn document_for_workspace_path(&self, relative_path: &Utf8Path) -> Option<DocumentId> {
+        let (module_id, module_relative) = self.workspace_module_for_path(relative_path)?;
+        let document_id = DocumentId::new(module_id, module_relative);
         self.documents
             .contains_key(&document_id)
             .then_some(document_id)

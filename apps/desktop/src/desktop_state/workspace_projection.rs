@@ -230,40 +230,25 @@ fn workspace_ownership(
     Option<uuid::Uuid>,
     Option<Utf8PathBuf>,
 ) {
-    let absolute = session.source.project_root().join(path);
-    let mut modules = session
-        .source
-        .source_graph
-        .modules()
-        .iter()
-        .filter(|(_, module)| {
-            !matches!(
-                module.origin,
-                dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
-            ) && absolute.starts_with(&module.root)
-        })
-        .collect::<Vec<_>>();
-    modules.sort_by_key(|(_, module)| module.root.components().count());
-    let Some((module_id, module)) = modules.last() else {
+    let Some((module_id, module_relative)) = session.source.workspace_module_for_path(path) else {
         return (WorkspaceEntryOwnership::Project, None, None);
     };
-    let ownership = match module.origin {
-        dawn_package::ResolvedModuleOrigin::Project => WorkspaceEntryOwnership::Project,
-        dawn_package::ResolvedModuleOrigin::PathDependency { .. } => {
+    let ownership = match session
+        .source
+        .ownership(&dawn_language::identity::DocumentId::new(
+            module_id,
+            module_relative.clone(),
+        )) {
+        Some(dawn_project_io::SourceOwnership::ProjectOwned) => WorkspaceEntryOwnership::Project,
+        Some(dawn_project_io::SourceOwnership::PathDependencyOwned { .. }) => {
             WorkspaceEntryOwnership::PathDependency
         }
-        dawn_package::ResolvedModuleOrigin::RegistryDependency { .. } => {
+        Some(dawn_project_io::SourceOwnership::RegistryReadOnly { .. }) => {
             WorkspaceEntryOwnership::Registry
         }
+        None => WorkspaceEntryOwnership::Project,
     };
-    (
-        ownership,
-        Some(**module_id),
-        absolute
-            .strip_prefix(&module.root)
-            .ok()
-            .map(Utf8Path::to_path_buf),
-    )
+    (ownership, Some(module_id), Some(module_relative))
 }
 
 fn workspace_role(
