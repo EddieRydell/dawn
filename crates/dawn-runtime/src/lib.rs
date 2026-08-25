@@ -11,7 +11,6 @@
 )]
 
 mod color;
-mod elements;
 mod raster;
 mod sequence;
 mod show;
@@ -43,7 +42,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use color::black;
-use elements::{PreparedElement, element_cell_offsets, prepare_elements};
 use sequence::composition::{
     PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind,
     layer_cache_history_micros, prepare_composition_graph,
@@ -60,6 +58,7 @@ use sequence::effects::sampling::{
     evenly_sample_indices, prepare_sample_groups_for_implementation,
     prepare_sampled_effect_pixel_groups, render_sampled_effect_target_colors, sample_effect_group,
 };
+use sequence::elements::{PreparedElement, element_cell_offsets, prepare_elements};
 use sequence::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
     prepare_target_pixels_cached,

@@ -7,7 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::elements::{PreparedElement, prepare_elements};
+use crate::sequence::elements::{PreparedElement, prepare_elements};
 use crate::{RenderError, RenderedTargetPixelAddress};
 
 fn pixel_fraction(index: usize, count: usize) -> f64 {

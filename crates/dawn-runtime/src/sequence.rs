@@ -1,5 +1,6 @@
 pub(crate) mod composition;
 pub(crate) mod effects;
+pub(crate) mod elements;
 pub(crate) mod targets;
 pub(crate) mod timeline;
 
