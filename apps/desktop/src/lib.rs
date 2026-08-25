@@ -26,7 +26,7 @@ pub mod preview;
 mod project_templates;
 pub mod sequence_clip_raster;
 mod sequence_integrity;
-pub mod show_render;
+pub mod sequence_render;
 mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {

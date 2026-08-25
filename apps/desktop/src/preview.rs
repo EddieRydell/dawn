@@ -14,8 +14,8 @@ use wgpu::util::DeviceExt;
 
 use crate::dto::AudioTransportState;
 use crate::gui_geometry::{geometry_emitters, point3_meters};
-use crate::show_render::AudioClockRenderIdentity;
-use crate::show_render::ShowRenderError;
+use crate::sequence_render::AudioClockRenderIdentity;
+use crate::sequence_render::SequenceRenderError;
 
 pub const PREVIEW_LABEL: &str = "preview";
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
@@ -480,7 +480,7 @@ impl PreviewRenderer {
         &mut self,
         size: PreviewSize,
         scene: Option<&PreviewScene>,
-        frame: Option<&dawn_runtime::RenderedShowFrame>,
+        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
     ) {
         let size = size.clamp_to_max_dimension(self.max_surface_dimension);
         if size.width == 0 || size.height == 0 {
@@ -558,7 +558,7 @@ impl PreviewRenderer {
     fn update_scene(
         &mut self,
         scene: &PreviewScene,
-        frame: Option<&dawn_runtime::RenderedShowFrame>,
+        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
         size: PreviewSize,
     ) {
         if self.uploaded_revision != Some(scene.revision) {
@@ -598,7 +598,7 @@ impl PreviewRenderer {
     fn update_colors(
         &mut self,
         scene: &PreviewScene,
-        frame: Option<&dawn_runtime::RenderedShowFrame>,
+        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
     ) {
         self.color_scratch.clear();
         self.color_scratch
@@ -751,10 +751,11 @@ fn run_preview_loop(
 
         let clock = match state.active_preview_render_identity() {
             Ok(clock) => Some(clock),
-            Err(ShowRenderError::NoRenderSession | ShowRenderError::ClockUnavailable { .. }) => {
-                None
-            }
-            Err(ShowRenderError::Render(_)) => None,
+            Err(
+                SequenceRenderError::NoSequenceRenderSession
+                | SequenceRenderError::ClockUnavailable { .. },
+            ) => None,
+            Err(SequenceRenderError::Render(_)) => None,
         };
         let render_key = PreviewRenderKey::new(size, cached_scene.as_ref(), clock.as_ref());
         if last_render_key.as_ref() != Some(&render_key) {
@@ -767,9 +768,10 @@ fn run_preview_loop(
                     Some(rendered.frame)
                 }
                 Err(
-                    ShowRenderError::NoRenderSession | ShowRenderError::ClockUnavailable { .. },
+                    SequenceRenderError::NoSequenceRenderSession
+                    | SequenceRenderError::ClockUnavailable { .. },
                 ) => None,
-                Err(ShowRenderError::Render(error)) => {
+                Err(SequenceRenderError::Render(error)) => {
                     state.set_render_error_if_changed(format!("Render failed: {error:?}"));
                     reported_render_error = true;
                     None

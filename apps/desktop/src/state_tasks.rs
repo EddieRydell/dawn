@@ -138,7 +138,7 @@ pub(crate) struct RenderRefreshPayload {
 pub(crate) enum RenderRefreshResult {
     Refreshed {
         sequence: u64,
-        session: Box<crate::show_render::PreparedRenderSession>,
+        session: Box<crate::sequence_render::PreparedSequenceOutput>,
     },
     Failed {
         sequence: u64,
@@ -162,7 +162,7 @@ fn render_refresh_worker(
         while let Ok(newer) = receiver.try_recv() {
             pending = newer;
         }
-        let result = match crate::show_render::prepare_render_session(
+        let result = match crate::sequence_render::prepare_sequence_output(
             &pending.payload.project.project,
             &pending.payload.setup_id,
             &pending.payload.sequence_id,

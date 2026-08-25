@@ -9,17 +9,17 @@ impl DesktopState {
     pub(super) fn refresh_render_session(
         &self,
         project: &dawn_language::model::DawnProject,
-    ) -> Option<dawn_runtime::ShowPrepareError> {
-        let mut show_render = lock_unpoisoned(&self.show_render);
-        let result = show_render.refresh_project(project);
+    ) -> Option<dawn_runtime::SequenceOutputPrepareError> {
+        let mut sequence_render = lock_unpoisoned(&self.sequence_render);
+        let result = sequence_render.refresh_project(project);
         if result.is_err() {
-            show_render.unload();
+            sequence_render.unload();
         }
         result.err()
     }
 
     pub(super) fn schedule_render_refresh(&self, project: Arc<ProjectSession>) {
-        let target = lock_unpoisoned(&self.show_render).active_target();
+        let target = lock_unpoisoned(&self.sequence_render).active_target();
         let Some((setup_id, sequence_id)) = target else {
             return;
         };
@@ -67,7 +67,7 @@ impl DesktopState {
                     sequence: _,
                     session,
                 } => {
-                    lock_unpoisoned(&self.show_render).apply_prepared(*session);
+                    lock_unpoisoned(&self.sequence_render).apply_prepared(*session);
                     self.clear_render_error_if_set();
                     self.resume_live_output_after_prepare();
                 }
@@ -84,6 +84,6 @@ impl DesktopState {
 
     pub(super) fn unload_render_session(&self) {
         self.disable_live_output();
-        lock_unpoisoned(&self.show_render).unload();
+        lock_unpoisoned(&self.sequence_render).unload();
     }
 }

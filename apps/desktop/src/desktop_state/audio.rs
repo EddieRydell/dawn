@@ -67,20 +67,24 @@ impl DesktopState {
 
     pub fn render_current_sequence_frame(
         &self,
-    ) -> Result<crate::show_render::AudioClockRenderedFrame, crate::show_render::ShowRenderError>
-    {
+    ) -> Result<
+        crate::sequence_render::AudioClockRenderedFrame,
+        crate::sequence_render::SequenceRenderError,
+    > {
         self.drain_render_refresh_results();
         let audio_transport = self.audio_snapshot();
-        lock_unpoisoned(&self.show_render).render_current_sequence_frame(&audio_transport)
+        lock_unpoisoned(&self.sequence_render).render_current_sequence_frame(&audio_transport)
     }
 
     pub fn active_preview_render_identity(
         &self,
-    ) -> Result<crate::show_render::AudioClockRenderIdentity, crate::show_render::ShowRenderError>
-    {
+    ) -> Result<
+        crate::sequence_render::AudioClockRenderIdentity,
+        crate::sequence_render::SequenceRenderError,
+    > {
         self.drain_render_refresh_results();
         let audio_transport = self.audio_snapshot();
-        lock_unpoisoned(&self.show_render).active_render_identity(&audio_transport)
+        lock_unpoisoned(&self.sequence_render).active_render_identity(&audio_transport)
     }
 
     pub fn preview_scene(&self) -> Option<crate::preview::PreviewScene> {

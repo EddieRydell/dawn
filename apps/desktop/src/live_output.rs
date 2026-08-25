@@ -11,7 +11,7 @@ use crate::dto::{
     AudioTransportState, LiveOutputControllerSnapshot, LiveOutputControllerState,
     LiveOutputSnapshot, LiveOutputState,
 };
-use crate::show_render::ShowRenderService;
+use crate::sequence_render::SequenceRenderService;
 
 enum Command {
     Enable {
@@ -42,7 +42,7 @@ pub(crate) struct LiveOutputService {
 impl LiveOutputService {
     pub(crate) fn new(
         audio: Arc<Mutex<AudioEngine>>,
-        render: Arc<Mutex<ShowRenderService>>,
+        render: Arc<Mutex<SequenceRenderService>>,
     ) -> Self {
         let (sender, command_receiver) = mpsc::channel();
         let (update_sender, receiver) = mpsc::channel();
@@ -135,7 +135,7 @@ fn worker(
     receiver: mpsc::Receiver<Command>,
     updates: mpsc::Sender<Update>,
     audio: Arc<Mutex<AudioEngine>>,
-    render: Arc<Mutex<ShowRenderService>>,
+    render: Arc<Mutex<SequenceRenderService>>,
 ) {
     let mut active: Option<(u32, OutputTransports, LiveOutputSnapshot)> = None;
     let mut tick_interval = Duration::from_millis(20);

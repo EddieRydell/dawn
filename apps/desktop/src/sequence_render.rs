@@ -2,27 +2,28 @@ use dawn_language::model::DawnProject;
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::SetupId;
 use dawn_runtime::{
-    PreparedRenderSession as RuntimeRenderSession, RenderSessionScratch, RenderedShowFrame,
-    ShowPrepareError as RuntimePrepareError, ShowRenderError as RuntimeRenderError,
+    PreparedSequenceOutput as RuntimeSequenceOutput, RenderedSequenceFrame,
+    SequenceOutputPrepareError as RuntimePrepareError,
+    SequenceOutputRenderError as RuntimeRenderError, SequenceOutputScratch,
 };
 
 use crate::dto::{AudioTransportSnapshot, AudioTransportState};
 
-pub(crate) struct ShowRenderService {
-    session: Option<RenderSession>,
+pub(crate) struct SequenceRenderService {
+    session: Option<SequenceRenderSession>,
     session_generation: u64,
 }
 
-pub struct PreparedRenderSession {
+pub struct PreparedSequenceOutput {
     setup_id: SetupId,
     sequence_id: SequenceId,
-    renderer: RuntimeRenderSession,
+    renderer: RuntimeSequenceOutput,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AudioClockRenderedFrame {
     pub audio_generation: u32,
-    pub frame: RenderedShowFrame,
+    pub frame: RenderedSequenceFrame,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,13 +38,13 @@ pub struct AudioClockRenderIdentity {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum ShowRenderError {
-    NoRenderSession,
+pub enum SequenceRenderError {
+    NoSequenceRenderSession,
     ClockUnavailable { state: AudioTransportState },
     Render(RuntimeRenderError),
 }
 
-impl ShowRenderService {
+impl SequenceRenderService {
     pub(crate) fn new() -> Self {
         Self {
             session: None,
@@ -57,7 +58,7 @@ impl ShowRenderService {
         setup_id: &SetupId,
         sequence_id: &SequenceId,
     ) -> Result<(), RuntimePrepareError> {
-        let session = prepare_render_session(project, setup_id, sequence_id)?;
+        let session = prepare_sequence_output(project, setup_id, sequence_id)?;
         self.apply_prepared(session);
         Ok(())
     }
@@ -85,18 +86,18 @@ impl ShowRenderService {
     pub fn render_current_sequence_frame(
         &mut self,
         audio: &AudioTransportSnapshot,
-    ) -> Result<AudioClockRenderedFrame, ShowRenderError> {
+    ) -> Result<AudioClockRenderedFrame, SequenceRenderError> {
         let session = self
             .session
             .as_mut()
-            .ok_or(ShowRenderError::NoRenderSession)?;
+            .ok_or(SequenceRenderError::NoSequenceRenderSession)?;
         match audio.state {
             AudioTransportState::Stopped
             | AudioTransportState::Paused
             | AudioTransportState::Playing
             | AudioTransportState::Ended => {}
             AudioTransportState::Unloaded | AudioTransportState::Error => {
-                return Err(ShowRenderError::ClockUnavailable {
+                return Err(SequenceRenderError::ClockUnavailable {
                     state: audio.state.clone(),
                 });
             }
@@ -113,12 +114,12 @@ impl ShowRenderService {
                 .cached
                 .as_ref()
                 .map(|cached| cached.frame.clone())
-                .ok_or(ShowRenderError::NoRenderSession)?
+                .ok_or(SequenceRenderError::NoSequenceRenderSession)?
         } else {
             let frame = session
                 .renderer
                 .render_seconds_with_scratch(audio.position_seconds, &mut session.scratch)
-                .map_err(ShowRenderError::Render)?;
+                .map_err(SequenceRenderError::Render)?;
             session.cached = Some(AudioClockRenderedFrame {
                 audio_generation: audio.generation,
                 frame: frame.clone(),
@@ -134,18 +135,18 @@ impl ShowRenderService {
     pub fn active_render_identity(
         &self,
         audio: &AudioTransportSnapshot,
-    ) -> Result<AudioClockRenderIdentity, ShowRenderError> {
+    ) -> Result<AudioClockRenderIdentity, SequenceRenderError> {
         let session = self
             .session
             .as_ref()
-            .ok_or(ShowRenderError::NoRenderSession)?;
+            .ok_or(SequenceRenderError::NoSequenceRenderSession)?;
         match audio.state {
             AudioTransportState::Stopped
             | AudioTransportState::Paused
             | AudioTransportState::Playing
             | AudioTransportState::Ended => {}
             AudioTransportState::Unloaded | AudioTransportState::Error => {
-                return Err(ShowRenderError::ClockUnavailable {
+                return Err(SequenceRenderError::ClockUnavailable {
                     state: audio.state.clone(),
                 });
             }
@@ -171,33 +172,33 @@ impl ShowRenderService {
             .map(|session| (session.setup_id.clone(), session.sequence_id.clone()))
     }
 
-    pub fn apply_prepared(&mut self, session: PreparedRenderSession) {
+    pub fn apply_prepared(&mut self, session: PreparedSequenceOutput) {
         self.session_generation = self.session_generation.saturating_add(1);
-        self.session = Some(RenderSession {
+        self.session = Some(SequenceRenderSession {
             setup_id: session.setup_id,
             sequence_id: session.sequence_id,
             renderer: session.renderer,
-            scratch: RenderSessionScratch::default(),
+            scratch: SequenceOutputScratch::default(),
             cached: None,
         });
     }
 }
 
-struct RenderSession {
+struct SequenceRenderSession {
     setup_id: SetupId,
     sequence_id: SequenceId,
-    renderer: RuntimeRenderSession,
-    scratch: RenderSessionScratch,
+    renderer: RuntimeSequenceOutput,
+    scratch: SequenceOutputScratch,
     cached: Option<AudioClockRenderedFrame>,
 }
 
-pub fn prepare_render_session(
+pub fn prepare_sequence_output(
     project: &DawnProject,
     setup_id: &SetupId,
     sequence_id: &SequenceId,
-) -> Result<PreparedRenderSession, RuntimePrepareError> {
-    let renderer = RuntimeRenderSession::prepare(project, setup_id, sequence_id)?;
-    Ok(PreparedRenderSession {
+) -> Result<PreparedSequenceOutput, RuntimePrepareError> {
+    let renderer = RuntimeSequenceOutput::prepare(project, setup_id, sequence_id)?;
+    Ok(PreparedSequenceOutput {
         setup_id: setup_id.clone(),
         sequence_id: sequence_id.clone(),
         renderer,

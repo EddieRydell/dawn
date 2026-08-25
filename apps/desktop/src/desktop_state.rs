@@ -28,7 +28,7 @@ pub(crate) struct DesktopState {
     project_analysis: Mutex<ProjectAnalysisScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
     audio: Arc<Mutex<crate::audio::AudioEngine>>,
-    show_render: Arc<Mutex<crate::show_render::ShowRenderService>>,
+    sequence_render: Arc<Mutex<crate::sequence_render::SequenceRenderService>>,
     live_output: Mutex<crate::live_output::LiveOutputService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
@@ -47,9 +47,11 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl DesktopState {
     pub(crate) fn new() -> Self {
         let audio = Arc::new(Mutex::new(crate::audio::AudioEngine::new()));
-        let show_render = Arc::new(Mutex::new(crate::show_render::ShowRenderService::new()));
+        let sequence_render = Arc::new(Mutex::new(
+            crate::sequence_render::SequenceRenderService::new(),
+        ));
         let live_output =
-            crate::live_output::LiveOutputService::new(audio.clone(), show_render.clone());
+            crate::live_output::LiveOutputService::new(audio.clone(), sequence_render.clone());
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(LoadedProject::Closed),
@@ -58,7 +60,7 @@ impl DesktopState {
             project_analysis: Mutex::new(project_analysis_scheduler()),
             render_refresh: Mutex::new(render_refresh_scheduler()),
             audio,
-            show_render,
+            sequence_render,
             live_output: Mutex::new(live_output),
             sequence_clip_raster: Mutex::new(
                 crate::sequence_clip_raster::SequenceClipRasterService::new(),
@@ -178,7 +180,9 @@ impl DesktopState {
                 .setups
                 .get(&project.project.root.setup)
                 .map(|setup| setup.controllers.clone());
-            let render_ready = lock_unpoisoned(&self.show_render).active_target().is_some();
+            let render_ready = lock_unpoisoned(&self.sequence_render)
+                .active_target()
+                .is_some();
             let Some(active) = active.filter(|active| render_ready && !active.is_empty()) else {
                 return self.update_snapshot(|snapshot| {
                     snapshot.live_output.state = crate::dto::LiveOutputState::Error;
