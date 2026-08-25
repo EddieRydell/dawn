@@ -12,6 +12,7 @@
 
 mod color;
 mod elements;
+mod graph;
 mod params;
 mod show;
 mod target;
@@ -29,13 +30,11 @@ use dawn_language::element::{ElementNodeId, ElementSelection};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect, NativeSample};
-use dawn_language::operator::{
-    BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
-};
+use dawn_language::operator::{BuiltinOperator, OperatorDefinition, OperatorImplementation};
 use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, AutomationValue,
-    CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, MarkCollectionKey, Sequence,
-    SequenceCompositionGraph, SequenceId, SequenceLayerId, automation_value_at,
+    CompositionGraphNodeId, MarkCollectionKey, Sequence, SequenceId, SequenceLayerId,
+    automation_value_at,
 };
 use dawn_language::setup::SetupId;
 use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, validate_sequence};
@@ -50,10 +49,13 @@ use color::{
     scale_color,
 };
 use elements::{PreparedElement, element_cell_offsets, prepare_elements};
+use graph::{
+    PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind, prepare_composition_graph,
+};
 use params::{EffectParamTiming, prepare_operator_params, prepare_params};
 use target::{
-    PreparedTargetCache, PreparedTargetPixel, full_rig_target_pixels, generator_expansion_targets,
-    prepare_target, prepare_target_pixels, prepare_target_pixels_cached,
+    PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
+    prepare_target_pixels, prepare_target_pixels_cached,
 };
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -892,296 +894,6 @@ fn prepare_effect_inst(
         }
     }
     Ok(target)
-}
-
-struct PrepareGraphContext<'a> {
-    project: &'a DawnProject,
-    sequence: &'a Sequence,
-    elements: &'a [PreparedElement],
-    layers: &'a [PreparedLayer],
-}
-
-fn prepare_composition_graph(
-    context: PrepareGraphContext<'_>,
-    graph: &SequenceCompositionGraph,
-) -> Result<PreparedCompositionGraph, RenderError> {
-    let full_target = Arc::new(full_rig_target_pixels(context.elements)?);
-    validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
-        RenderError::BadGraph {
-            message: error.message,
-        }
-    })?;
-    validate_composition_graph_layers(context.sequence, graph)?;
-    let node_ids = composition_graph_node_ids(graph)?;
-    let node_indexes = node_ids
-        .iter()
-        .cloned()
-        .enumerate()
-        .map(|(index, node_id)| (node_id, index))
-        .collect::<IndexMap<_, _>>();
-    let node_order = topological_composition_graph_order(&node_ids, &node_indexes, graph)?;
-    let mut incoming = vec![Vec::<(GraphPortId, usize)>::new(); node_ids.len()];
-    for edge in &graph.edges {
-        let from = node_index(&node_indexes, &edge.from)?;
-        let to = node_index(&node_indexes, &edge.to)?;
-        incoming[to].push((edge.to_port.clone(), from));
-    }
-
-    let mut prepared_nodes = Vec::<PreparedGraphNode>::new();
-    let mut prepared_index_by_node = vec![usize::MAX; node_ids.len()];
-    for node_index in &node_order {
-        let node_id = &node_ids[*node_index];
-        let node = graph_node(graph, node_id)?;
-        let prepared = match &node.kind {
-            CompositionGraphNodeKind::Layer { layer_id } => {
-                let layer_index = context
-                    .layers
-                    .iter()
-                    .position(|layer| layer.id == *layer_id)
-                    .ok_or_else(|| RenderError::BadGraph {
-                        message: format!(
-                            "composition graph references missing layer {}",
-                            layer_id.0
-                        ),
-                    })?;
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Layer { layer_index },
-                }
-            }
-            CompositionGraphNodeKind::Operator(operator_node) => {
-                let definition = context
-                    .project
-                    .definitions
-                    .operators
-                    .resolve(&operator_node.operator)
-                    .ok_or_else(|| RenderError::BadGraph {
-                        message: "missing operator definition".to_string(),
-                    })?
-                    .clone();
-                let inputs = definition
-                    .inputs
-                    .iter()
-                    .map(|port| {
-                        incoming[*node_index]
-                            .iter()
-                            .find_map(|(input_port, node)| {
-                                (input_port.0 == port.source_name).then_some(*node)
-                            })
-                            .ok_or_else(|| RenderError::BadGraph {
-                                message: format!(
-                                    "composition graph input port `{}` is not connected",
-                                    port.source_name
-                                ),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|input| {
-                        let prepared_index = prepared_index_by_node[input];
-                        (prepared_index != usize::MAX)
-                            .then_some(prepared_index)
-                            .ok_or_else(|| RenderError::BadGraph {
-                                message: "composition graph order did not prepare an input first"
-                                    .to_string(),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let params = prepare_operator_params(
-                    context.project,
-                    context.sequence,
-                    &definition,
-                    &operator_node.params,
-                    EffectParamTiming {
-                        start_seconds: 0.0,
-                        duration_seconds: context.sequence.duration.as_seconds_f64(),
-                    },
-                )?;
-                let automation = automation_for_composition_node(context.sequence, &node.id);
-                let bound_params = match (&definition.implementation, automation.is_empty()) {
-                    (OperatorImplementation::Dsl(compiled), true) => {
-                        Some(compiled.bind_params(&params)?)
-                    }
-                    _ => None,
-                };
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Operator {
-                        definition: Box::new(definition.clone()),
-                        inputs,
-                        params,
-                        automation,
-                        bound_params,
-                    },
-                }
-            }
-            CompositionGraphNodeKind::Output => {
-                let inputs = incoming[*node_index]
-                    .iter()
-                    .map(|(_, input)| {
-                        let prepared_index = prepared_index_by_node[*input];
-                        (prepared_index != usize::MAX)
-                            .then_some(prepared_index)
-                            .ok_or_else(|| RenderError::BadGraph {
-                                message:
-                                    "composition graph order did not prepare output input first"
-                                        .to_string(),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Output { inputs },
-                }
-            }
-        };
-        prepared_index_by_node[*node_index] = prepared_nodes.len();
-        prepared_nodes.push(prepared);
-    }
-
-    let output_candidates = node_order
-        .iter()
-        .filter(|index| {
-            matches!(
-                graph_node(graph, &node_ids[**index]).map(|node| &node.kind),
-                Ok(CompositionGraphNodeKind::Output)
-            )
-        })
-        .copied()
-        .collect::<Vec<_>>();
-    let [output_source_index] = output_candidates.as_slice() else {
-        return Err(RenderError::BadGraph {
-            message: "composition graph must have exactly one output node".to_string(),
-        });
-    };
-    let output_index = prepared_index_by_node[*output_source_index];
-    if output_index == usize::MAX {
-        return Err(RenderError::BadGraph {
-            message: "composition graph output node is not in render order".to_string(),
-        });
-    }
-
-    Ok(PreparedCompositionGraph {
-        output_index,
-        nodes: prepared_nodes,
-    })
-}
-
-fn composition_graph_node_ids(
-    graph: &SequenceCompositionGraph,
-) -> Result<Vec<CompositionGraphNodeId>, RenderError> {
-    let mut ids = IndexSet::new();
-    for node in &graph.nodes {
-        if !ids.insert(node.id.clone()) {
-            return Err(RenderError::BadGraph {
-                message: format!("duplicate composition graph node {}", node.id.0),
-            });
-        }
-    }
-    Ok(ids.into_iter().collect())
-}
-
-fn validate_composition_graph_layers(
-    sequence: &Sequence,
-    graph: &SequenceCompositionGraph,
-) -> Result<(), RenderError> {
-    let mut graph_layer_ids = IndexSet::new();
-    for node in &graph.nodes {
-        let CompositionGraphNodeKind::Layer { layer_id } = &node.kind else {
-            continue;
-        };
-        if !sequence.layers.iter().any(|layer| layer.id == *layer_id) {
-            return Err(RenderError::BadGraph {
-                message: format!(
-                    "composition graph layer node references missing layer {}",
-                    layer_id.0
-                ),
-            });
-        }
-        if !graph_layer_ids.insert(layer_id.clone()) {
-            return Err(RenderError::BadGraph {
-                message: format!(
-                    "composition graph has duplicate layer node for layer {}",
-                    layer_id.0
-                ),
-            });
-        }
-    }
-    for layer in &sequence.layers {
-        if !graph_layer_ids.contains(&layer.id) {
-            return Err(RenderError::BadGraph {
-                message: format!(
-                    "composition graph is missing layer node for layer {}",
-                    layer.id.0
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn node_index(
-    indexes: &IndexMap<CompositionGraphNodeId, usize>,
-    node_id: &CompositionGraphNodeId,
-) -> Result<usize, RenderError> {
-    indexes
-        .get(node_id)
-        .copied()
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!(
-                "edge references missing composition graph node {}",
-                node_id.0
-            ),
-        })
-}
-
-fn graph_node<'a>(
-    graph: &'a SequenceCompositionGraph,
-    id: &CompositionGraphNodeId,
-) -> Result<&'a dawn_language::sequence::CompositionGraphNode, RenderError> {
-    graph
-        .nodes
-        .iter()
-        .find(|node| node.id == *id)
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing composition graph node {}", id.0),
-        })
-}
-
-fn topological_composition_graph_order(
-    node_ids: &[CompositionGraphNodeId],
-    node_indexes: &IndexMap<CompositionGraphNodeId, usize>,
-    graph: &SequenceCompositionGraph,
-) -> Result<Vec<usize>, RenderError> {
-    let mut indegree = vec![0usize; node_ids.len()];
-    let mut outgoing = vec![Vec::<usize>::new(); node_ids.len()];
-    for edge in &graph.edges {
-        let from = node_index(node_indexes, &edge.from)?;
-        let to = node_index(node_indexes, &edge.to)?;
-        outgoing[from].push(to);
-        indegree[to] += 1;
-    }
-    let mut ready = indegree
-        .iter()
-        .enumerate()
-        .filter_map(|(index, count)| (*count == 0).then_some(index))
-        .collect::<Vec<_>>();
-    let mut order = Vec::with_capacity(node_ids.len());
-    while let Some(index) = ready.pop() {
-        order.push(index);
-        for next in &outgoing[index] {
-            indegree[*next] = indegree[*next].saturating_sub(1);
-            if indegree[*next] == 0 {
-                ready.push(*next);
-            }
-        }
-    }
-    if order.len() != node_ids.len() {
-        return Err(RenderError::BadGraph {
-            message: "composition graph contains a cycle".to_string(),
-        });
-    }
-    Ok(order)
 }
 
 fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
@@ -2764,35 +2476,6 @@ enum PreparedEffectImplementation {
 struct PreparedLayer {
     id: SequenceLayerId,
     enabled: bool,
-}
-
-#[derive(Clone, Debug)]
-struct PreparedCompositionGraph {
-    output_index: usize,
-    nodes: Vec<PreparedGraphNode>,
-}
-
-#[derive(Clone, Debug)]
-struct PreparedGraphNode {
-    target: Arc<Vec<PreparedTargetPixel>>,
-    kind: PreparedGraphNodeKind,
-}
-
-#[derive(Clone, Debug)]
-enum PreparedGraphNodeKind {
-    Layer {
-        layer_index: usize,
-    },
-    Operator {
-        definition: Box<OperatorDefinition>,
-        inputs: Vec<usize>,
-        params: IndexMap<Identifier, Value>,
-        automation: Vec<PreparedAutomation>,
-        bound_params: Option<BoundParams>,
-    },
-    Output {
-        inputs: Vec<usize>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
