@@ -1,7 +1,7 @@
 import type { SequenceAutomationClip } from "../../../types";
 
 import { clamp, roundToNanosecond } from "../shared";
-import { THEME_COLORS, THEME_METRICS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS, THEME_TYPOGRAPHY } from "../../../theme";
 import type { SequenceClipLayout, SequenceViewport } from "./sequenceSelection";
 
 export type AutomationDraft = {
@@ -24,8 +24,21 @@ export type AutomationClipLayout = {
   rect: { x: number; y: number; width: number; height: number };
 };
 
+export type AutomationClipVisualState = {
+  label: string;
+  selected: boolean;
+  hovered: boolean;
+  choosing: boolean;
+  resize: "left" | "right" | "none";
+  activePointIndex: number | null;
+};
+
 export function automationLaneRowHeight(laneHeight: number): number {
-  return Math.max(THEME_METRICS.automationRowMinHeight, laneHeight * 0.42);
+  return clamp(
+    laneHeight * THEME_METRICS.automationRowHeightRatio,
+    THEME_METRICS.automationRowMinHeight,
+    THEME_METRICS.automationRowMaxHeight
+  );
 }
 
 export function automationRowCounts(clips: SequenceAutomationClip[], laneCount: number): number[] {
@@ -179,7 +192,13 @@ export function hitAutomationClip(clips: AutomationClipLayout[], x: number, y: n
 
 function automationCurveGraphRect(rect: { x: number; y: number; width: number; height: number }) {
   const padding = Math.min(THEME_METRICS.automationGraphPaddingMax, Math.max(THEME_METRICS.automationGraphPaddingMin, rect.height * THEME_METRICS.automationGraphPaddingRatio));
-  return { x: rect.x + padding, y: rect.y + padding, width: Math.max(THEME_METRICS.visualMinSize, rect.width - padding * 2), height: Math.max(THEME_METRICS.visualMinSize, rect.height - padding * 2) };
+  const headerHeight = Math.min(THEME_METRICS.automationClipHeaderHeight, rect.height);
+  return {
+    x: rect.x + padding,
+    y: rect.y + headerHeight + padding,
+    width: Math.max(THEME_METRICS.visualMinSize, rect.width - padding * 2),
+    height: Math.max(THEME_METRICS.visualMinSize, rect.height - headerHeight - padding * 2)
+  };
 }
 
 export function sortAutomationCurve(curve: Array<{ time: number; value: number }>) {
@@ -213,10 +232,28 @@ export function removeAutomationCurvePoint(curve: Array<{ time: number; value: n
   return sortAutomationCurve(curve).filter((_, candidateIndex) => candidateIndex !== index).filter((candidate) => Number.isFinite(candidate.time) && Number.isFinite(candidate.value));
 }
 
-export function drawAutomationCurve(ctx: CanvasRenderingContext2D, clip: SequenceAutomationClip, rect: { x: number; y: number; width: number; height: number }) {
+export function drawAutomationClip(
+  ctx: CanvasRenderingContext2D,
+  clip: SequenceAutomationClip,
+  rect: { x: number; y: number; width: number; height: number },
+  state: AutomationClipVisualState
+) {
   const graph = automationCurveGraphRect(rect);
+  const headerHeight = Math.min(THEME_METRICS.automationClipHeaderHeight, rect.height);
+  const radius = Math.min(THEME_METRICS.automationClipRadius, rect.width / 2, rect.height / 2);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(rect.x, rect.y, rect.width, rect.height, radius);
+  ctx.clip();
+
+  ctx.fillStyle = THEME_COLORS.automationClipSurface;
+  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fillStyle = state.selected ? THEME_COLORS.automationClipHeaderSelected : THEME_COLORS.automationClipHeader;
+  ctx.fillRect(rect.x, rect.y, rect.width, headerHeight);
   ctx.fillStyle = THEME_COLORS.automationGraph;
-  ctx.fillRect(graph.x, graph.y, graph.width, graph.height);
+  ctx.fillRect(rect.x, rect.y + headerHeight, rect.width, Math.max(0, rect.height - headerHeight));
+
   ctx.lineWidth = THEME_METRICS.visualLineWidth;
   ctx.strokeStyle = THEME_COLORS.automationGraphGrid;
   ctx.beginPath();
@@ -236,18 +273,134 @@ export function drawAutomationCurve(ctx: CanvasRenderingContext2D, clip: Sequenc
   ctx.moveTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y);
   ctx.lineTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y + graph.height);
   ctx.stroke();
-  ctx.strokeStyle = THEME_COLORS.sequenceGrid;
-  ctx.strokeRect(graph.x + THEME_METRICS.visualHairlineOffset, graph.y + THEME_METRICS.visualHairlineOffset, Math.max(0, graph.width - THEME_METRICS.visualLineWidth), Math.max(0, graph.height - THEME_METRICS.visualLineWidth));
-  if (clip.curve.length === 0) return;
+
   const points = automationCurveCanvasPoints(clip.curve, rect);
-  ctx.strokeStyle = THEME_COLORS.accent;
-  ctx.lineWidth = THEME_METRICS.automationCurveWidth;
-  ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.beginPath();
-  points.forEach((point, index) => { if (index === 0) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y); });
-  ctx.stroke();
-  ctx.lineCap = "butt"; ctx.lineJoin = "miter";
-  for (const point of points) {
-    ctx.fillStyle = THEME_COLORS.text; ctx.strokeStyle = THEME_COLORS.page; ctx.lineWidth = THEME_METRICS.visualLineWidthStrong;
-    ctx.beginPath(); ctx.arc(point.x, point.y, THEME_METRICS.automationPointRadius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  if (points.length > 0) {
+    const displayPoints = automationCurveDisplayPoints(points, graph);
+    ctx.beginPath();
+    ctx.moveTo(displayPoints[0]?.x ?? graph.x, graph.y + graph.height);
+    for (const point of displayPoints) ctx.lineTo(point.x, point.y);
+    ctx.lineTo(displayPoints[displayPoints.length - 1]?.x ?? graph.x + graph.width, graph.y + graph.height);
+    ctx.closePath();
+    ctx.fillStyle = THEME_COLORS.automationCurveFill;
+    ctx.fill();
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawAutomationLine(ctx, displayPoints, THEME_COLORS.automationCurveShadow, THEME_METRICS.automationCurveShadowWidth);
+    drawAutomationLine(ctx, displayPoints, THEME_COLORS.automation, THEME_METRICS.automationCurveWidth);
+
+    if (state.selected || state.hovered) {
+      points.forEach((point, index) => {
+        const active = state.activePointIndex === index;
+        ctx.fillStyle = THEME_COLORS.automationPointFill;
+        ctx.strokeStyle = active ? THEME_COLORS.automation : THEME_COLORS.automationPointStroke;
+        ctx.lineWidth = active ? THEME_METRICS.visualLineWidthStrong : THEME_METRICS.visualLineWidth;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, active ? THEME_METRICS.automationPointRadiusSelected : THEME_METRICS.automationPointRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      });
+    }
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
   }
+
+  ctx.strokeStyle = THEME_COLORS.automationGraphMajorGrid;
+  ctx.lineWidth = THEME_METRICS.visualLineWidth;
+  ctx.beginPath();
+  ctx.moveTo(rect.x, rect.y + headerHeight + THEME_METRICS.visualHairlineOffset);
+  ctx.lineTo(rect.x + rect.width, rect.y + headerHeight + THEME_METRICS.visualHairlineOffset);
+  ctx.stroke();
+
+  if (state.choosing) {
+    ctx.fillStyle = THEME_COLORS.accentSubtle;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  }
+  if (clip.detachedBindings.length > 0) {
+    ctx.fillStyle = THEME_COLORS.automationDetached;
+    ctx.fillRect(rect.x, rect.y, THEME_METRICS.automationDetachedStripeWidth, rect.height);
+  }
+
+  if (rect.width >= THEME_METRICS.automationClipLabelMinWidth) {
+    ctx.font = THEME_TYPOGRAPHY.canvasLabel;
+    ctx.fillStyle = clip.bindings.length > 0 ? THEME_COLORS.automationClipLabel : THEME_COLORS.automationClipLabelMuted;
+    ctx.textBaseline = "alphabetic";
+    const labelX = rect.x + THEME_METRICS.automationClipLabelInset + (clip.detachedBindings.length > 0 ? THEME_METRICS.automationDetachedStripeWidth : 0);
+    const labelWidth = Math.max(0, rect.x + rect.width - THEME_METRICS.automationClipLabelInset - labelX);
+    ctx.fillText(fitCanvasLabel(ctx, state.label, labelWidth), labelX, rect.y + THEME_METRICS.automationClipLabelBaseline);
+  }
+
+  ctx.restore();
+
+  ctx.strokeStyle = state.choosing
+    ? THEME_COLORS.accent
+    : state.selected
+      ? THEME_COLORS.clipSelected
+      : state.hovered
+        ? THEME_COLORS.clipHover
+        : THEME_COLORS.clipBorder;
+  ctx.lineWidth = state.choosing || state.selected || state.hovered
+    ? THEME_METRICS.visualLineWidthStrong
+    : THEME_METRICS.visualLineWidth;
+  ctx.beginPath();
+  ctx.roundRect(
+    rect.x + THEME_METRICS.visualHairlineOffset,
+    rect.y + THEME_METRICS.visualHairlineOffset,
+    Math.max(0, rect.width - THEME_METRICS.visualLineWidth),
+    Math.max(0, rect.height - THEME_METRICS.visualLineWidth),
+    radius
+  );
+  ctx.stroke();
+
+  if (!state.choosing && (state.resize === "left" || state.resize === "right")) {
+    const handleX = state.resize === "left" ? rect.x : rect.x + rect.width;
+    ctx.fillStyle = THEME_COLORS.automation;
+    ctx.fillRect(
+      handleX - THEME_METRICS.sequenceClipHandleHalfWidth,
+      rect.y + THEME_METRICS.sequenceClipHandleInset,
+      THEME_METRICS.sequenceClipHandleHalfWidth * 2,
+      Math.max(THEME_METRICS.sequenceClipHandleHeight, rect.height - THEME_METRICS.sequenceClipHandleInset * 2)
+    );
+  }
+}
+
+function automationCurveDisplayPoints(
+  points: Array<{ x: number; y: number }>,
+  graph: { x: number; y: number; width: number; height: number }
+) {
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first === undefined || last === undefined) return [];
+  return [
+    { x: graph.x, y: first.y },
+    ...points,
+    { x: graph.x + graph.width, y: last.y }
+  ];
+}
+
+function drawAutomationLine(
+  ctx: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  color: string,
+  width: number
+) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.stroke();
+}
+
+function fitCanvasLabel(ctx: CanvasRenderingContext2D, label: string, maxWidth: number) {
+  if (maxWidth <= 0 || ctx.measureText(label).width <= maxWidth) return label;
+  const ellipsis = "...";
+  let fitted = label;
+  while (fitted.length > 0 && ctx.measureText(`${fitted}${ellipsis}`).width > maxWidth) {
+    fitted = fitted.slice(0, -1);
+  }
+  return fitted.length > 0 ? `${fitted}${ellipsis}` : ellipsis;
 }

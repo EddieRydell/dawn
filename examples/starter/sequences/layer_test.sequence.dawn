@@ -974,8 +974,8 @@ layer_test:
         value: 0.0
       - position: 0.242473437
         value: 0.0
-      - position: 0.243386924
-        value: 0.519
+      - position: 0.243450186
+        value: 0.479
       - position: 0.257535598
         value: 0.484
       - position: 0.260943084

@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { AppSettings, ElementTarget, PersistedSequenceViewportState, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
+import type { AppSettings, ElementTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceAutomationTarget, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -13,6 +13,7 @@ import { clamp, formatSeconds, roundToNanosecond, type AutomationClipChooser, ty
 
 import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
+import { graphOperatorDefinition } from "./graphOperator";
 import { targetsEqual } from "./sequenceTargets";
 import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
 import { drawClipRaster, useSequenceClipRasters } from "./sequenceClipRasters";
@@ -23,7 +24,7 @@ import {
   automationLaneRowHeight,
   automationRowCounts,
   buildAutomationClipLayout,
-  drawAutomationCurve,
+  drawAutomationClip,
   expandedLaneRowIndex,
   expandedLaneTop,
   expandedTimelineHeight,
@@ -456,26 +457,17 @@ export function SequenceCanvas({
       const selectedClip = selected?.type === "automationClip" && selected.id === clip.clip.id;
       const hoverResize = automationHover?.clipId === clip.clip.id ? automationHover.resize : null;
       const choosingCandidate = automationClipChooser !== null;
-      const choosingHover = choosingCandidate && hoverResize !== null;
-      ctx.fillStyle = SEQUENCE_COLORS.automationGraph;
-      ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      drawAutomationCurve(ctx, clip.clip, clip.rect);
-      if (choosingCandidate) {
-        ctx.fillStyle = SEQUENCE_COLORS.accentSubtle;
-        ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      }
-      if (hoverResize !== null) {
-        ctx.fillStyle = SEQUENCE_COLORS.overlay;
-        ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      }
-      ctx.strokeStyle = choosingCandidate ? SEQUENCE_COLORS.accent : selectedClip ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : SEQUENCE_COLORS.clipBorder;
-      ctx.lineWidth = choosingHover || selectedClip || hoverResize !== null ? THEME_METRICS.visualLineWidthStrong : THEME_METRICS.visualLineWidth;
-      ctx.strokeRect(clip.rect.x + THEME_METRICS.visualHairlineOffset, clip.rect.y + THEME_METRICS.visualHairlineOffset, Math.max(0, clip.rect.width - THEME_METRICS.visualLineWidth), Math.max(0, clip.rect.height - THEME_METRICS.visualLineWidth));
-      if (!choosingCandidate && (hoverResize === "left" || hoverResize === "right")) {
-        const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
-        ctx.fillStyle = SEQUENCE_COLORS.warning;
-        ctx.fillRect(handleX - THEME_METRICS.sequenceClipHandleHalfWidth, clip.rect.y + THEME_METRICS.sequenceClipHandleInset, THEME_METRICS.sequenceClipHandleHalfWidth * 2, Math.max(THEME_METRICS.sequenceClipHandleHeight, clip.rect.height - THEME_METRICS.sequenceClipHandleInset * 2));
-      }
+      const activePointIndex = drag.current?.kind === "automationPoint" && drag.current.clipId === clip.clip.id
+        ? drag.current.pointIndex
+        : null;
+      drawAutomationClip(ctx, clip.clip, clip.rect, {
+        label: automationClipLabel(document, clip.clip),
+        selected: selectedClip,
+        hovered: hoverResize !== null,
+        choosing: choosingCandidate,
+        resize: hoverResize ?? "none",
+        activePointIndex
+      });
     }
     ctx.restore();
 
@@ -1501,6 +1493,39 @@ export function SequenceCanvas({
     </div>
   );
 }
+
+function automationClipLabel(document: SequenceEditorDocument, clip: SequenceAutomationClip) {
+  const primary = clip.bindings[0];
+  const detached = clip.detachedBindings[0];
+  if (primary === undefined && detached === undefined) return "Unassigned automation";
+  const target = primary?.target ?? detached?.target;
+  if (target === undefined) throw new Error("Automation clip label has no target");
+  const label = primary === undefined
+    ? `Detached: ${detachedAutomationTargetLabel(target)}`
+    : automationTargetLabel(document, target);
+  const additionalBindingCount = clip.bindings.length + clip.detachedBindings.length - 1;
+  return additionalBindingCount > 0 ? `${label} +${additionalBindingCount}` : label;
+}
+
+function automationTargetLabel(document: SequenceEditorDocument, target: SequenceAutomationTarget) {
+  if (target.type === "effectParam") {
+    const effect = document.effects.find((candidate) => candidate.id === target.effectId);
+    if (effect === undefined) throw new Error(`Automation target effect ${target.effectId} is missing`);
+    return `${effect.effect}: ${target.param}`;
+  }
+  const node = document.compositionGraph.nodes.find((candidate) => candidate.id === target.nodeId);
+  if (node === undefined || node.kind.type !== "operator") {
+    throw new Error(`Automation target operator ${target.nodeId} is missing`);
+  }
+  return `${graphOperatorDefinition(document.compositionGraph.operatorCatalog, node.kind.operator).displayName}: ${target.param}`;
+}
+
+function detachedAutomationTargetLabel(target: SequenceAutomationTarget) {
+  return target.type === "effectParam"
+    ? `Effect ${target.effectId}: ${target.param}`
+    : `Operator ${target.nodeId}: ${target.param}`;
+}
+
 function scheduleSequenceViewportStateSave(path: string, objectKey: string, state: PersistedSequenceViewportState) {
   window.clearTimeout(sequenceViewportStateTimer);
   sequenceViewportStateTimer = window.setTimeout(() => {
