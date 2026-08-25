@@ -2,6 +2,7 @@ use crate::sequence::color::{
     add_color, black, color_param, compose_max, intensity, invert_color, max_color, multiply_color,
     scale_color,
 };
+use crate::sequence::composition::graph::PreparedGraphNodeKind;
 use crate::sequence::composition::graph::{float_param, int_param};
 use crate::sequence::effects::preparation::apply_automation_params;
 use crate::sequence::effects::sampling::sample_effect_pixel;
