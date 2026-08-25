@@ -21,13 +21,12 @@ mod rendering;
 mod sampling;
 mod sequence;
 mod show;
-mod target;
 pub use raster::{
     EffectRasterPrepareBatch, EffectRasterRenderScratch, PreparedEffectRasterRenderer,
     PreparedEffectRasterSample,
 };
+pub use sequence::resolve_effect_target_pixel_addresses;
 pub use show::*;
-pub use target::resolve_effect_target_pixel_addresses;
 
 use dawn_language::dsl::{
     BoundParams, CompiledEffect, DslBindCache, DslVmScratch, EffectKind, Identifier,
@@ -68,11 +67,11 @@ use sampling::{
     prepare_sampled_effect_pixel_groups, render_sampled_effect_target_colors, sample_effect_group,
 };
 use sequence::{
-    build_effect_frame_index, build_effect_frame_index_for_window, frame_count, prepare_timing,
-};
-use target::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
     prepare_target_pixels_cached,
+};
+use sequence::{
+    build_effect_frame_index, build_effect_frame_index_for_window, frame_count, prepare_timing,
 };
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);

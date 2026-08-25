@@ -11,11 +11,11 @@ use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 
 use super::effect_preparation::{automation_param, prepare_automation};
-use super::target::{PreparedTargetPixel, full_rig_target_pixels};
 use super::{
     EffectParamTiming, PreparedAutomation, PreparedElement, PreparedLayer, RenderError,
     prepare_operator_params,
 };
+use crate::sequence::targets::{PreparedTargetPixel, full_rig_target_pixels};
 use dawn_language::model::DawnProject;
 
 pub(crate) fn automation_for_composition_node(
