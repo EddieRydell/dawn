@@ -1,3 +1,4 @@
+pub(crate) mod composition;
 pub(crate) mod targets;
 pub(crate) mod timeline;
 
