@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use dawn_project_io::load_package;
 
-use crate::{PreparedRenderSession, RenderedElementState};
+use crate::{PreparedSequenceOutput, RenderedElementState};
 
 fn example(name: &str) -> dawn_project_io::ProjectSession {
     let path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -18,7 +18,7 @@ fn every_example_prepares_and_produces_exact_controller_widths() {
     for name in ["starter"] {
         let session = example(name);
         let sequence_id = session.project.root.sequences.first().unwrap();
-        let renderer = PreparedRenderSession::prepare(
+        let renderer = PreparedSequenceOutput::prepare(
             &session.project,
             &session.project.root.setup,
             sequence_id,
@@ -59,7 +59,7 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
     let session = example("starter");
     let sequence_id = session.project.root.sequences.first().unwrap();
     let renderer =
-        PreparedRenderSession::prepare(&session.project, &session.project.root.setup, sequence_id)
+        PreparedSequenceOutput::prepare(&session.project, &session.project.root.setup, sequence_id)
             .unwrap();
     let first = renderer.render_frame(10).unwrap();
     let second = renderer.render_frame(10).unwrap();
@@ -128,7 +128,7 @@ fn logical_state_covers_every_element_leaf_in_tree_order() {
     let session = example("starter");
     let sequence_id = session.project.root.sequences.first().unwrap();
     let renderer =
-        PreparedRenderSession::prepare(&session.project, &session.project.root.setup, sequence_id)
+        PreparedSequenceOutput::prepare(&session.project, &session.project.root.setup, sequence_id)
             .unwrap();
     let frame = renderer.render_seconds(1.0).unwrap();
     let setup = session

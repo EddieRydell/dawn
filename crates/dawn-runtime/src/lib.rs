@@ -10,14 +10,14 @@
     )
 )]
 
+mod output;
 mod sequence;
-mod show;
+pub use output::*;
 pub use sequence::raster::{
     EffectRasterPrepareBatch, EffectRasterRenderScratch, PreparedEffectRasterRenderer,
     PreparedEffectRasterSample,
 };
 pub use sequence::resolve_effect_target_pixel_addresses;
-pub use show::*;
 
 use dawn_language::dsl::{
     BoundParams, CompiledEffect, DslBindCache, DslVmScratch, EffectKind, Identifier,
