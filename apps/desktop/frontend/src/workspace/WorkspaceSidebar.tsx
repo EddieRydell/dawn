@@ -4,10 +4,9 @@ import { AlertTriangle, Boxes, Files, Search, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { commands } from "../api";
 import { FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
-import { runSnapshotCommand, useAppStore } from "../store";
+import { runSnapshotCommand, useAppStore, type AppStaticSnapshot } from "../store";
 import { THEME_METRICS } from "../theme";
 import type {
-  AppSnapshot,
   SidebarView,
   WorkspaceLayoutState,
   WorkspacePathChangePlan
@@ -33,7 +32,7 @@ export function WorkspaceSidebar({
   layout,
   onLayoutChange
 }: {
-  snapshot: AppSnapshot;
+  snapshot: AppStaticSnapshot;
   layout: WorkspaceLayoutState;
   onLayoutChange: (layout: WorkspaceLayoutState, immediate?: boolean) => void;
 }) {

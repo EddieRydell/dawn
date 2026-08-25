@@ -2,9 +2,9 @@ import { useCallback, type KeyboardEvent } from "react";
 
 import type { SequenceEditorDocument } from "../../../types";
 import { commands } from "../../../api";
-import { runSnapshotCommand } from "../../../store";
+import { runSnapshotCommand, useAppStore } from "../../../store";
 
-import type { AudioTransportViewSnapshot, AutomationClipChooser, GuiFocus, SequenceSelection } from "../shared";
+import type { AutomationClipChooser, GuiFocus, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
 import { GraphEditorModal } from "./GraphEditorModal";
@@ -12,7 +12,6 @@ import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "
 
 export function SequenceEditor({
   document,
-  transport,
   selected,
   setSelected,
   compositionGraphOpen,
@@ -27,7 +26,6 @@ export function SequenceEditor({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceEditorDocument;
-  transport: AudioTransportViewSnapshot;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   compositionGraphOpen: boolean;
@@ -41,8 +39,6 @@ export function SequenceEditor({
   visibleMarkCollectionKeys: Set<string>;
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
-  const liveTransport = transport;
-  const unsupported = isSequenceTransportUnsupported(document, liveTransport);
   const selectedGraphItem =
     selected?.type === "graphNode"
       ? { type: "node" as const, id: selected.nodeId }
@@ -79,14 +75,14 @@ export function SequenceEditor({
       setAutomationClipChooser(null);
       return;
     }
-    handleSequencePlaybackShortcut(event, document, liveTransport, unsupported);
+    const transport = useAppStore.getState().snapshot?.audioTransport;
+    if (transport === undefined) return;
+    handleSequencePlaybackShortcut(event, document, transport, isSequenceTransportUnsupported(document, transport));
   };
   return (
     <div className="sequence-editor" tabIndex={-1} onKeyDown={handleKeyDown}>
       <SequenceCanvas
         document={document}
-        playheadSeconds={liveTransport.positionSeconds}
-        homeSeconds={liveTransport.homeSeconds}
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}

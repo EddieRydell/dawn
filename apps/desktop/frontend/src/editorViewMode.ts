@@ -1,6 +1,8 @@
 import type { AppSnapshot, EditorViewMode } from "./types";
 
-export function effectiveEditorViewMode(snapshot: AppSnapshot | null): EditorViewMode {
+type EditorViewSnapshot = Pick<AppSnapshot, "settings" | "activeDocumentDescriptor">;
+
+export function effectiveEditorViewMode(snapshot: EditorViewSnapshot | null): EditorViewMode {
   if (snapshot === null || (snapshot.settings.editorViewMode ?? "gui") === "text") {
     return "text";
   }

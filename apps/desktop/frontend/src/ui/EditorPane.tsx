@@ -12,9 +12,9 @@ import { commands, setCurrentGuiRequest } from "../api";
 import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange, WorkspaceLayoutState } from "../types";
 import { commandRegistry, FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
 import { effectiveEditorViewMode } from "../editorViewMode";
-import { runSnapshotCommand, useAppStore } from "../store";
+import { runSnapshotCommand, useAppStore, type AppStaticSnapshot } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
-import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
+import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 import { THEME_METRICS } from "../theme";
 import { NAVIGATE_TO_TEXT_EVENT, navigateToText, type TextNavigation } from "../workspace/navigation";
 
@@ -27,11 +27,17 @@ export function EditorPane({
   workspaceLayout,
   onWorkspaceLayoutChange
 }: {
-  snapshot: AppSnapshot;
+  snapshot: AppStaticSnapshot;
   workspaceLayout: WorkspaceLayoutState;
   onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
 }) {
-  const { guiDocument, guiResetRevision, localText, restoreState, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
+  const guiDocument = useAppStore((store) => store.guiDocument);
+  const guiResetRevision = useAppStore((store) => store.guiResetRevision);
+  const localText = useAppStore((store) => store.localText);
+  const restoreState = useAppStore((store) => store.restoreState);
+  const setGuiDocument = useAppStore((store) => store.setGuiDocument);
+  const setGuiRequest = useAppStore((store) => store.setGuiRequest);
+  const setLocalText = useAppStore((store) => store.setLocalText);
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
@@ -61,7 +67,6 @@ export function EditorPane({
     viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
   const editableSequenceDocument =
     activeSequenceDocument?.mode === "editable" ? activeSequenceDocument : null;
-  const sequenceTransport = useSequenceTransport(snapshot.audioTransport);
   const activeSequenceAudio = activeSequenceDocument?.audio ?? null;
   const activeSequenceAudioKey =
     nextGuiPath !== null && nextGuiView === "sequence"
@@ -345,9 +350,7 @@ export function EditorPane({
         <div className="editor-toolbar">
           <SequenceTransportControls
             document={editableSequenceDocument}
-            transport={sequenceTransport}
             previewOpen={snapshot.previewOpen}
-            liveOutput={snapshot.liveOutput}
           />
         </div>
       )}
@@ -374,7 +377,6 @@ export function EditorPane({
           snapshot={snapshot}
           workspaceLayout={workspaceLayout}
           onWorkspaceLayoutChange={onWorkspaceLayoutChange}
-          audioTransport={sequenceTransport}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
           resetRevision={guiResetRevision}

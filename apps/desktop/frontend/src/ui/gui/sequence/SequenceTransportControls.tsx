@@ -7,7 +7,7 @@ import { commands } from "../../../api";
 
 import type { AppSnapshot, AudioTransportState, SequenceEditorDocument } from "../../../types";
 
-import { runGuiEditCommand, runSnapshotCommand } from "../../../store";
+import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
 import { clamp, formatSeconds, type AudioTransportViewSnapshot } from "../shared";
 import { requestOpenLayerGraph } from "../../uiEvents";
@@ -15,15 +15,14 @@ import { THEME_METRICS } from "../../../theme";
 
 export function SequenceTransportControls({
   document,
-  transport,
-  previewOpen,
-  liveOutput
+  previewOpen
 }: {
   document: SequenceEditorDocument;
-  transport: AppSnapshot["audioTransport"];
   previewOpen: boolean;
-  liveOutput: AppSnapshot["liveOutput"];
 }) {
+  const transport = useAppStore((store) => store.snapshot?.audioTransport ?? null);
+  const liveOutput = useAppStore((store) => store.snapshot?.liveOutput ?? null);
+  if (transport === null || liveOutput === null) return null;
   const unsupported = isSequenceTransportUnsupported(document, transport);
   const activePlayback = isActiveAudioPlayback(transport.state);
   const liveActive = liveOutput.state === "preparing" || liveOutput.state === "holding" || liveOutput.state === "streaming";

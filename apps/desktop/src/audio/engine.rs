@@ -187,7 +187,7 @@ impl AudioEngine {
             return self.current_snapshot();
         }
         self.position_seconds = self.home_seconds;
-        if let Some(handle) = self.handle.as_mut() {
+        if let Some(mut handle) = self.handle.take() {
             handle.pause();
             handle.seek_to(self.position_seconds);
         }
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(snapshot.state, AudioTransportState::Playing);
         assert_eq!(snapshot.position_seconds, 4.0);
         fixture.assert_actions(&[DriverAction::Play(4.0)]);
-        fixture.assert_handle_actions(&[HandleAction::Stop]);
+        fixture.assert_handle_actions(&[]);
     }
 
     #[test]

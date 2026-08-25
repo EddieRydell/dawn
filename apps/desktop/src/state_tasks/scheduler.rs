@@ -125,8 +125,10 @@ fn gui_save_worker(
 
 pub(crate) type RenderRefreshScheduler = LatestScheduler<RenderRefreshPayload, RenderRefreshResult>;
 
-pub(crate) fn render_refresh_scheduler() -> RenderRefreshScheduler {
-    LatestScheduler::new(render_refresh_worker)
+pub(crate) fn render_refresh_scheduler(
+    wake: crate::preview::PreviewWake,
+) -> RenderRefreshScheduler {
+    LatestScheduler::new(move |receiver, sender| render_refresh_worker(receiver, sender, wake))
 }
 
 pub(crate) struct RenderRefreshPayload {
@@ -157,6 +159,7 @@ impl SequenceResult for RenderRefreshResult {
 fn render_refresh_worker(
     receiver: mpsc::Receiver<Sequenced<RenderRefreshPayload>>,
     sender: mpsc::Sender<RenderRefreshResult>,
+    wake: crate::preview::PreviewWake,
 ) {
     while let Ok(mut pending) = receiver.recv() {
         while let Ok(newer) = receiver.try_recv() {
@@ -179,6 +182,7 @@ fn render_refresh_worker(
         if sender.send(result).is_err() {
             break;
         }
+        wake.notify();
     }
 }
 

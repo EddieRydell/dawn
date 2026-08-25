@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
-import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
-import type { AppSnapshot, WorkspaceLayoutState } from "../types";
+import { runSnapshotCommand, subscribeToSnapshots, useAppStore, useStaticAppSnapshot, type AppStaticSnapshot } from "../store";
+import type { WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewSequenceDialog } from "./NewSequenceDialog";
@@ -20,7 +20,10 @@ const PROJECT_TREE_MAX_WIDTH_PX = THEME_METRICS.projectPanelMaxWidth;
 const WORKSPACE_LAYOUT_SAVE_DELAY_MS = THEME_METRICS.workspaceLayoutSaveDelay;
 
 export function App() {
-  const { snapshot, error, hydrate, compositionGraphEditing } = useAppStore();
+  const snapshot = useStaticAppSnapshot();
+  const error = useAppStore((store) => store.error);
+  const hydrate = useAppStore((store) => store.hydrate);
+  const compositionGraphEditing = useAppStore((store) => store.compositionGraphEditing);
 
   useEffect(() => {
     void hydrate();
@@ -67,7 +70,7 @@ export function App() {
   );
 }
 
-function WorkspaceMain({ snapshot }: { snapshot: AppSnapshot }) {
+function WorkspaceMain({ snapshot }: { snapshot: AppStaticSnapshot }) {
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayoutState>(() => snapshot.workspaceLayout);
   const [serverLayout, setServerLayout] = useState<WorkspaceLayoutState>(() => snapshot.workspaceLayout);
   const layoutSaveTimer = useRef<number | undefined>(undefined);

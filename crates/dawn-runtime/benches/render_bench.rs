@@ -9,58 +9,64 @@ use dawn_runtime::{
 };
 use std::hint::black_box;
 
+const BENCHMARK_SEQUENCE_DOCUMENT: &str = "sequences/layer_test.sequence.dawn";
+const BENCHMARK_SEQUENCE_OBJECT: &str = "layer_test";
+const OPERATOR_FRAME: u64 = 8494;
+const PLAYBACK_START_FRAME: u64 = 8420;
+const PLAYBACK_FRAME_COUNT: u64 = 60;
+
 const SCENARIOS: [RenderScenario; 7] = [
     RenderScenario {
-        frame: 144,
-        checksum: 0xe050_9990_c9eb_6c98,
-        active_effect_count: 3,
+        frame: 8398,
+        checksum: 0x8bb5_7d05_87a6_9ae8,
+        active_effect_count: 15,
     },
     RenderScenario {
-        frame: 2088,
-        checksum: 0x2faa_cffb_1da1_fde8,
+        frame: 8450,
+        checksum: 0x5bee_7460_eba9_0468,
         active_effect_count: 30,
     },
     RenderScenario {
-        frame: 5904,
-        checksum: 0x4f31_7d2c_e784_03b7,
-        active_effect_count: 180,
+        frame: 8494,
+        checksum: 0xadc5_9683_e46e_175f,
+        active_effect_count: 32,
+    },
+    RenderScenario {
+        frame: 8530,
+        checksum: 0xe1b4_eb4f_6156_98b3,
+        active_effect_count: 3,
+    },
+    RenderScenario {
+        frame: 9270,
+        checksum: 0x520a_4dfc_5977_d97a,
+        active_effect_count: 2,
     },
     RenderScenario {
         frame: 9504,
-        checksum: 0x2d33_a136_667f_5bad,
-        active_effect_count: 60,
+        checksum: 0x9dca_f48a_50e4_f8df,
+        active_effect_count: 1,
     },
     RenderScenario {
-        frame: 11520,
-        checksum: 0x237b_56c5_a616_b3fb,
-        active_effect_count: 360,
-    },
-    RenderScenario {
-        frame: 19080,
-        checksum: 0x0f6c_daeb_0baa_0142,
-        active_effect_count: 301,
-    },
-    RenderScenario {
-        frame: 7707,
-        checksum: 0x94eb_b8f8_8b27_c8f3,
-        active_effect_count: 212,
+        frame: 9650,
+        checksum: 0x2319_7d72_88c3_6a09,
+        active_effect_count: 2,
     },
 ];
 
 const RASTER_SCENARIOS: [RasterScenario; 2] = [
     RasterScenario {
-        name: "raster_sample_shimmer_field_75",
-        effect_id: 75,
+        name: "raster_builtin_spin_3",
+        effect_id: 3,
         columns: 256,
         rows: 50,
-        checksum: 0x68d2_2650_911c_2f4d,
+        checksum: 0x045a_fc36_f3d4_c5ad,
     },
     RasterScenario {
-        name: "raster_generator_mark_pulse_77",
-        effect_id: 77,
+        name: "raster_builtin_pulse_4",
+        effect_id: 4,
         columns: 256,
         rows: 50,
-        checksum: 0x4802_5415_5f97_fc5b,
+        checksum: 0xd0b6_0f26_5ee3_5089,
     },
 ];
 
@@ -89,27 +95,25 @@ fn bench_render(c: &mut Criterion) {
         .project
         .root
         .sequences
-        .first()
-        .expect("benchmark project should have a root sequence");
+        .iter()
+        .find(|id| {
+            id.0.document().as_str() == BENCHMARK_SEQUENCE_DOCUMENT
+                && id.0.object() == BENCHMARK_SEQUENCE_OBJECT
+        })
+        .expect("benchmark project should include the layer_test sequence");
     let renderer = PreparedSequenceRenderer::prepare(&session.project, setup_id, sequence_id)
         .expect("benchmark project should prepare");
-    let operator_sequence_id = session
-        .project
-        .root
-        .sequences
-        .get(1)
-        .expect("benchmark project should have an operator sequence");
     let operator_renderer =
-        PreparedSequenceRenderer::prepare(&session.project, setup_id, operator_sequence_id)
+        PreparedSequenceRenderer::prepare(&session.project, setup_id, sequence_id)
             .expect("benchmark operator sequence should prepare");
 
     assert_scenarios(&renderer);
     let raster_renderers = prepare_raster_renderers(&session.project, setup_id, sequence_id);
     assert_raster_scenarios(&raster_renderers);
     let operator_frame = operator_renderer
-        .render_frame(3594)
+        .render_frame(OPERATOR_FRAME)
         .expect("benchmark operator frame should render");
-    assert_eq!(checksum_frame(&operator_frame), 0xbedb_82fa_9d2f_65ae);
+    assert_eq!(checksum_frame(&operator_frame), 0xadc5_9683_e46e_175f);
 
     c.bench_function("prepare_starter", |b| {
         b.iter(|| {
@@ -140,7 +144,7 @@ fn bench_render(c: &mut Criterion) {
     let mut playback_scratch = SequenceRenderScratch::default();
     c.bench_function("render_playback_dense_60_frames", |b| {
         b.iter(|| {
-            for frame in 19_050..19_110 {
+            for frame in PLAYBACK_START_FRAME..PLAYBACK_START_FRAME + PLAYBACK_FRAME_COUNT {
                 black_box(
                     renderer
                         .render_frame_with_scratch(black_box(frame), &mut playback_scratch)
@@ -154,7 +158,7 @@ fn bench_render(c: &mut Criterion) {
         b.iter_batched(
             SequenceRenderScratch::default,
             |mut scratch| {
-                for frame in 19_050..19_110 {
+                for frame in PLAYBACK_START_FRAME..PLAYBACK_START_FRAME + PLAYBACK_FRAME_COUNT {
                     black_box(
                         renderer
                             .render_frame_with_scratch(black_box(frame), &mut scratch)
@@ -167,11 +171,11 @@ fn bench_render(c: &mut Criterion) {
     });
 
     let mut operator_scratch = SequenceRenderScratch::default();
-    c.bench_function("render_operator_graph_gain_echo", |b| {
+    c.bench_function("render_operator_graph_time_warp", |b| {
         b.iter(|| {
             black_box(
                 operator_renderer
-                    .render_frame_with_scratch(black_box(3594), &mut operator_scratch)
+                    .render_frame_with_scratch(black_box(OPERATOR_FRAME), &mut operator_scratch)
                     .expect("benchmark operator frame should render"),
             )
         });
@@ -180,7 +184,7 @@ fn bench_render(c: &mut Criterion) {
     let mut operator_playback_scratch = SequenceRenderScratch::default();
     c.bench_function("render_operator_playback_60_frames", |b| {
         b.iter(|| {
-            for frame in 3_570..3_630 {
+            for frame in PLAYBACK_START_FRAME..PLAYBACK_START_FRAME + PLAYBACK_FRAME_COUNT {
                 black_box(
                     operator_renderer
                         .render_frame_with_scratch(black_box(frame), &mut operator_playback_scratch)
@@ -194,7 +198,7 @@ fn bench_render(c: &mut Criterion) {
         b.iter_batched(
             SequenceRenderScratch::default,
             |mut scratch| {
-                for frame in 3_570..3_630 {
+                for frame in PLAYBACK_START_FRAME..PLAYBACK_START_FRAME + PLAYBACK_FRAME_COUNT {
                     black_box(
                         operator_renderer
                             .render_frame_with_scratch(black_box(frame), &mut scratch)

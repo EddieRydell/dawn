@@ -29,10 +29,12 @@ mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {
     let bindings = bindings::builder();
+    let state = desktop_state::DesktopState::new();
+    let preview = preview::PreviewWindowService::new(state.preview_wake());
 
     tauri::Builder::default()
-        .manage(desktop_state::DesktopState::new())
-        .manage(preview::PreviewWindowService::new())
+        .manage(state)
+        .manage(preview)
         .register_uri_scheme_protocol("dawn-raster", |context, request| {
             raster_protocol_response(
                 context.app_handle().state::<desktop_state::DesktopState>().inner(),

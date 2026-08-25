@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
-import type { AppSnapshot, GuiDocument, WorkspaceLayoutState } from "../../types";
+import type { GuiDocument, WorkspaceLayoutState } from "../../types";
+import type { AppStaticSnapshot } from "../../store";
 
 import type { AutomationClipChooser, GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 
@@ -32,16 +33,14 @@ export function GuiEditor({
   snapshot,
   workspaceLayout,
   onWorkspaceLayoutChange,
-  audioTransport,
   sequenceSelection,
   setSequenceSelection,
   resetRevision
 }: {
   guiDocument: GuiDocument | null;
-  snapshot: AppSnapshot;
+  snapshot: AppStaticSnapshot;
   workspaceLayout: WorkspaceLayoutState;
   onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
-  audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
   resetRevision: number;
@@ -72,7 +71,6 @@ export function GuiEditor({
       gui={gui}
       workspaceLayout={workspaceLayout}
       onWorkspaceLayoutChange={onWorkspaceLayoutChange}
-      audioTransport={audioTransport}
       sequenceSelection={sequenceSelection}
       setSequenceSelection={setSequenceSelection}
     />
@@ -83,14 +81,12 @@ function GuiEditorInner({
   gui,
   workspaceLayout,
   onWorkspaceLayoutChange,
-  audioTransport,
   sequenceSelection,
   setSequenceSelection
 }: {
   gui: ReadyGuiDocument;
   workspaceLayout: WorkspaceLayoutState;
   onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
-  audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -146,6 +142,8 @@ function GuiEditorInner({
       }}
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
+          const audioTransport = useAppStore.getState().snapshot?.audioTransport;
+          if (audioTransport === undefined) return;
           handleSequencePlaybackShortcut(
             event,
             gui.document,
@@ -159,7 +157,6 @@ function GuiEditorInner({
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}
-          transport={audioTransport}
           selected={selected}
           setSelected={setSelected}
           compositionGraphOpen={compositionGraphOpen}

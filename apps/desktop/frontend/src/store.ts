@@ -1,10 +1,13 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
 import { commands, setGuiEditResultHandler } from "./api";
 import { effectiveEditorViewMode } from "./editorViewMode";
 import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, LiveOutputSnapshot, ProjectRestoreState } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
+
+export type AppStaticSnapshot = Omit<AppSnapshot, "audioTransport" | "liveOutput">;
 
 type AppStore = {
   snapshot: AppSnapshot | null;
@@ -16,6 +19,9 @@ type AppStore = {
   error: string | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource, preserveLocalText?: boolean) => void;
+  setAudioTransport: (transport: AudioTransportSnapshot) => void;
+  setLiveOutput: (liveOutput: LiveOutputSnapshot) => void;
+  setPreviewOpen: (previewOpen: boolean) => void;
   setRestoreState: (restoreState: ProjectRestoreState | null) => void;
   setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
@@ -56,6 +62,48 @@ export const useAppStore = create<AppStore>((set) => ({
       return nextState;
     });
     void source;
+  },
+  setAudioTransport: (audioTransport) => {
+    set((current) => {
+      if (
+        current.snapshot === null
+        || audioTransport.generation < current.snapshot.audioTransport.generation
+      ) {
+        return current;
+      }
+      return {
+        snapshot: {
+          ...current.snapshot,
+          audioTransport
+        }
+      };
+    });
+  },
+  setLiveOutput: (liveOutput) => {
+    set((current) => {
+      if (
+        current.snapshot === null
+        || liveOutput.generation < current.snapshot.liveOutput.generation
+      ) {
+        return current;
+      }
+      return {
+        snapshot: {
+          ...current.snapshot,
+          liveOutput
+        }
+      };
+    });
+  },
+  setPreviewOpen: (previewOpen) => {
+    set((current) => current.snapshot === null
+      ? current
+      : {
+          snapshot: {
+            ...current.snapshot,
+            previewOpen
+          }
+        });
   },
   setGuiRequest: (guiRequest) => {
     set({ guiRequest });
@@ -118,38 +166,29 @@ setGuiEditResultHandler((result) => {
 export function subscribeToSnapshots(): Promise<() => void> {
   return Promise.all([
     listen<AudioTransportSnapshot>("audio_transport_changed", (event) => {
-      const current = useAppStore.getState().snapshot;
-      if (current === null) return;
-      if (event.payload.generation < current.audioTransport.generation) return;
-      useAppStore.getState().setSnapshot(
-        {
-          ...current,
-          audioTransport: event.payload
-        },
-        "event"
-      );
+      useAppStore.getState().setAudioTransport(event.payload);
     }),
     listen<boolean>("preview_window_changed", (event) => {
-      const current = useAppStore.getState().snapshot;
-      if (current === null) return;
-      useAppStore.getState().setSnapshot(
-        {
-          ...current,
-          previewOpen: event.payload
-        },
-        "event"
-      );
+      useAppStore.getState().setPreviewOpen(event.payload);
     }),
     listen<LiveOutputSnapshot>("live_output_changed", (event) => {
-      const current = useAppStore.getState().snapshot;
-      if (current === null || event.payload.generation < current.liveOutput.generation) return;
-      useAppStore.getState().setSnapshot({ ...current, liveOutput: event.payload }, "event");
+      useAppStore.getState().setLiveOutput(event.payload);
     })
   ]).then((unsubscribes) => () => {
     for (const unsubscribe of unsubscribes) {
       unsubscribe();
     }
   });
+}
+
+export function useStaticAppSnapshot(): AppStaticSnapshot | null {
+  return useAppStore(useShallow((store) => {
+    if (store.snapshot === null) return null;
+    const { audioTransport, liveOutput, ...snapshot } = store.snapshot;
+    void audioTransport;
+    void liveOutput;
+    return snapshot;
+  }));
 }
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {

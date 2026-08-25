@@ -16,17 +16,27 @@ pub(crate) fn set_live_output_active(
 }
 
 fn start_live_output_poll(app: AppHandle) {
+    if !app.state::<DesktopState>().claim_live_output_poll() {
+        return;
+    }
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_millis(50));
             let state = app.state::<DesktopState>();
-            let snapshot = state.snapshot();
-            let _ = app.emit("live_output_changed", snapshot.live_output.clone());
+            let snapshot = state.live_output_snapshot();
+            let _ = app.emit("live_output_changed", snapshot.clone());
             if matches!(
-                snapshot.live_output.state,
+                snapshot.state,
                 crate::dto::LiveOutputState::Disabled | crate::dto::LiveOutputState::Error
             ) {
-                break;
+                state.release_live_output_poll();
+                let restarted = !matches!(
+                    state.live_output_snapshot().state,
+                    crate::dto::LiveOutputState::Disabled | crate::dto::LiveOutputState::Error
+                ) && state.claim_live_output_poll();
+                if !restarted {
+                    break;
+                }
             }
         }
     });

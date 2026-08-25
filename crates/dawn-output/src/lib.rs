@@ -60,7 +60,10 @@ impl ControllerSender {
         }
     }
 
-    pub fn send(&mut self, frames: &[ControllerPortFrame]) -> Result<(), OutputError> {
+    pub fn send<'a>(
+        &mut self,
+        frames: impl IntoIterator<Item = &'a ControllerPortFrame>,
+    ) -> Result<(), OutputError> {
         match self {
             Self::E131(sender) => sender.send(frames),
             Self::ArtNet(sender) => sender.send(frames),
@@ -103,12 +106,7 @@ impl OutputTransports {
 
     pub fn send(&mut self, frames: &[ControllerPortFrame]) -> Result<(), OutputError> {
         for (id, sender) in &mut self.senders {
-            let controller_frames = frames
-                .iter()
-                .filter(|frame| &frame.controller == id)
-                .cloned()
-                .collect::<Vec<_>>();
-            sender.send(&controller_frames)?;
+            sender.send(frames.iter().filter(|frame| &frame.controller == id))?;
         }
         Ok(())
     }

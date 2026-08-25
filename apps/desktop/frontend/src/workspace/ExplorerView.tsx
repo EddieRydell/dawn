@@ -34,11 +34,11 @@ import { commands } from "../api";
 import { runSnapshotCommand } from "../store";
 import { THEME_METRICS } from "../theme";
 import type {
-  AppSnapshot,
   WorkspaceEntryRole,
   WorkspaceExplorerState,
   WorkspaceOperation
 } from "../types";
+import type { AppStaticSnapshot } from "../store";
 import { buildSemanticTree, type WorkspaceTreeNode } from "./helpers";
 import { navigateToText } from "./navigation";
 
@@ -50,7 +50,7 @@ export function ExplorerView({
   snapshot,
   onRequestPathChange
 }: {
-  snapshot: AppSnapshot;
+  snapshot: AppStaticSnapshot;
   onRequestPathChange: (source: string, destination: string) => Promise<void>;
 }) {
   const data = useMemo(

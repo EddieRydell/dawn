@@ -5,7 +5,10 @@
 //! cross-workflow lifecycle coordination.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{
+    Arc, Mutex, MutexGuard,
+    atomic::{AtomicBool, Ordering},
+};
 
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, PackageReadiness,
@@ -42,6 +45,9 @@ pub(crate) struct DesktopState {
     next_operator_rewrite_token: Mutex<u32>,
     filesystem: Arc<Mutex<()>>,
     persistence: PersistenceService,
+    preview_wake: crate::preview::PreviewWake,
+    audio_poll_running: AtomicBool,
+    live_output_poll_running: AtomicBool,
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -55,13 +61,14 @@ impl DesktopState {
         let audio = Arc::new(Mutex::new(crate::audio::AudioEngine::new()));
         let sequence_render = Arc::new(Mutex::new(crate::rendering::SequenceRenderService::new()));
         let output = crate::output::LiveOutputService::new(audio.clone(), sequence_render.clone());
+        let preview_wake = crate::preview::PreviewWake::new();
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(LoadedProject::Closed),
             gui_history: Mutex::new(GuiHistory::new(100)),
             gui_save: Mutex::new(gui_save_scheduler()),
             project_analysis: Mutex::new(project_analysis_scheduler()),
-            render_refresh: Mutex::new(render_refresh_scheduler()),
+            render_refresh: Mutex::new(render_refresh_scheduler(preview_wake.clone())),
             audio,
             sequence_render,
             live_output: Mutex::new(output),
@@ -73,11 +80,18 @@ impl DesktopState {
             next_operator_rewrite_token: Mutex::new(1),
             filesystem: Arc::new(Mutex::new(())),
             persistence: PersistenceService::new(),
+            preview_wake,
+            audio_poll_running: AtomicBool::new(false),
+            live_output_poll_running: AtomicBool::new(false),
         }
     }
 
     pub fn persistence(&self) -> &PersistenceService {
         &self.persistence
+    }
+
+    pub(crate) fn preview_wake(&self) -> crate::preview::PreviewWake {
+        self.preview_wake.clone()
     }
 
     pub fn apply_persisted_settings(&self) -> AppSnapshot {
@@ -104,6 +118,27 @@ impl DesktopState {
         lock_unpoisoned(&self.audio).snapshot()
     }
 
+    pub fn live_output_snapshot(&self) -> crate::dto::LiveOutputSnapshot {
+        lock_unpoisoned(&self.live_output).snapshot()
+    }
+
+    pub(crate) fn claim_audio_poll(&self) -> bool {
+        !self.audio_poll_running.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn release_audio_poll(&self) {
+        self.audio_poll_running.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn claim_live_output_poll(&self) -> bool {
+        !self.live_output_poll_running.swap(true, Ordering::AcqRel)
+    }
+
+    pub(crate) fn release_live_output_poll(&self) {
+        self.live_output_poll_running
+            .store(false, Ordering::Release);
+    }
+
     fn merged_audio_snapshot(&self, previous: &AudioTransportSnapshot) -> AudioTransportSnapshot {
         let mut audio_transport = self.audio_snapshot();
         if matches!(audio_transport.state, AudioTransportState::Unloaded) {
@@ -121,6 +156,7 @@ impl DesktopState {
             snapshot.clone()
         };
         self.record_persistent_snapshot(&snapshot);
+        self.preview_wake.notify();
         snapshot
     }
 

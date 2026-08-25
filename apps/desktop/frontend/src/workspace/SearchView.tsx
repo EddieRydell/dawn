@@ -2,11 +2,12 @@ import { CaseSensitive, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
 import { THEME_METRICS } from "../theme";
-import type { AppSnapshot, ProjectSearchResponse } from "../types";
+import type { ProjectSearchResponse } from "../types";
+import type { AppStaticSnapshot } from "../store";
 import { locationRange } from "./helpers";
 import { navigateToText } from "./navigation";
 
-export function SearchView({ snapshot }: { snapshot: AppSnapshot }) {
+export function SearchView({ snapshot }: { snapshot: AppStaticSnapshot }) {
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   const [response, setResponse] = useState<ProjectSearchResponse | null>(null);

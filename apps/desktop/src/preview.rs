@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -31,13 +31,15 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 pub(crate) struct PreviewWindowService {
     running: Mutex<Option<Arc<AtomicBool>>>,
     closing_for_main_shutdown: Arc<AtomicBool>,
+    wake: PreviewWake,
 }
 
 impl PreviewWindowService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(wake: PreviewWake) -> Self {
         Self {
             running: Mutex::new(None),
             closing_for_main_shutdown: Arc::new(AtomicBool::new(false)),
+            wake,
         }
     }
 
@@ -77,8 +79,11 @@ impl PreviewWindowService {
         let close_flag = running.clone();
         let close_app = app.clone();
         let closing_for_main_shutdown = self.closing_for_main_shutdown.clone();
+        let window_wake = self.wake.clone();
         window.on_window_event(move |event| match event {
             tauri::WindowEvent::CloseRequested { .. } => {
+                close_flag.store(false, Ordering::Release);
+                window_wake.notify();
                 if closing_for_main_shutdown.load(Ordering::Acquire) {
                     return;
                 }
@@ -99,6 +104,7 @@ impl PreviewWindowService {
             }
             tauri::WindowEvent::Destroyed => {
                 close_flag.store(false, Ordering::Release);
+                window_wake.notify();
             }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                 let state = close_app.state::<crate::desktop_state::DesktopState>();
@@ -111,12 +117,16 @@ impl PreviewWindowService {
                         geometry,
                     },
                 );
+                if matches!(event, tauri::WindowEvent::Resized(_)) {
+                    window_wake.notify();
+                }
             }
             _ => {}
         });
 
+        let render_wake = self.wake.clone();
         std::thread::spawn(move || {
-            run_preview_loop(app, window, renderer, running);
+            run_preview_loop(app, window, renderer, running, render_wake);
         });
 
         Ok(())
@@ -158,6 +168,48 @@ impl PreviewWindowService {
         self.closing_for_main_shutdown
             .store(true, Ordering::Release);
         window.close().map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PreviewWake {
+    state: Arc<(Mutex<u64>, Condvar)>,
+}
+
+impl PreviewWake {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(0), Condvar::new())),
+        }
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        let (generation, _) = &*self.state;
+        *generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn notify(&self) {
+        let (generation, wake) = &*self.state;
+        let mut generation = generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *generation = generation.saturating_add(1);
+        wake.notify_all();
+    }
+
+    pub(crate) fn wait(&self, observed: u64, running: &AtomicBool) -> u64 {
+        let (generation, wake) = &*self.state;
+        let generation = generation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let generation = wake
+            .wait_while(generation, |generation| {
+                *generation == observed && running.load(Ordering::Acquire)
+            })
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *generation
     }
 }
 

@@ -6,11 +6,13 @@ pub(crate) fn run_preview_loop(
     window: Window,
     mut renderer: PreviewRenderer,
     running: Arc<AtomicBool>,
+    wake: PreviewWake,
 ) {
     let mut stats = PreviewFrameStats::new();
     let mut cached_scene: Option<PreviewScene> = None;
     let mut last_render_key: Option<PreviewRenderKey> = None;
     let mut reported_render_error = false;
+    let mut wake_generation = wake.generation();
     while running.load(Ordering::Acquire) {
         let size = match window_size(&window) {
             Ok(size) => size,
@@ -64,7 +66,10 @@ pub(crate) fn run_preview_loop(
                 let _ = window.set_title(&format!("Dawn Preview - {fps:.0} FPS"));
             }
         }
-        std::thread::sleep(preview_sleep_duration(clock.as_ref()));
+        match preview_sleep_duration(clock.as_ref()) {
+            Some(duration) => std::thread::sleep(duration),
+            None => wake_generation = wake.wait(wake_generation, &running),
+        }
     }
 }
 
@@ -119,20 +124,18 @@ impl PreviewClockKey {
     }
 }
 
-fn preview_sleep_duration(clock: Option<&AudioClockRenderIdentity>) -> Duration {
-    const IDLE_POLL: Duration = Duration::from_millis(100);
+fn preview_sleep_duration(clock: Option<&AudioClockRenderIdentity>) -> Option<Duration> {
+    const MAX_PLAYING_SLEEP: Duration = Duration::from_millis(100);
     const MIN_PLAYING_SLEEP: Duration = Duration::from_millis(1);
-    let Some(clock) = clock else {
-        return IDLE_POLL;
-    };
+    let clock = clock?;
     if !matches!(clock.audio_state, AudioTransportState::Playing) || clock.frame_rate == 0 {
-        return IDLE_POLL;
+        return None;
     }
     let next_frame_seconds =
         (clock.frame_index.saturating_add(1)) as f64 / f64::from(clock.frame_rate);
     let delay_seconds = (next_frame_seconds - clock.position_seconds).max(0.0);
     let delay = Duration::from_secs_f64(delay_seconds);
-    delay.clamp(MIN_PLAYING_SLEEP, IDLE_POLL)
+    Some(delay.clamp(MIN_PLAYING_SLEEP, MAX_PLAYING_SLEEP))
 }
 
 struct PreviewFrameStats {

@@ -2,9 +2,10 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import { AlertTriangle, Box, CheckCircle2, CircleX, FolderOpen } from "lucide-react";
 import { FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
 import { THEME_METRICS } from "../theme";
+import type { AppStaticSnapshot } from "../store";
 import type { AppSnapshot, SidebarView } from "../types";
 
-export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
+export function StatusBar({ snapshot }: { snapshot: AppStaticSnapshot }) {
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
   const projectParts = snapshot.projectRoot?.replace(/\\/g, "/").split("/") ?? [];
@@ -50,7 +51,7 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
   );
 }
 
-function projectHealthTooltip(snapshot: AppSnapshot): string {
+function projectHealthTooltip(snapshot: AppStaticSnapshot): string {
   if (snapshot.projectHealth === "recovery") {
     return "The project has model-blocking errors. Text, Search, Explorer, and Problems remain available.";
   }
@@ -95,7 +96,7 @@ function packageLabel(readiness: AppSnapshot["package"]["readiness"]): string {
   }
 }
 
-function packageTooltip(snapshot: AppSnapshot): string {
+function packageTooltip(snapshot: AppStaticSnapshot): string {
   const root = snapshot.package.root ?? "No package root";
   const registry = snapshot.package.registry ?? "No registry selected";
   return `${root} · ${registry}`;

@@ -2,10 +2,11 @@ import { AlertTriangle, CircleX } from "lucide-react";
 import { useMemo } from "react";
 import { THEME_METRICS } from "../theme";
 import type { AppSnapshot } from "../types";
+import type { AppStaticSnapshot } from "../store";
 import { sameWorkspacePath } from "./helpers";
 import { navigateToText } from "./navigation";
 
-export function ProblemsView({ snapshot }: { snapshot: AppSnapshot }) {
+export function ProblemsView({ snapshot }: { snapshot: AppStaticSnapshot }) {
   const groups = useMemo(() => {
     const values = new Map<string, AppSnapshot["diagnostics"]>();
     for (const diagnostic of snapshot.diagnostics) {

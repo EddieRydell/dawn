@@ -109,14 +109,23 @@ fn publish_audio_snapshot(app: &AppHandle, snapshot: AppSnapshot) -> AppSnapshot
 }
 
 fn start_audio_transport_poll(app: AppHandle) {
+    if !app.state::<DesktopState>().claim_audio_poll() {
+        return;
+    }
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_millis(50));
             let state = app.state::<DesktopState>();
-            let snapshot = state.snapshot();
-            let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
-            if !matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
-                break;
+            let snapshot = state.audio_snapshot();
+            let _ = app.emit("audio_transport_changed", snapshot.clone());
+            if !matches!(snapshot.state, AudioTransportState::Playing) {
+                state.release_audio_poll();
+                let restarted =
+                    matches!(state.audio_snapshot().state, AudioTransportState::Playing)
+                        && state.claim_audio_poll();
+                if !restarted {
+                    break;
+                }
             }
         }
     });

@@ -13,6 +13,9 @@ use crate::dto::{
 };
 use crate::rendering::SequenceRenderService;
 
+const INITIAL_TICK_INTERVAL: Duration = Duration::from_millis(20);
+const HOLDING_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
 enum Command {
     Enable {
         generation: u32,
@@ -138,7 +141,7 @@ fn worker(
     render: Arc<Mutex<SequenceRenderService>>,
 ) {
     let mut active: Option<(u32, OutputTransports, LiveOutputSnapshot)> = None;
-    let mut tick_interval = Duration::from_millis(20);
+    let mut tick_interval = INITIAL_TICK_INTERVAL;
     loop {
         let wait = active
             .as_ref()
@@ -150,7 +153,7 @@ fn worker(
                 active: ids,
             }) => {
                 terminate_active(&mut active);
-                tick_interval = Duration::from_millis(20);
+                tick_interval = INITIAL_TICK_INTERVAL;
                 let mut snapshot = preparing_snapshot(generation, &controllers, &ids);
                 match OutputTransports::open(&controllers, &ids) {
                     Ok(transports) => {
@@ -212,8 +215,11 @@ fn worker(
             .render_current_sequence_frame(&audio);
         match rendered {
             Ok(rendered) => {
-                tick_interval =
-                    Duration::from_secs_f64(1.0 / f64::from(rendered.frame.frame_rate.max(1)));
+                tick_interval = if matches!(audio.state, AudioTransportState::Playing) {
+                    Duration::from_secs_f64(1.0 / f64::from(rendered.frame.frame_rate.max(1)))
+                } else {
+                    HOLDING_REFRESH_INTERVAL
+                };
                 if let Err(error) = transports.send(&rendered.frame.controller_frames) {
                     let generation = *generation;
                     let mut failed = snapshot.clone();

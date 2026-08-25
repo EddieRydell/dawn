@@ -11,8 +11,9 @@ import { commands } from "../api";
 import { runSnapshotCommand } from "../store";
 import { THEME_METRICS } from "../theme";
 import type { AppSnapshot, PackageDependencyStatus } from "../types";
+import type { AppStaticSnapshot } from "../store";
 
-export function PackagesView({ snapshot }: { snapshot: AppSnapshot }) {
+export function PackagesView({ snapshot }: { snapshot: AppStaticSnapshot }) {
   const status = snapshot.package;
   const [pendingRemoval, setPendingRemoval] = useState<PackageDependencyStatus | null>(null);
   const hasRegistry = status.dependencies.some((dependency) => dependency.source === "registry");

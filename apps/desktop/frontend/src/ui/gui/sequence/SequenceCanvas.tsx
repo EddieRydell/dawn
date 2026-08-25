@@ -9,7 +9,7 @@ import type { AppSettings, ElementTarget, PersistedSequenceViewportState, Sequen
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
-import { clamp, formatSeconds, roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
+import { clamp, formatSeconds, roundToNanosecond, type AudioTransportViewSnapshot, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
 
 import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
@@ -17,6 +17,7 @@ import { graphOperatorDefinition } from "./graphOperator";
 import { targetsEqual } from "./sequenceTargets";
 import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
 import { drawClipRaster, useSequenceClipRasters } from "./sequenceClipRasters";
+import { useSequenceTransport } from "./SequenceTransportControls";
 import {
   automationClipsWithDrafts,
   automationCurvePointFromCanvas,
@@ -106,8 +107,6 @@ let sequenceViewportStateTimer: number | undefined;
 
 export function SequenceCanvas({
   document,
-  playheadSeconds,
-  homeSeconds,
   selected,
   setSelected,
   sequenceSelection,
@@ -120,8 +119,6 @@ export function SequenceCanvas({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceEditorDocument;
-  playheadSeconds: number;
-  homeSeconds: number;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -471,28 +468,6 @@ export function SequenceCanvas({
     }
     ctx.restore();
 
-    const playheadX = left + (clamp(playheadSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
-    const homeX = left + (clamp(homeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
-    if (homeX >= left && homeX <= rect.width) {
-      ctx.strokeStyle = SEQUENCE_COLORS.accent;
-      ctx.lineWidth = THEME_METRICS.visualLineWidth;
-      ctx.setLineDash([THEME_METRICS.sequenceMarkerDashSize, THEME_METRICS.sequenceMarkerDashSize]);
-      ctx.beginPath();
-      ctx.moveTo(homeX + THEME_METRICS.visualHairlineOffset, top);
-      ctx.lineTo(homeX + THEME_METRICS.visualHairlineOffset, rect.height);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = SEQUENCE_COLORS.accent;
-      ctx.fillRect(homeX - THEME_METRICS.sequenceMarkerHalfWidth, top, THEME_METRICS.sequenceMarkerWidth, THEME_METRICS.sequenceMarkerHeight);
-    }
-    if (playheadX >= left && playheadX <= rect.width) {
-      ctx.strokeStyle = SEQUENCE_COLORS.warning;
-      ctx.lineWidth = THEME_METRICS.visualLineWidth;
-      ctx.beginPath();
-        ctx.moveTo(playheadX + THEME_METRICS.visualHairlineOffset, top);
-        ctx.lineTo(playheadX + THEME_METRICS.visualHairlineOffset, rect.height);
-      ctx.stroke();
-    }
     if (selectedTimeSeconds !== null) {
       const selectedX = left + (clamp(selectedTimeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
       if (selectedX >= left && selectedX <= rect.width) {
@@ -519,7 +494,7 @@ export function SequenceCanvas({
     ctx.moveTo(left + THEME_METRICS.visualHairlineOffset, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [activeAutomationTargetEffectIds, automationClipChooser, automationHover, automationRowHeight, automationRowsByLane, document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, visibleAutomationClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
+  }, [activeAutomationTargetEffectIds, automationClipChooser, automationHover, automationRowHeight, automationRowsByLane, document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, visibleAutomationClips, selected, selectedEffectIds, selectedMarks, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -1490,7 +1465,82 @@ export function SequenceCanvas({
           </ContextMenu.Portal>
         )}
       </ContextMenu.Root>
+      <SequenceTransportOverlay
+        document={document}
+        viewport={viewport}
+        left={left}
+        top={top}
+        canvasSize={canvasSize}
+      />
     </div>
+  );
+}
+
+function SequenceTransportOverlay({
+  document,
+  viewport,
+  left,
+  top,
+  canvasSize
+}: {
+  document: SequenceEditorDocument;
+  viewport: SequenceViewport;
+  left: number;
+  top: number;
+  canvasSize: { width: number; height: number };
+}) {
+  const transport = useAppStore((store) => store.snapshot?.audioTransport ?? null);
+  if (transport === null) return null;
+  return (
+    <SequenceTransportMarkers
+      document={document}
+      transport={transport}
+      viewport={viewport}
+      left={left}
+      top={top}
+      canvasSize={canvasSize}
+    />
+  );
+}
+
+function SequenceTransportMarkers({
+  document,
+  transport,
+  viewport,
+  left,
+  top,
+  canvasSize
+}: {
+  document: SequenceEditorDocument;
+  transport: AudioTransportViewSnapshot;
+  viewport: SequenceViewport;
+  left: number;
+  top: number;
+  canvasSize: { width: number; height: number };
+}) {
+  const liveTransport = useSequenceTransport(transport);
+  const markerHeight = Math.max(0, canvasSize.height - top);
+  const markerLeft = (seconds: number) =>
+    left + (clamp(seconds, 0, document.durationSeconds) - viewport.scrollXSeconds) * viewport.pxPerSecond;
+  const playheadLeft = markerLeft(liveTransport.positionSeconds);
+  const homeLeft = markerLeft(liveTransport.homeSeconds);
+  const visible = (x: number) => x >= left && x <= canvasSize.width;
+
+  return (
+    <>
+      {visible(homeLeft) && (
+        <div
+          className="sequence-transport-marker home"
+          style={{ left: homeLeft, top, height: markerHeight }}
+        />
+      )}
+      {visible(playheadLeft) && (
+        <div
+          className="sequence-transport-marker playhead"
+          style={{ left: playheadLeft, top, height: markerHeight }}
+        />
+      )}
+    </>
   );
 }
 

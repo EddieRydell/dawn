@@ -19,6 +19,7 @@ pub struct E131Sender {
     termination_socket: UdpSocket,
     config: E131Config,
     universes: HashMap<ControllerPortId, (u16, usize)>,
+    universe_data: HashMap<ControllerPortId, Vec<u8>>,
 }
 
 impl E131Sender {
@@ -32,6 +33,7 @@ impl E131Sender {
             .map_err(|error| socket_error(&id, error))?;
         let termination_socket = UdpSocket::bind(bind).map_err(|error| socket_error(&id, error))?;
         let mut universes = HashMap::new();
+        let mut universe_data = HashMap::new();
         for port in ports {
             let ControllerPortAddress::E131Universe(universe) = port.address else {
                 return Err(OutputError::Socket {
@@ -43,6 +45,7 @@ impl E131Sender {
                 .register_universe(universe)
                 .map_err(|error| socket_error(&id, error))?;
             universes.insert(port.id, (universe, usize::from(port.slot_count)));
+            universe_data.insert(port.id, vec![0; usize::from(port.slot_count) + 1]);
         }
         Ok(Self {
             id,
@@ -50,10 +53,15 @@ impl E131Sender {
             termination_socket,
             config: config.clone(),
             universes,
+            universe_data,
         })
     }
 
-    pub fn send(&mut self, frames: &[ControllerPortFrame]) -> Result<(), OutputError> {
+    pub fn send<'a>(
+        &mut self,
+        frames: impl IntoIterator<Item = &'a ControllerPortFrame>,
+    ) -> Result<(), OutputError> {
+        let destination = self.destination();
         for frame in frames {
             let (universe, expected) =
                 self.universes.get(&frame.port).copied().ok_or_else(|| {
@@ -69,15 +77,19 @@ impl E131Sender {
                     actual: frame.slots.len(),
                 });
             }
-            let mut data = Vec::with_capacity(frame.slots.len() + 1);
-            data.push(0);
-            data.extend_from_slice(&frame.slots);
+            let data = self.universe_data.get_mut(&frame.port).ok_or_else(|| {
+                OutputError::MissingPort {
+                    controller: self.id.clone(),
+                    port: frame.port,
+                }
+            })?;
+            data[1..].copy_from_slice(&frame.slots);
             self.source
                 .send(
                     &[universe],
-                    &data,
+                    data,
                     Some(self.config.priority),
-                    self.destination(),
+                    destination,
                     None,
                 )
                 .map_err(|error| socket_error(&self.id, error))?;

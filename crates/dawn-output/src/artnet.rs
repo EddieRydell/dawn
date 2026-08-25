@@ -47,7 +47,10 @@ impl ArtNetSender {
         })
     }
 
-    pub fn send(&mut self, frames: &[ControllerPortFrame]) -> Result<(), OutputError> {
+    pub fn send<'a>(
+        &mut self,
+        frames: impl IntoIterator<Item = &'a ControllerPortFrame>,
+    ) -> Result<(), OutputError> {
         for frame in frames {
             let (address, expected) =
                 self.ports

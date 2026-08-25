@@ -338,6 +338,7 @@
   --dawn-z-dialog-content: 31;
   --dawn-z-graph-handle: 3;
   --dawn-z-graph-resize: 2;
+  --dawn-z-sequence-transport: 1;
 
   /* motion and opacity */
   --dawn-duration-fast: 120ms;
@@ -1295,6 +1296,32 @@ button:focus-visible,
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+
+.sequence-transport-marker {
+  position: absolute;
+  z-index: var(--dawn-z-sequence-transport);
+  box-sizing: border-box;
+  width: 0;
+  pointer-events: none;
+  transform: translateX(var(--dawn-visual-hairline-offset));
+}
+
+.sequence-transport-marker.home {
+  border-left: var(--dawn-visual-line-width) dashed var(--dawn-accent);
+}
+
+.sequence-transport-marker.home::before {
+  position: absolute;
+  width: var(--dawn-sequence-marker-width);
+  height: var(--dawn-sequence-marker-height);
+  background: var(--dawn-accent);
+  content: "";
+  transform: translateX(calc(-1 * var(--dawn-sequence-marker-half-width)));
+}
+
+.sequence-transport-marker.playhead {
+  border-left: var(--dawn-visual-line-width) solid var(--dawn-warning);
 }
 
 .gui-inspector-resize-shell {
