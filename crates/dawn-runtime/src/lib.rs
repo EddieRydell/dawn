@@ -19,9 +19,9 @@ mod params;
 mod raster;
 mod rendering;
 mod sampling;
+mod sequence;
 mod show;
 mod target;
-mod timeline;
 pub use raster::{
     EffectRasterPrepareBatch, EffectRasterRenderScratch, PreparedEffectRasterRenderer,
     PreparedEffectRasterSample,
@@ -42,7 +42,7 @@ use dawn_language::sequence::{
     AutomationBinding, AutomationClip, MarkCollectionKey, Sequence, SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::SetupId;
-use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, validate_sequence};
+use dawn_language::validation::validate_sequence;
 use dawn_language::values::{Color, Marks};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
@@ -67,12 +67,12 @@ use sampling::{
     evenly_sample_indices, prepare_sample_groups_for_implementation,
     prepare_sampled_effect_pixel_groups, render_sampled_effect_target_colors, sample_effect_group,
 };
+use sequence::{
+    build_effect_frame_index, build_effect_frame_index_for_window, frame_count, prepare_timing,
+};
 use target::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
     prepare_target_pixels_cached,
-};
-use timeline::{
-    build_effect_frame_index, build_effect_frame_index_for_window, frame_count, prepare_timing,
 };
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
