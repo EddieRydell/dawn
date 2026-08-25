@@ -11,6 +11,7 @@
 )]
 
 mod color;
+mod elements;
 mod show;
 pub use show::*;
 
@@ -23,9 +24,7 @@ use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectImplementation, EffectInstId, EffectParamValue,
     EffectRef, EffectScope, GradientSource,
 };
-use dawn_language::element::{
-    ElementCellRange, ElementNodeId, ElementNodeKind, ElementSelection, ElementTree,
-};
+use dawn_language::element::{ElementCellRange, ElementNodeId, ElementSelection};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect, NativeSample};
@@ -49,6 +48,7 @@ use color::{
     add_color, black, color_param, compose_max, intensity, invert_color, max_color, multiply_color,
     scale_color,
 };
+use elements::{PreparedElement, element_cell_offsets, prepare_elements};
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1203,97 +1203,6 @@ fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
 
 fn frame_count(duration_seconds: f64, frame_rate: u32) -> u64 {
     (duration_seconds * f64::from(frame_rate)).ceil() as u64
-}
-
-type PreparedElements = (
-    Vec<PreparedElement>,
-    IndexMap<ElementNodeId, Vec<ElementNodeId>>,
-);
-
-fn prepare_elements(
-    project: &DawnProject,
-    tree: &ElementTree,
-) -> Result<PreparedElements, RenderError> {
-    let mut ordered = Vec::new();
-    let mut seen = IndexSet::new();
-    for address in tree.flattened_cells().map_err(|_| RenderError::BadTarget)? {
-        if seen.insert(address.node) {
-            ordered.push(address.node);
-        }
-    }
-    let elements = ordered
-        .into_iter()
-        .map(|id| {
-            let node = tree
-                .nodes
-                .get(&id)
-                .ok_or(RenderError::MissingElement { element_id: id })?;
-            let (pixel_count, color_enabled) = match &node.kind {
-                ElementNodeKind::Color { cells, .. } => (*cells as usize, true),
-                ElementNodeKind::Scalar { cells } | ElementNodeKind::Indexed { cells, .. } => {
-                    (*cells as usize, false)
-                }
-                ElementNodeKind::Fixture { profile } => {
-                    let profile = project
-                        .definitions
-                        .fixture_profiles
-                        .definitions
-                        .get(profile)
-                        .ok_or_else(|| RenderError::BadGraph {
-                            message: "fixture element references a missing profile".to_string(),
-                        })?;
-                    let color_enabled = profile.functions.values().any(|function| {
-                        matches!(
-                            function.kind,
-                            dawn_language::fixture_profile::FixtureFunctionKind::ColorMixing { .. }
-                        )
-                    });
-                    (1, color_enabled)
-                }
-                ElementNodeKind::Group { .. } => return Err(RenderError::BadTarget),
-            };
-            Ok(PreparedElement {
-                id,
-                pixel_count,
-                color_enabled,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut groups = IndexMap::new();
-    for (id, node) in &tree.nodes {
-        if matches!(node.kind, ElementNodeKind::Group { .. }) {
-            let selection = ElementSelection {
-                tree: tree.id.clone(),
-                node: *id,
-                cells: None,
-            };
-            let mut members = Vec::new();
-            let mut seen = IndexSet::new();
-            for address in tree
-                .flatten_selection(&selection)
-                .map_err(|_| RenderError::BadTarget)?
-            {
-                if seen.insert(address.node) {
-                    members.push(address.node);
-                }
-            }
-            groups.insert(*id, members);
-        }
-    }
-    Ok((elements, groups))
-}
-
-fn element_cell_offsets(elements: &[PreparedElement]) -> (Vec<usize>, usize) {
-    let mut pixel_count = 0usize;
-    let offsets = elements
-        .iter()
-        .map(|element| {
-            let offset = pixel_count;
-            pixel_count += element.pixel_count;
-            offset
-        })
-        .collect();
-    (offsets, pixel_count)
 }
 
 fn unflatten_rendered_elements(
@@ -3044,13 +2953,6 @@ fn layer_cache_history_micros(graph: &PreparedCompositionGraph) -> Result<i64, R
     } else {
         (history_seconds * 1_000_000.0).ceil() as i64
     })
-}
-
-#[derive(Clone, Debug)]
-struct PreparedElement {
-    id: ElementNodeId,
-    pixel_count: usize,
-    color_enabled: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
