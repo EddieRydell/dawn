@@ -13,12 +13,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::MAX_GENERATED_EFFECTS;
+use super::sampling::{
+    prepare_sample_context_groups_cached, prepare_sample_groups_for_effect,
+    prepare_sample_groups_for_implementation,
+};
 use super::target::PreparedTargetPixel;
 use super::{
     EffectKind as RootEffectKind, GeneratedTargetCacheEntry, GeneratorContextTargetCacheEntry,
     PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, PreparedElement, RenderError,
-    arc_key, prepare_sample_context_groups_cached, prepare_sample_groups_for_effect,
-    prepare_sample_groups_for_implementation,
+    arc_key,
 };
 
 const MAX_GENERATOR_DEPTH: usize = 4;
