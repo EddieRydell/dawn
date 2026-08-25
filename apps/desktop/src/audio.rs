@@ -343,8 +343,8 @@ impl Drop for AudioEngine {
 mod backend;
 
 use backend::{
-    AudioDriver, AudioHandle, BackendPlaybackState, KiraAudioDriver,
-    LoadedSource, canonical_audio_path,
+    AudioDriver, AudioHandle, BackendPlaybackState, KiraAudioDriver, LoadedSource,
+    canonical_audio_path,
 };
 
 #[cfg(test)]

@@ -12,20 +12,20 @@
 
 use tauri::Manager;
 
-pub mod audio;
+mod audio;
 pub mod bindings;
-pub mod commands;
+mod commands;
 mod desktop_foundation_tests;
-pub mod desktop_state;
-pub mod dto;
-pub mod gui;
+mod desktop_state;
+mod dto;
+mod gui;
 mod gui_geometry;
 mod live_output;
-pub mod persistence;
-pub mod preview;
+mod persistence;
+mod preview;
 mod project_templates;
-pub mod sequence_clip_raster;
-pub mod sequence_render;
+mod sequence_clip_raster;
+mod sequence_render;
 mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {
