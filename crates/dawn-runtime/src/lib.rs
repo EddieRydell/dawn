@@ -14,7 +14,6 @@ mod color;
 mod effect_preparation;
 mod elements;
 mod generators;
-mod params;
 mod raster;
 mod sampling;
 mod sequence;
@@ -52,7 +51,6 @@ use elements::{PreparedElement, element_cell_offsets, prepare_elements};
 use generators::{
     GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
 };
-use params::{EffectParamTiming, prepare_params};
 use sampling::{
     PreparedSampleContextGroup, PreparedSampleGroupCacheEntry, PreparedSampledEffectPixel,
     PreparedSampledEffectPixels, TargetColorAddress, effect_implementation_at,
@@ -64,6 +62,7 @@ use sequence::composition::{
     layer_cache_history_micros, prepare_composition_graph,
 };
 use sequence::composition::{render_composition_graph, render_effect, take_black_color_buffer};
+use sequence::effects::parameters::{EffectParamTiming, prepare_params};
 use sequence::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
     prepare_target_pixels_cached,
