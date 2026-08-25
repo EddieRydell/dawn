@@ -26,15 +26,14 @@ pub use raster::{
     PreparedEffectRasterSample,
 };
 pub use show::*;
+pub use target::resolve_effect_target_pixel_addresses;
 
 use dawn_language::dsl::{
     BoundParams, CompiledEffect, DslBindCache, DslVmScratch, EffectKind, Identifier,
     OperatorRunContext, RuntimeError, SignalSampler, TargetItemValue, TargetValue, Value,
 };
-use dawn_language::effect::{
-    EffectDefinitionId, EffectImplementation, EffectInstId, EffectRef, EffectScope,
-};
-use dawn_language::element::{ElementNodeId, ElementSelection};
+use dawn_language::effect::{EffectDefinitionId, EffectImplementation, EffectInstId, EffectRef};
+use dawn_language::element::ElementNodeId;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeSample};
 use dawn_language::operator::OperatorDefinition;
@@ -69,7 +68,7 @@ use sampling::{
 };
 use target::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
-    prepare_target_pixels, prepare_target_pixels_cached,
+    prepare_target_pixels_cached,
 };
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
@@ -114,38 +113,6 @@ pub struct SequenceRenderScratch {
     layer_cache: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
     render_cache_id: Option<u64>,
     color_buffers: Vec<Vec<Color>>,
-}
-
-pub fn resolve_effect_target_pixel_addresses(
-    project: &DawnProject,
-    setup_id: &SetupId,
-    target: &ElementSelection,
-    scope: &EffectScope,
-) -> Result<Vec<RenderedTargetPixelAddress>, RenderError> {
-    let setup = project
-        .setups
-        .get(setup_id)
-        .ok_or_else(|| RenderError::MissingSetup {
-            setup_id: setup_id.clone(),
-        })?;
-    let tree = project
-        .element_trees
-        .get(&setup.elements)
-        .ok_or(RenderError::MissingElementTree)?;
-    let (elements, groups) = prepare_elements(project, tree)?;
-    let element_ids = elements
-        .iter()
-        .map(|element| element.id)
-        .collect::<IndexSet<_>>();
-    let target = prepare_target(target, &element_ids, &groups)?;
-    let pixels = prepare_target_pixels(&target, &elements, scope)?;
-    Ok(pixels
-        .into_iter()
-        .map(|pixel| RenderedTargetPixelAddress {
-            element_id: elements[pixel.element_index].id,
-            element_cell_index: pixel.element_cell_index,
-        })
-        .collect())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -526,14 +493,6 @@ fn build_effect_frame_index_for_window(
         }
     }
     index
-}
-
-fn pixel_fraction(index: usize, count: usize) -> f64 {
-    if count <= 1 {
-        0.0
-    } else {
-        index as f64 / (count - 1) as f64
-    }
 }
 
 #[derive(Clone, Debug)]

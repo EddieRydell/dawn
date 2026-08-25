@@ -1,11 +1,54 @@
 use dawn_language::effect::EffectScope;
-use dawn_language::element::{ElementCellRange, ElementNodeId, ElementSelection};
+use dawn_language::element::ElementSelection;
+use dawn_language::element::{ElementCellRange, ElementNodeId};
+use dawn_language::model::DawnProject;
+use dawn_language::setup::SetupId;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::RenderError;
-use super::elements::PreparedElement;
+use super::elements::{PreparedElement, prepare_elements};
+use super::{RenderError, RenderedTargetPixelAddress};
+
+fn pixel_fraction(index: usize, count: usize) -> f64 {
+    if count <= 1 {
+        0.0
+    } else {
+        index as f64 / (count - 1) as f64
+    }
+}
+
+pub fn resolve_effect_target_pixel_addresses(
+    project: &DawnProject,
+    setup_id: &SetupId,
+    target: &ElementSelection,
+    scope: &EffectScope,
+) -> Result<Vec<RenderedTargetPixelAddress>, RenderError> {
+    let setup = project
+        .setups
+        .get(setup_id)
+        .ok_or_else(|| RenderError::MissingSetup {
+            setup_id: setup_id.clone(),
+        })?;
+    let tree = project
+        .element_trees
+        .get(&setup.elements)
+        .ok_or(RenderError::MissingElementTree)?;
+    let (elements, groups) = prepare_elements(project, tree)?;
+    let element_ids = elements
+        .iter()
+        .map(|element| element.id)
+        .collect::<IndexSet<_>>();
+    let target = prepare_target(target, &element_ids, &groups)?;
+    let pixels = prepare_target_pixels(&target, &elements, scope)?;
+    Ok(pixels
+        .into_iter()
+        .map(|pixel| RenderedTargetPixelAddress {
+            element_id: elements[pixel.element_index].id,
+            element_cell_index: pixel.element_cell_index,
+        })
+        .collect())
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PreparedTargetSelection {
@@ -149,7 +192,7 @@ pub(crate) fn prepare_target_pixels(
                 element_cell_index,
                 pixel_index,
                 pixel_count,
-                pixel_fraction: super::pixel_fraction(pixel_index, pixel_count),
+                pixel_fraction: pixel_fraction(pixel_index, pixel_count),
             });
             whole_index += 1;
         }
