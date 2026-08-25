@@ -10,8 +10,8 @@ use dawn_language::sequence::{
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 
-use crate::effect_preparation::{automation_param, prepare_automation};
 use crate::sequence::effects::parameters::prepare_operator_params;
+use crate::sequence::effects::preparation::{automation_param, prepare_automation};
 use crate::sequence::targets::{PreparedTargetPixel, full_rig_target_pixels};
 use crate::{EffectParamTiming, PreparedAutomation, PreparedElement, PreparedLayer, RenderError};
 use dawn_language::model::DawnProject;

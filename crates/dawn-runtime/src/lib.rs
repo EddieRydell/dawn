@@ -11,11 +11,8 @@
 )]
 
 mod color;
-mod effect_preparation;
 mod elements;
-mod generators;
 mod raster;
-mod sampling;
 mod sequence;
 mod show;
 pub use raster::{
@@ -46,23 +43,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use color::black;
-use effect_preparation::{PrepareEffectContext, prepare_effect_inst};
 use elements::{PreparedElement, element_cell_offsets, prepare_elements};
-use generators::{
-    GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
-};
-use sampling::{
-    PreparedSampleContextGroup, PreparedSampleGroupCacheEntry, PreparedSampledEffectPixel,
-    PreparedSampledEffectPixels, TargetColorAddress, effect_implementation_at,
-    evenly_sample_indices, prepare_sample_groups_for_implementation,
-    prepare_sampled_effect_pixel_groups, render_sampled_effect_target_colors, sample_effect_group,
-};
 use sequence::composition::{
     PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind,
     layer_cache_history_micros, prepare_composition_graph,
 };
 use sequence::composition::{render_composition_graph, render_effect, take_black_color_buffer};
-use sequence::effects::parameters::{EffectParamTiming, prepare_params};
+use sequence::effects::generators::{
+    GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
+};
+use sequence::effects::parameters::EffectParamTiming;
+use sequence::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
+use sequence::effects::sampling::{
+    PreparedSampleContextGroup, PreparedSampleGroupCacheEntry, PreparedSampledEffectPixel,
+    PreparedSampledEffectPixels, TargetColorAddress, effect_implementation_at,
+    evenly_sample_indices, prepare_sample_groups_for_implementation,
+    prepare_sampled_effect_pixel_groups, render_sampled_effect_target_colors, sample_effect_group,
+};
 use sequence::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
     prepare_target_pixels_cached,

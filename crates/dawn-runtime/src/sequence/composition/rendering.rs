@@ -2,9 +2,9 @@ use crate::color::{
     add_color, black, color_param, compose_max, intensity, invert_color, max_color, multiply_color,
     scale_color,
 };
-use crate::effect_preparation::apply_automation_params;
-use crate::sampling::sample_effect_pixel;
 use crate::sequence::composition::graph::{float_param, int_param};
+use crate::sequence::effects::preparation::apply_automation_params;
+use crate::sequence::effects::sampling::sample_effect_pixel;
 use crate::*;
 use dawn_language::operator::{BuiltinOperator, OperatorImplementation};
 
