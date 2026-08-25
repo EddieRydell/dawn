@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::color::compose_max;
+use super::effect_preparation::apply_automation_params;
 use super::target::PreparedTargetPixel;
 use super::{
-    PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, RenderError,
-    apply_automation_params, arc_key,
+    PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, RenderError, arc_key,
 };
 
 #[derive(Clone, Copy, Debug)]

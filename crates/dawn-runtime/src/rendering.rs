@@ -2,8 +2,33 @@ use super::color::{
     add_color, black, color_param, compose_max, intensity, invert_color, max_color, multiply_color,
     scale_color,
 };
+use super::effect_preparation::apply_automation_params;
+use super::graph::{float_param, int_param};
 use super::sampling::sample_effect_pixel;
 use super::*;
+use dawn_language::operator::{BuiltinOperator, OperatorImplementation};
+
+fn unflatten_rendered_elements(
+    elements: &[PreparedElement],
+    colors: &[Color],
+) -> Vec<RenderedElement> {
+    let mut offset = 0usize;
+    elements
+        .iter()
+        .map(|element| {
+            let end = offset.saturating_add(element.pixel_count).min(colors.len());
+            let mut pixels = colors[offset..end].to_vec();
+            if pixels.len() < element.pixel_count {
+                pixels.resize(element.pixel_count, black());
+            }
+            offset = offset.saturating_add(element.pixel_count);
+            RenderedElement {
+                element_id: element.id,
+                pixels,
+            }
+        })
+        .collect()
+}
 
 pub(crate) fn render_effect(
     effect: &PreparedEffect,

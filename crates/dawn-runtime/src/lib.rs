@@ -37,11 +37,9 @@ use dawn_language::effect::{
 use dawn_language::element::{ElementNodeId, ElementSelection};
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeSample};
-use dawn_language::operator::{BuiltinOperator, OperatorDefinition, OperatorImplementation};
+use dawn_language::operator::OperatorDefinition;
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, AutomationValue,
-    CompositionGraphNodeId, MarkCollectionKey, Sequence, SequenceId, SequenceLayerId,
-    automation_value_at,
+    AutomationBinding, AutomationClip, MarkCollectionKey, Sequence, SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::SetupId;
 use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, validate_sequence};
@@ -52,16 +50,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use color::black;
-use effect_preparation::{
-    PrepareEffectContext, apply_automation_params, automation_param, prepare_automation,
-    prepare_effect_inst,
-};
+use effect_preparation::{PrepareEffectContext, prepare_effect_inst};
 use elements::{PreparedElement, element_cell_offsets, prepare_elements};
 use generators::{
     GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
 };
 use graph::{
-    PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind, prepare_composition_graph,
+    PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind,
+    layer_cache_history_micros, prepare_composition_graph,
 };
 use params::{EffectParamTiming, prepare_operator_params, prepare_params};
 use rendering::{render_composition_graph, render_effect, take_black_color_buffer};
@@ -486,54 +482,8 @@ fn frame_count(duration_seconds: f64, frame_rate: u32) -> u64 {
     (duration_seconds * f64::from(frame_rate)).ceil() as u64
 }
 
-fn unflatten_rendered_elements(
-    elements: &[PreparedElement],
-    colors: &[Color],
-) -> Vec<RenderedElement> {
-    let mut offset = 0usize;
-    elements
-        .iter()
-        .map(|element| {
-            let end = offset.saturating_add(element.pixel_count).min(colors.len());
-            let mut pixels = colors[offset..end].to_vec();
-            if pixels.len() < element.pixel_count {
-                pixels.resize(element.pixel_count, black());
-            }
-            offset = offset.saturating_add(element.pixel_count);
-            RenderedElement {
-                element_id: element.id,
-                pixels,
-            }
-        })
-        .collect()
-}
-
 fn arc_key<T>(value: &Arc<T>) -> usize {
     Arc::as_ptr(value).cast::<()>() as usize
-}
-
-fn automation_for_composition_node(
-    sequence: &Sequence,
-    node_id: &CompositionGraphNodeId,
-) -> Vec<PreparedAutomation> {
-    sequence
-        .automation_clips
-        .iter()
-        .flat_map(|clip| {
-            clip.bindings
-                .iter()
-                .filter(move |binding| {
-                    matches!(
-                        &binding.target,
-                        AutomationTarget::CompositionNodeParam {
-                            node_id: target_node_id,
-                            ..
-                        } if target_node_id == node_id
-                    )
-                })
-                .map(move |binding| prepare_automation(clip, binding))
-        })
-        .collect()
 }
 
 fn build_effect_frame_index(
@@ -584,79 +534,6 @@ fn pixel_fraction(index: usize, count: usize) -> f64 {
     } else {
         index as f64 / (count - 1) as f64
     }
-}
-
-fn float_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<f64, RenderError> {
-    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
-        message: format!("invalid operator parameter name `{name}`"),
-    })?;
-    params
-        .get(&name)
-        .and_then(|value| match value {
-            Value::Float(value) => Some(*value),
-            _ => None,
-        })
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
-        })
-}
-
-fn int_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<i64, RenderError> {
-    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
-        message: format!("invalid operator parameter name `{name}`"),
-    })?;
-    params
-        .get(&name)
-        .and_then(|value| match value {
-            Value::Int(value) => Some(*value),
-            _ => None,
-        })
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
-        })
-}
-
-fn layer_cache_history_micros(graph: &PreparedCompositionGraph) -> Result<i64, RenderError> {
-    let mut history_seconds = 0.0_f64;
-    for node in &graph.nodes {
-        let PreparedGraphNodeKind::Operator {
-            definition,
-            params,
-            automation,
-            ..
-        } = &node.kind
-        else {
-            continue;
-        };
-        if !matches!(
-            definition.implementation,
-            OperatorImplementation::Native(BuiltinOperator::Echo)
-        ) {
-            continue;
-        }
-        let mut delay = float_param(params, "seconds")?.max(0.0);
-        let mut repeats = int_param(params, "repeats")?.clamp(1, 32);
-        for automation in automation {
-            match (
-                automation_param(&automation.binding).as_str(),
-                &automation.binding.mapping,
-            ) {
-                ("seconds", AutomationMapping::Float { min, max }) => {
-                    delay = delay.max(*min).max(*max).max(0.0);
-                }
-                ("repeats", AutomationMapping::Int { min, max }) => {
-                    repeats = repeats.max(*min).max(*max).clamp(1, 32);
-                }
-                _ => {}
-            }
-        }
-        history_seconds = history_seconds.max(delay * repeats as f64);
-    }
-    Ok(if !history_seconds.is_finite() || history_seconds <= 0.0 {
-        0
-    } else {
-        (history_seconds * 1_000_000.0).ceil() as i64
-    })
 }
 
 #[derive(Clone, Debug)]

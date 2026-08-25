@@ -1,4 +1,5 @@
 use super::*;
+use dawn_language::sequence::{AutomationTarget, AutomationValue, automation_value_at};
 
 pub(crate) struct PrepareEffectContext<'a> {
     pub(crate) project: &'a DawnProject,

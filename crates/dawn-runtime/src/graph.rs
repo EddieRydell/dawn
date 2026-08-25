@@ -1,20 +1,127 @@
+use dawn_language::dsl::Identifier;
 use dawn_language::dsl::{BoundParams, Value};
 use dawn_language::operator::{
-    OperatorDefinition, OperatorImplementation, validate_composition_graph,
+    BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
 };
 use dawn_language::sequence::{
-    CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, Sequence,
-    SequenceCompositionGraph,
+    AutomationMapping, AutomationTarget, CompositionGraphNodeId, CompositionGraphNodeKind,
+    GraphPortId, Sequence, SequenceCompositionGraph,
 };
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 
+use super::effect_preparation::{automation_param, prepare_automation};
 use super::target::{PreparedTargetPixel, full_rig_target_pixels};
 use super::{
     EffectParamTiming, PreparedAutomation, PreparedElement, PreparedLayer, RenderError,
-    automation_for_composition_node, prepare_operator_params,
+    prepare_operator_params,
 };
 use dawn_language::model::DawnProject;
+
+pub(crate) fn automation_for_composition_node(
+    sequence: &Sequence,
+    node_id: &CompositionGraphNodeId,
+) -> Vec<PreparedAutomation> {
+    sequence
+        .automation_clips
+        .iter()
+        .flat_map(|clip| {
+            clip.bindings
+                .iter()
+                .filter(move |binding| {
+                    matches!(
+                        &binding.target,
+                        AutomationTarget::CompositionNodeParam {
+                            node_id: target_node_id,
+                            ..
+                        } if target_node_id == node_id
+                    )
+                })
+                .map(move |binding| prepare_automation(clip, binding))
+        })
+        .collect()
+}
+
+pub(crate) fn float_param(
+    params: &IndexMap<Identifier, Value>,
+    name: &str,
+) -> Result<f64, RenderError> {
+    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
+        message: format!("invalid operator parameter name `{name}`"),
+    })?;
+    params
+        .get(&name)
+        .and_then(|value| match value {
+            Value::Float(value) => Some(*value),
+            _ => None,
+        })
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
+        })
+}
+
+pub(crate) fn int_param(
+    params: &IndexMap<Identifier, Value>,
+    name: &str,
+) -> Result<i64, RenderError> {
+    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
+        message: format!("invalid operator parameter name `{name}`"),
+    })?;
+    params
+        .get(&name)
+        .and_then(|value| match value {
+            Value::Int(value) => Some(*value),
+            _ => None,
+        })
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
+        })
+}
+
+pub(crate) fn layer_cache_history_micros(
+    graph: &PreparedCompositionGraph,
+) -> Result<i64, RenderError> {
+    let mut history_seconds = 0.0_f64;
+    for node in &graph.nodes {
+        let PreparedGraphNodeKind::Operator {
+            definition,
+            params,
+            automation,
+            ..
+        } = &node.kind
+        else {
+            continue;
+        };
+        if !matches!(
+            definition.implementation,
+            OperatorImplementation::Native(BuiltinOperator::Echo)
+        ) {
+            continue;
+        }
+        let mut delay = float_param(params, "seconds")?.max(0.0);
+        let mut repeats = int_param(params, "repeats")?.clamp(1, 32);
+        for automation in automation {
+            match (
+                automation_param(&automation.binding).as_str(),
+                &automation.binding.mapping,
+            ) {
+                ("seconds", AutomationMapping::Float { min, max }) => {
+                    delay = delay.max(*min).max(*max).max(0.0);
+                }
+                ("repeats", AutomationMapping::Int { min, max }) => {
+                    repeats = repeats.max(*min).max(*max).clamp(1, 32);
+                }
+                _ => {}
+            }
+        }
+        history_seconds = history_seconds.max(delay * repeats as f64);
+    }
+    Ok(if !history_seconds.is_finite() || history_seconds <= 0.0 {
+        0
+    } else {
+        (history_seconds * 1_000_000.0).ceil() as i64
+    })
+}
 
 pub(crate) struct PrepareGraphContext<'a> {
     pub(crate) project: &'a DawnProject,
