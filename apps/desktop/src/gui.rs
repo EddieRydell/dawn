@@ -255,7 +255,8 @@ pub fn apply_edit(
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
             edit_sequence(session, &resolved, edit)?;
             let sequence_id = SequenceId(resolved.identity.clone());
-            crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
+            dawn_language::validation::validate_sequence_by_id(&session.project, &sequence_id)
+                .map_err(|error| GuiMutationError::Invalid(error.message))?;
             dawn_language::validation::validate_project(&session.project)
                 .map_err(|error| GuiMutationError::Invalid(format!("{error:?}")))?;
         }
@@ -313,7 +314,8 @@ pub(crate) fn apply_sequence_selection_edit(
         apply_sequence_selection_edit_inner(session, request, edit, &mut candidate_clipboard)?;
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
     let sequence_id = SequenceId(resolved.identity.clone());
-    crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
+    dawn_language::validation::validate_sequence_by_id(&session.project, &sequence_id)
+        .map_err(|error| GuiMutationError::Invalid(error.message))?;
     *clipboard = candidate_clipboard;
     Ok(result)
 }

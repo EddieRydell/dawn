@@ -325,9 +325,10 @@ impl DesktopState {
             ) {
                 errors.push(format!("{}: {}", id.0.object(), error.message));
             }
-            if let Err(error) = crate::sequence_integrity::validate_sequence_integrity(&edited, &id)
+            if let Err(error) =
+                dawn_language::validation::validate_sequence_by_id(&edited.project, &id)
             {
-                errors.push(format!("{}: {}", id.0.object(), error.message()));
+                errors.push(format!("{}: {}", id.0.object(), error.message));
             }
         }
         if errors.is_empty() {

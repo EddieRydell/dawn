@@ -9,6 +9,7 @@ use crate::operator::{effect_param_matches_type, validate_composition_graph};
 use crate::preview::PreviewValidationError;
 use crate::sequence::{
     AutomationMapping, AutomationTarget, CompositionGraphNodeKind, MarkCollectionKey, Sequence,
+    SequenceId,
 };
 
 pub const MAX_SEQUENCE_FRAME_COUNT: u64 = 250_000;
@@ -412,6 +413,17 @@ pub fn validate_sequence(
         }
     }
     Ok(())
+}
+
+pub fn validate_sequence_by_id(
+    project: &DawnProject,
+    sequence_id: &SequenceId,
+) -> Result<(), SequenceValidationError> {
+    let sequence = project
+        .sequences
+        .get(sequence_id)
+        .ok_or_else(|| sequence_error("sequence was not found"))?;
+    validate_sequence(project, sequence)
 }
 
 fn ensure_unique<T>(

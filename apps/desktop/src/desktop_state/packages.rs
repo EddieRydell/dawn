@@ -402,8 +402,8 @@ fn validate_candidate_session(session: &ProjectSession) -> Result<(), String> {
             &session.project.definitions.operators,
         )
         .map_err(|error| format!("{}: {}", id.0.object(), error.message))?;
-        crate::sequence_integrity::validate_sequence_integrity(session, id)
-            .map_err(|error| format!("{}: {}", id.0.object(), error.message()))?;
+        dawn_language::validation::validate_sequence_by_id(&session.project, id)
+            .map_err(|error| format!("{}: {}", id.0.object(), error.message))?;
     }
     Ok(())
 }
