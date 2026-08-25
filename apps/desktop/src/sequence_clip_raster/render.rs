@@ -1,0 +1,108 @@
+use super::*;
+
+pub(super) struct RasterRenderRequest<'a> {
+    pub(super) renderer: PreparedEffectRasterRenderer,
+    pub(super) effect_id: u32,
+    pub(super) signature_key: &'a str,
+    pub(super) cache_key: &'a RasterCacheKey,
+    pub(super) display_column_count: u32,
+    pub(super) display_row_count: u32,
+    pub(super) settings: &'a EffectRasterSettings,
+    pub(super) should_continue: &'a dyn Fn() -> bool,
+}
+
+pub(super) fn render_effect_raster(
+    request: RasterRenderRequest<'_>,
+) -> Result<CachedRasterPayload, RasterRenderFailure> {
+    let RasterRenderRequest {
+        renderer,
+        effect_id,
+        signature_key,
+        cache_key,
+        display_column_count,
+        display_row_count,
+        settings,
+        should_continue,
+    } = request;
+    if display_column_count == 0 {
+        return Err(RasterRenderFailure::Error(
+            "raster display column count must be greater than zero".to_string(),
+        ));
+    }
+    if display_row_count == 0 {
+        return Err(RasterRenderFailure::Error(
+            "raster display row count must be greater than zero".to_string(),
+        ));
+    }
+    let start_seconds = renderer.start_seconds();
+    let duration_seconds = renderer.duration_seconds();
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err(RasterRenderFailure::Error(
+            "effect duration must be positive and finite".to_string(),
+        ));
+    }
+    let target_pixel_count = renderer.target_pixel_count();
+    if target_pixel_count == 0 {
+        return Err(RasterRenderFailure::Error(
+            "effect target has no pixels".to_string(),
+        ));
+    }
+    let duration_frames = duration_seconds * f64::from(renderer.frame_rate());
+    if !duration_frames.is_finite() || duration_frames <= 0.0 {
+        return Err(RasterRenderFailure::Error(
+            "effect duration frames must be positive and finite".to_string(),
+        ));
+    }
+    let min_frame_stride = f64::from(settings.min_frame_stride.max(1));
+    let stride_limited_columns = (duration_frames / min_frame_stride).ceil().max(1.0) as u32;
+    let columns = display_column_count
+        .min(stride_limited_columns)
+        .clamp(1, settings.max_columns.max(1)) as usize;
+    let rows = target_pixel_count
+        .min(display_row_count as usize)
+        .min(settings.max_rows.max(1) as usize);
+    let sample = renderer.prepare_sampled_raster(rows);
+    let mut render_scratch = dawn_runtime::EffectRasterRenderScratch::default();
+    let mut pixels_rgba = vec![0u8; rows * columns * 4];
+    for column in 0..columns {
+        if !should_continue() {
+            return Err(RasterRenderFailure::Cancelled);
+        }
+        let sample_seconds = renderer
+            .sampled_raster_column_seconds(column, columns)
+            .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
+        let colors = renderer
+            .render_sampled_raster_column_with_scratch(&sample, sample_seconds, &mut render_scratch)
+            .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
+        for row in 0..rows {
+            let Some(color) = colors.get(row) else {
+                continue;
+            };
+            let offset = (row * columns + column) * 4;
+            pixels_rgba[offset] = color.red;
+            pixels_rgba[offset + 1] = color.green;
+            pixels_rgba[offset + 2] = color.blue;
+            pixels_rgba[offset + 3] = 255;
+        }
+    }
+    let token = raster_token(cache_key, signature_key);
+    Ok(CachedRasterPayload {
+        raster: SequenceClipRaster {
+            request_id: 0,
+            effect_id,
+            signature: String::new(),
+            columns: columns as u32,
+            rows: rows as u32,
+            start_seconds,
+            duration_seconds,
+            pixels_rgba_token: token.clone(),
+        },
+        pixels_rgba: Arc::new(pixels_rgba),
+        token,
+    })
+}
+
+pub(super) enum RasterRenderFailure {
+    Cancelled,
+    Error(String),
+}
