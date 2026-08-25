@@ -1,0 +1,49 @@
+use super::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDiagnostic {
+    pub path: String,
+    pub range: Option<TextRange>,
+    pub severity: DiagnosticSeverity,
+    pub code: String,
+    pub message: String,
+    pub detail: Option<String>,
+    pub related: Vec<RelatedDiagnosticLocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedDiagnosticLocation {
+    pub path: String,
+    pub range: Option<TextRange>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedPreviewProp {
+    pub name: String,
+    pub color_model: String,
+    pub bulb_diameter_meters: f64,
+    pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlan,
+    pub source_path: String,
+    pub object_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Rotation3Degrees {
+    pub x_degrees: f64,
+    pub y_degrees: f64,
+    pub z_degrees: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Scale3 {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
