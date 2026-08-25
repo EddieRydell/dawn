@@ -10,10 +10,9 @@
     )
 )]
 
-mod raster;
 mod sequence;
 mod show;
-pub use raster::{
+pub use sequence::raster::{
     EffectRasterPrepareBatch, EffectRasterRenderScratch, PreparedEffectRasterRenderer,
     PreparedEffectRasterSample,
 };
