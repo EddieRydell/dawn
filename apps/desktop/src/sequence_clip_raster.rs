@@ -1,3 +1,9 @@
+//! Desktop adapter for frontend sequence-clip raster requests.
+//!
+//! The worker owns request coalescing, cancellation, cache records, and the
+//! pixel-token transport used by the Tauri protocol. Effect evaluation remains
+//! in `dawn-runtime`; pixel decoding and drawing remain in the frontend.
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;

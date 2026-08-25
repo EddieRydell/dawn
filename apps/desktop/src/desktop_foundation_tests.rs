@@ -68,7 +68,7 @@ mod tests {
     fn sequence_render_service_returns_shared_sequence_frame() {
         let session = starter();
         let sequence = session.project.root.sequences.first().unwrap();
-        let mut service = crate::sequence_render::SequenceRenderService::new();
+        let mut service = crate::rendering::SequenceRenderService::new();
         service
             .prepare(&session.project, &session.project.root.setup, sequence)
             .unwrap();

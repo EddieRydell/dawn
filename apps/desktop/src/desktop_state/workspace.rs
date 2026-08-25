@@ -20,7 +20,7 @@ use crate::dto::{
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedSequenceViewportStateUpdate, ProjectRestoreState,
 };
-use crate::project_templates::{new_project_files, write_new_project_files};
+use crate::project::{new_project_files, write_new_project_files};
 
 impl DesktopState {
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {

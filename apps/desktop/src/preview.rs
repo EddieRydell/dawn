@@ -13,9 +13,12 @@ use tauri::{AppHandle, Emitter, Manager, Window};
 use wgpu::util::DeviceExt;
 
 use crate::dto::AudioTransportState;
-use crate::gui_geometry::{geometry_emitters, point3_meters};
-use crate::sequence_render::AudioClockRenderIdentity;
-use crate::sequence_render::SequenceRenderError;
+use crate::rendering::AudioClockRenderIdentity;
+use crate::rendering::SequenceRenderError;
+
+mod geometry;
+
+pub(crate) use geometry::{arc_point, geometry_emitters, point3_meters, render_point};
 
 pub const PREVIEW_LABEL: &str = "preview";
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {

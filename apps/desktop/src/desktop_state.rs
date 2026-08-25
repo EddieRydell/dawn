@@ -1,3 +1,9 @@
+//! Desktop application state aggregate.
+//!
+//! Workflow implementations live in the sibling modules under
+//! `desktop_state/`; this root owns shared state, service construction, and
+//! cross-workflow lifecycle coordination.
+
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -28,8 +34,8 @@ pub(crate) struct DesktopState {
     project_analysis: Mutex<ProjectAnalysisScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
     audio: Arc<Mutex<crate::audio::AudioEngine>>,
-    sequence_render: Arc<Mutex<crate::sequence_render::SequenceRenderService>>,
-    live_output: Mutex<crate::live_output::LiveOutputService>,
+    sequence_render: Arc<Mutex<crate::rendering::SequenceRenderService>>,
+    live_output: Mutex<crate::output::LiveOutputService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
     pending_operator_rewrite: Mutex<Option<PendingOperatorRewriteState>>,
@@ -47,11 +53,8 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl DesktopState {
     pub(crate) fn new() -> Self {
         let audio = Arc::new(Mutex::new(crate::audio::AudioEngine::new()));
-        let sequence_render = Arc::new(Mutex::new(
-            crate::sequence_render::SequenceRenderService::new(),
-        ));
-        let live_output =
-            crate::live_output::LiveOutputService::new(audio.clone(), sequence_render.clone());
+        let sequence_render = Arc::new(Mutex::new(crate::rendering::SequenceRenderService::new()));
+        let output = crate::output::LiveOutputService::new(audio.clone(), sequence_render.clone());
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(LoadedProject::Closed),
@@ -61,7 +64,7 @@ impl DesktopState {
             render_refresh: Mutex::new(render_refresh_scheduler()),
             audio,
             sequence_render,
-            live_output: Mutex::new(live_output),
+            live_output: Mutex::new(output),
             sequence_clip_raster: Mutex::new(
                 crate::sequence_clip_raster::SequenceClipRasterService::new(),
             ),
@@ -90,9 +93,9 @@ impl DesktopState {
         self.drain_gui_save_results();
         self.drain_project_analysis_results();
         self.drain_render_refresh_results();
-        let live_output = lock_unpoisoned(&self.live_output).snapshot();
+        let output = lock_unpoisoned(&self.live_output).snapshot();
         let mut snapshot = lock_unpoisoned(&self.snapshot).clone();
-        snapshot.live_output = live_output;
+        snapshot.live_output = output;
         snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
         snapshot
     }
@@ -168,7 +171,7 @@ impl DesktopState {
     }
 
     pub fn set_live_output_active(&self, active: bool) -> AppSnapshot {
-        let live_output = if active {
+        let output = if active {
             let Some(project) = self.project_session() else {
                 return self.update_snapshot(|snapshot| {
                     snapshot.live_output.state = crate::dto::LiveOutputState::Error;
@@ -196,17 +199,17 @@ impl DesktopState {
         } else {
             lock_unpoisoned(&self.live_output).disable()
         };
-        self.update_snapshot(|snapshot| snapshot.live_output = live_output)
+        self.update_snapshot(|snapshot| snapshot.live_output = output)
     }
 
     pub(super) fn suspend_live_output(&self) {
-        let live_output = lock_unpoisoned(&self.live_output).suspend();
-        lock_unpoisoned(&self.snapshot).live_output = live_output;
+        let output = lock_unpoisoned(&self.live_output).suspend();
+        lock_unpoisoned(&self.snapshot).live_output = output;
     }
 
     pub(super) fn disable_live_output(&self) {
-        let live_output = lock_unpoisoned(&self.live_output).disable();
-        lock_unpoisoned(&self.snapshot).live_output = live_output;
+        let output = lock_unpoisoned(&self.live_output).disable();
+        lock_unpoisoned(&self.snapshot).live_output = output;
     }
 
     pub(super) fn resume_live_output_after_prepare(&self) {
@@ -262,7 +265,7 @@ fn empty_snapshot() -> AppSnapshot {
         preview_error: None,
         preview_open: false,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
-        live_output: crate::live_output::disabled_snapshot(0),
+        live_output: crate::output::disabled_snapshot(0),
         pending_operator_rewrite: None,
         package: PackageStatus {
             readiness: PackageReadiness::NoProject,

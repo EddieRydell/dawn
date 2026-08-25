@@ -10,10 +10,10 @@ impl DesktopState {
         &self,
         project: &dawn_language::model::DawnProject,
     ) -> Option<dawn_runtime::SequenceOutputPrepareError> {
-        let mut sequence_render = lock_unpoisoned(&self.sequence_render);
-        let result = sequence_render.refresh_project(project);
+        let mut rendering = lock_unpoisoned(&self.sequence_render);
+        let result = rendering.refresh_project(project);
         if result.is_err() {
-            sequence_render.unload();
+            rendering.unload();
         }
         result.err()
     }

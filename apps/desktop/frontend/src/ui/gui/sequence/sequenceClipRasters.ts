@@ -1,6 +1,9 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+// Runtime evaluates effects, the desktop worker schedules/caches and exposes
+// RGBA payloads, and this hook decodes and draws them for the sequence UI.
+
 import { commands } from "../../../api";
 import type { AppSettings, SequenceClipRaster, SequenceEditorDocument } from "../../../types";
 import { useAppStore } from "../../../store";

@@ -19,13 +19,12 @@ mod desktop_foundation_tests;
 mod desktop_state;
 mod dto;
 mod gui;
-mod gui_geometry;
-mod live_output;
+mod output;
 mod persistence;
 mod preview;
-mod project_templates;
+mod project;
+mod rendering;
 mod sequence_clip_raster;
-mod sequence_render;
 mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {

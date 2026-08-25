@@ -540,6 +540,9 @@ use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::{AutomationDetachmentReason, AutomationTarget, SequenceId};
 use dawn_project_io::{ProjectSession, SourceObjectKind};
 
+use self::geometry::{
+    empty_resolved_fixture, geometry, geometry_summary, layout_bounds, render_plan,
+};
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
 use crate::dto::{
     ElementTarget, ElementTargetKind, GuiDocument, GuiObjectRef, ObjectKind, PreviewGuiDocument,
@@ -552,6 +555,6 @@ use crate::dto::{
     SequenceEffectScope, SequenceGraphEdge, SequenceGuiDocument, SequenceLane, SequenceLayer,
     SequenceMarkCollection, SequenceTimelineClipKind, Transform,
 };
-use crate::gui_geometry::{
-    empty_resolved_fixture, geometry, geometry_summary, layout_bounds, point3_meters, render_plan,
-};
+use crate::preview::point3_meters;
+
+mod geometry;

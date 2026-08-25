@@ -1,3 +1,9 @@
+//! Canonical effect-raster evaluation for sequence clips.
+//!
+//! This module prepares Dawn effects and samples their evaluated colors. It does
+//! not own UI request scheduling, raster caching, pixel transport, or Canvas
+//! decoding; those belong to the desktop adapter and frontend respectively.
+
 use crate::sequence::color::black;
 use crate::*;
 

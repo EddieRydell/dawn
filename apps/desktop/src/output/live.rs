@@ -11,7 +11,7 @@ use crate::dto::{
     AudioTransportState, LiveOutputControllerSnapshot, LiveOutputControllerState,
     LiveOutputSnapshot, LiveOutputState,
 };
-use crate::sequence_render::SequenceRenderService;
+use crate::rendering::SequenceRenderService;
 
 enum Command {
     Enable {
