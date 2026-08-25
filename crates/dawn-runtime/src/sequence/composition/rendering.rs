@@ -1,4 +1,4 @@
-use crate::color::{
+use crate::sequence::color::{
     add_color, black, color_param, compose_max, intensity, invert_color, max_color, multiply_color,
     scale_color,
 };

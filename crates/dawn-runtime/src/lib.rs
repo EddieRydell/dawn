@@ -10,7 +10,6 @@
     )
 )]
 
-mod color;
 mod raster;
 mod sequence;
 mod show;
@@ -41,7 +40,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use color::black;
 use sequence::composition::{
     PrepareGraphContext, PreparedCompositionGraph, PreparedGraphNodeKind,
     layer_cache_history_micros, prepare_composition_graph,

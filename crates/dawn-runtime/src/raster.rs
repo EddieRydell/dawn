@@ -1,4 +1,5 @@
 use super::*;
+use crate::sequence::color::black;
 
 #[derive(Clone, Debug)]
 pub struct PreparedEffectRasterRenderer {

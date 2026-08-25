@@ -1,3 +1,4 @@
+pub(crate) mod color;
 pub(crate) mod composition;
 pub(crate) mod effects;
 pub(crate) mod elements;

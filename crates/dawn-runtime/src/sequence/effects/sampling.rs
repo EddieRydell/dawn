@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::preparation::apply_automation_params;
-use crate::color::compose_max;
+use crate::sequence::color::compose_max;
 use crate::sequence::targets::PreparedTargetPixel;
 use crate::{
     PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, RenderError, arc_key,
