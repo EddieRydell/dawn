@@ -7,10 +7,10 @@ mod parser;
 mod typecheck;
 
 use compiler::{compile_checked_effects, compile_checked_operators};
-pub use dawn_core::dsl::{
-    BoundParams, CompiledEffect, CompiledOperator, DslBindCache, DslVmScratch, EffectKind,
-    GeneratedEffect, GeneratedEffectRef, GeneratorContext, OperatorInputDecl, OperatorRunContext,
-    ParamDecl, RunContext, RuntimeError, SignalSampler, bytecode::BytecodeProgram,
+pub use dawn_runtime::dsl::{
+    BoundParams, CompiledEffect, CompiledOperator, DslBindCache, EffectKind, GeneratedEffect,
+    GeneratedEffectRef, GeneratorContext, OperatorInputDecl, OperatorRunContext, ParamDecl,
+    RunContext, RuntimeError, SignalSampler, VmWorkspace, bytecode::BytecodeProgram,
 };
 pub use diagnostic::Diagnostic;
 use parser::parse_module;

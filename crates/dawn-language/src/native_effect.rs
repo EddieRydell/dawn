@@ -1,4 +1,4 @@
-pub use dawn_core::native_effect::*;
+pub use dawn_runtime::native_effect::*;
 
 use crate::dsl::{BoundParams, DslBindCache, Identifier, RuntimeError, Value};
 use crate::effect::{BuiltinEffect, builtin_effect_definition};

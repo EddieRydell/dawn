@@ -34,11 +34,12 @@ pnpm bench:effect-vm:compare
 
 Criterion stores baselines and reports under `target/criterion`; do not commit them.
 
-The full harness warms each workload for eight seconds, measures for ten seconds, and treats changes
-below five percent as environmental noise. On Windows it also pins the benchmark thread to a fixed
-nonzero logical CPU to avoid migrations between unlike cores. The pnpm full/save/compare commands
-also launch one quick untimed pass first. This avoids treating one-time work on a newly linked
-benchmark executable as a runtime regression.
+The full harness warms each workload for three seconds, measures for five seconds, and treats changes
+below five percent as environmental noise. Longer sequential runs caused laptop power and thermal
+state to drift enough to make later renderer cases slower without code changes. On Windows the
+harness also pins the benchmark thread to a fixed nonzero logical CPU to avoid migrations between
+unlike cores. The pnpm full/save/compare commands launch one quick untimed pass first so newly linked
+executables finish one-time work before measurement.
 
 ## Focused Runs
 
@@ -51,7 +52,7 @@ cargo bench -p dawn-language --bench effect_vm_bench -- dsl_effect_suite
 Run the representative render batch:
 
 ```powershell
-cargo bench -p dawn-runtime --bench render_bench -- render_representative_frames
+cargo bench -p dawn-elaboration --bench render_bench -- render_representative_frames
 ```
 
 ## Coverage
@@ -68,7 +69,7 @@ and Signal input sampling. Sub-microsecond single-call benchmarks, native helper
 VM, and allocation-heavy generator timing were removed because power-state and allocator noise
 repeatedly produced false regressions on unchanged code.
 
-`crates/dawn-runtime/benches/render_bench.rs` measures the real
+`crates/dawn-elaboration/benches/render_bench.rs` measures the real
 `examples/starter/project.dawn` renderer:
 
 - renderer preparation

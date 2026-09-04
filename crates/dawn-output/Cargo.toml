@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 artnet_protocol.workspace = true
 dawn-language.workspace = true
-dawn-runtime.workspace = true
+dawn-elaboration.workspace = true
 indexmap.workspace = true
 sacn.workspace = true
 

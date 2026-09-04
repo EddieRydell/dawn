@@ -7,7 +7,7 @@ use crate::values::{Curve, DawnDuration, DawnTime, Gradient};
 use indexmap::IndexMap;
 use std::sync::LazyLock;
 
-pub use dawn_core::BuiltinEffect;
+pub use dawn_runtime::BuiltinEffect;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInst {

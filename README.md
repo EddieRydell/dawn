@@ -49,12 +49,13 @@ apps/desktop/src/state_tasks.rs Background save/render scheduling and GUI histor
 apps/desktop/src/gui_geometry.rs Read-only preview-prop geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
 apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
-crates/dawn-language/         Core Dawn model, sequence types, effect DSL, compiler, VM
+crates/dawn-language/         Dawn authoring model and effect/operator compiler
+crates/dawn-runtime/          Portable no_std bytecode VM and sequence evaluation core
+crates/dawn-elaboration/      Host-side generator expansion, lowering, and output preparation
 crates/dawn-package/          Manifest v2, resolution, locks, cache, registry protocol, packing
 crates/dawn-project-io/       Dawn project loading, diagnostics, source ownership, save/export
 crates/dawn-project-io/src/loader/  Project loading, import resolution, and document parsing
 crates/dawn-project-io/src/serialization/  Domain-specific Dawn document serialization
-crates/dawn-runtime/          Prepared sequence and effect rendering
 crates/dawn-output/           E1.31 and Art-Net socket/codec lifecycle
 crates/dawn-cli/              Standalone `dawn` package and project CLI
 examples/                     Example Dawn projects and props
@@ -169,7 +170,7 @@ references; dependency deep imports and root escapes are rejected.
 
 Project IO loads reachable source files, validates imports and references, tracks source locations for diagnostics, compiles DSL definitions, and builds the authoritative typed `DawnProject`. `SourceProject` retains document ownership, import, original-source, and asset metadata; it is not a second editable project model. GUI commands make one private mutable candidate from the current immutable project snapshot; accepted snapshots are shared by state, history, save, and render work. Project IO serializes typed state directly without reparsing or synchronizing a YAML model.
 
-At render time, `dawn-runtime` resolves element selections in tree order, composes color effects, evaluates typed control clips, applies explicit fixture behavior rules, and evaluates the prepared patch graph into exact controller-port buffers. Preview and live output consume that same `RenderedSequenceFrame`; neither reinterprets colors, fixture channels, or patch ordering. Live output is opt-in for each application run and fails closed by blacking out active ports and terminating E1.31 streams.
+After DSL compilation, `dawn-elaboration` validates the selected setup and sequence, expands generators, resolves targets, and lowers authored graphs into prepared numeric data. `dawn-runtime` owns the portable VM and is the execution boundary for evaluating that prepared data at a typed time. Its evaluation loop is `PreparedSequence::workspace()` once followed by `PreparedSequence::evaluate(time, pixels, workspace)` for each frame. Elaboration preassigns graph-buffer slots and workspace creation reserves VM and automation storage. The tested starter playback paths do not allocate, but calculated arrays and some reference-valued VM operations still can. Host output preparation applies control clips, fixture behavior, and the patch graph to exact controller-port buffers. Preview and live output consume the same `RenderedSequenceFrame`; neither reinterprets colors, fixture channels, or patch ordering. Live output is opt-in for each application run and fails closed by blacking out active ports and terminating E1.31 streams.
 
 The sequence-as-code validity rules, curve semantics, parser behavior, and runtime
 budgets are documented in [the sequence-as-code contract](docs/sequence_as_code.md).

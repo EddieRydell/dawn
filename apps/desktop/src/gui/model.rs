@@ -414,7 +414,7 @@ pub(super) fn automation_binding_value_at(
             AutomationValue::Int(value) => EffectParamValue::Int(value),
             AutomationValue::Float(value) => EffectParamValue::Float(value),
             AutomationValue::Bool(value) => EffectParamValue::Bool(value),
-            AutomationValue::Enum(value) => EffectParamValue::Enum(value),
+            AutomationValue::Enum(value) => EffectParamValue::Enum(value.clone()),
             AutomationValue::Curve(value) => EffectParamValue::Curve(CurveSource::Inline(value)),
         })
         .ok_or_else(|| {

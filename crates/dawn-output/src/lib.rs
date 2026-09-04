@@ -15,8 +15,8 @@ mod e131;
 
 use std::collections::HashMap;
 
+use dawn_elaboration::ControllerPortFrame;
 use dawn_language::controller::{Controller, ControllerId, ControllerProtocol};
-use dawn_runtime::ControllerPortFrame;
 
 pub use artnet::ArtNetSender;
 pub use e131::E131Sender;

@@ -43,7 +43,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
 }
 
 #[test]
-fn warmed_curve_automation_does_not_allocate() {
+fn warmed_curve_enum_automation_and_constant_arrays_do_not_allocate() {
     let declarations = [ParamDecl {
         name: Identifier::new("shape".to_string()).expect("valid identifier"),
         ty: Type::Curve,
@@ -104,4 +104,65 @@ fn warmed_curve_automation_does_not_allocate() {
 
     result.expect("measured automation should apply");
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+
+    let options =
+        ["short", "much_longer_option"].map(|value| Identifier::new(value.into()).unwrap());
+    let declarations = [ParamDecl {
+        name: Identifier::new("mode".into()).unwrap(),
+        ty: Type::Enum(options.to_vec()),
+        default: Some(Value::Enum(options[0].clone())),
+    }];
+    let mut bound = BoundParams::bind(&declarations, &IndexMap::new()).unwrap();
+    let mapping = AutomationMapping::Enum {
+        values: options.to_vec(),
+    };
+    // Visit the longest option first so subsequent updates must reuse its storage.
+    bound
+        .apply_automation(0, &clip.curve, &mapping, 0.25)
+        .unwrap();
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNTING.store(true, Ordering::Relaxed);
+    let result = samples
+        .into_iter()
+        .try_for_each(|position| bound.apply_automation(0, &clip.curve, &mapping, position));
+    COUNTING.store(false, Ordering::Relaxed);
+    result.unwrap();
+    assert_eq!(bound.enum_name(0).unwrap(), options[0].as_str());
+    assert_eq!(
+        ALLOCATIONS.load(Ordering::Relaxed),
+        0,
+        "enum automation allocated"
+    );
+
+    let effect = dawn_language::dsl::compile_effects(
+        "effect Constants { color sample() {
+            array<array<float>> values = [[0.1, 0.2], [0.3, 0.4]];
+            return rgb(values[0][1], values[1][0], values[1][1]);
+        } }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let mut workspace = dawn_language::dsl::VmWorkspace::default();
+    let context = dawn_language::dsl::RunContext {
+        progress: 0.0,
+        time: dawn_language::values::SampleDuration::from_ticks(0),
+        duration: dawn_language::values::SampleDuration::from_ticks(1_000_000),
+        pixel_index: 0,
+        pixel_count: 1,
+        pixel_fraction: 0.0,
+    };
+    let expected = effect
+        .sample_bound(&params, &context, &mut workspace)
+        .unwrap();
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNTING.store(true, Ordering::Relaxed);
+    let sampled = effect.sample_bound(&params, &context, &mut workspace);
+    COUNTING.store(false, Ordering::Relaxed);
+    assert_eq!(sampled.unwrap(), expected);
+    assert_eq!(
+        ALLOCATIONS.load(Ordering::Relaxed),
+        0,
+        "constant arrays allocated"
+    );
 }

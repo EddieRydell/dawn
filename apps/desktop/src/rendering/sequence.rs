@@ -1,11 +1,11 @@
+use dawn_elaboration::{
+    OutputEvaluationWorkspace, PreparedSequenceOutput as RuntimeSequenceOutput,
+    RenderedSequenceFrame, SequenceOutputPrepareError as RuntimePrepareError,
+    SequenceOutputRenderError as RuntimeRenderError,
+};
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::SetupId;
-use dawn_runtime::{
-    PreparedSequenceOutput as RuntimeSequenceOutput, RenderedSequenceFrame,
-    SequenceOutputPrepareError as RuntimePrepareError,
-    SequenceOutputRenderError as RuntimeRenderError, SequenceOutputScratch,
-};
 
 use crate::dto::{AudioTransportSnapshot, AudioTransportState};
 
@@ -118,7 +118,7 @@ impl SequenceRenderService {
         } else {
             let frame = session
                 .renderer
-                .render_seconds_with_scratch(audio.position_seconds, &mut session.scratch)
+                .render_seconds_with_workspace(audio.position_seconds, &mut session.workspace)
                 .map_err(SequenceRenderError::Render)?;
             session.cached = Some(AudioClockRenderedFrame {
                 audio_generation: audio.generation,
@@ -174,11 +174,12 @@ impl SequenceRenderService {
 
     pub fn apply_prepared(&mut self, session: PreparedSequenceOutput) {
         self.session_generation = self.session_generation.saturating_add(1);
+        let workspace = session.renderer.workspace();
         self.session = Some(SequenceRenderSession {
             setup_id: session.setup_id,
             sequence_id: session.sequence_id,
             renderer: session.renderer,
-            scratch: SequenceOutputScratch::default(),
+            workspace,
             cached: None,
         });
     }
@@ -188,7 +189,7 @@ struct SequenceRenderSession {
     setup_id: SetupId,
     sequence_id: SequenceId,
     renderer: RuntimeSequenceOutput,
-    scratch: SequenceOutputScratch,
+    workspace: OutputEvaluationWorkspace,
     cached: Option<AudioClockRenderedFrame>,
 }
 

@@ -63,7 +63,7 @@ The VM benches cover constant return overhead, curve sampling, branch-heavy scan
 position, smoothstep, enum comparisons, curve clamping, seeded random paths, trigonometry, HSV,
 dense mixed arithmetic, marks, target sections, `pick`, arrays, loops, and `timeline.emit`.
 
-The renderer benches live in `crates/dawn-runtime/benches/render_bench.rs`. They load
+The renderer benches live in `crates/dawn-elaboration/benches/render_bench.rs`. They load
 `examples/starter/project.dawn`, benchmark renderer preparation, and render frames
 `144`, `2088`, `5904`, `9504`, `11520`, `19080`, and `25934`.
 
@@ -81,7 +81,7 @@ cargo bench -p dawn-language --bench effect_vm_bench -- scan_sweep
 Run one render benchmark by frame:
 
 ```powershell
-cargo bench -p dawn-runtime --bench render_bench -- render_frame_9504
+cargo bench -p dawn-elaboration --bench render_bench -- render_frame_9504
 ```
 
 ## Regression Classes

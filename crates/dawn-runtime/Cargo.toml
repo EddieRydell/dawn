@@ -2,19 +2,14 @@
 name = "dawn-runtime"
 edition.workspace = true
 version.workspace = true
-description = "Dawn rendering runtime"
+description = "Portable Dawn bytecode and prepared-sequence runtime"
 authors = ["Dawn"]
 license = "MIT"
 
+[features]
+default = ["atomic"]
+atomic = []
+
 [dependencies]
-dawn-language.workspace = true
-indexmap.workspace = true
-
-[dev-dependencies]
-camino.workspace = true
-criterion.workspace = true
-dawn-project-io.workspace = true
-
-[[bench]]
-name = "render_bench"
-harness = false
+fugit.workspace = true
+libm.workspace = true

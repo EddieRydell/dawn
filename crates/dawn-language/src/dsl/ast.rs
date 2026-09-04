@@ -1,7 +1,7 @@
 use super::GeneratedEffectRef;
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
-pub use dawn_core::dsl::{OperatorInputDecl, ParamDecl};
+pub use dawn_runtime::dsl::{OperatorInputDecl, ParamDecl};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Module {

@@ -4,7 +4,7 @@ use crate::effect::{EffectInst, EffectInstId};
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
 use crate::values::{Color, Curve, DawnDuration, DawnTime};
-pub use dawn_core::automation::{
+pub use dawn_runtime::automation::{
     AutomationMapping, AutomationValue,
     automation_value_at_position as automation_mapping_value_at_position,
     curve_window_into as curve_window_into_at_position,
@@ -182,19 +182,19 @@ pub enum AutomationTarget {
     },
 }
 
-pub fn automation_value_at(
+pub fn automation_value_at<'a>(
     clip: &AutomationClip,
-    binding: &AutomationBinding,
+    binding: &'a AutomationBinding,
     sample_seconds: f32,
-) -> Option<AutomationValue> {
+) -> Option<AutomationValue<'a>> {
     automation_mapping_value_at(clip, &binding.mapping, sample_seconds)
 }
 
-pub fn automation_mapping_value_at(
+pub fn automation_mapping_value_at<'a>(
     clip: &AutomationClip,
-    mapping: &AutomationMapping,
+    mapping: &'a AutomationMapping,
     sample_seconds: f32,
-) -> Option<AutomationValue> {
+) -> Option<AutomationValue<'a>> {
     let duration = clip.duration.as_seconds_f32();
     let position = if duration <= 0.0 {
         0.0

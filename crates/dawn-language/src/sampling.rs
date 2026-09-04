@@ -1,1 +1,1 @@
-pub use dawn_core::sampling::*;
+pub use dawn_runtime::sampling::*;

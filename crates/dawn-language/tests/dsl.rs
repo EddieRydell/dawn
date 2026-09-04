@@ -1,6 +1,6 @@
 use dawn_language::dsl::{
-    Color, DslVmScratch, GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext,
-    RuntimeError, SignalSampler, TargetValue, compile_effects, compile_operators,
+    Color, GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext, RuntimeError,
+    SignalSampler, TargetValue, VmWorkspace, compile_effects, compile_operators,
 };
 use dawn_language::effect::BuiltinEffect;
 use dawn_language::values::{SampleDuration, SampleTime};
@@ -16,6 +16,45 @@ fn declaration_kinds_are_source_specific() {
         .is_err()
     );
     assert!(compile_operators("effect Solid { color sample() { return #ffffff; } }").is_err());
+}
+
+#[test]
+fn constant_and_calculated_arrays_preserve_nested_values_and_assignment() {
+    let effect = compile_effects(
+        "effect Arrays {
+            color sample() {
+                array<array<float>> table = [[0.1, 0.2], [0.3, 0.4, 0.5]];
+                array<float> values = [progress(), table[1][2]];
+                array<float> saved = values;
+                values = [0.9];
+                return rgb(saved[0], saved[1], values[0]);
+            }
+        }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let context = OperatorRunContext {
+        progress: 0.25,
+        time: SampleDuration::from_ticks(250_000),
+        duration: SampleDuration::from_ticks(1_000_000),
+        pixel_index: 0,
+        pixel_count: 1,
+        pixel_fraction: 0.0,
+    };
+    let mut workspace = VmWorkspace::default();
+    for _ in 0..3 {
+        assert_eq!(
+            effect
+                .sample_bound(&params, &context, &mut workspace)
+                .unwrap(),
+            Color {
+                red: 64,
+                green: 128,
+                blue: 230
+            },
+        );
+    }
 }
 
 #[test]
@@ -78,12 +117,7 @@ fn signal_sampling_and_color_operations_execute() {
         blue: 30,
     });
     let color = operator
-        .sample_bound(
-            &params,
-            &context,
-            &mut sampler,
-            &mut DslVmScratch::default(),
-        )
+        .sample_bound(&params, &context, &mut sampler, &mut VmWorkspace::default())
         .expect("operator samples");
     assert_eq!(
         color,
@@ -121,7 +155,7 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
                 duration: SampleDuration::from_ticks(1_000_000),
                 target: Arc::new(TargetValue { groups: Vec::new() }),
             },
-            &mut DslVmScratch::default(),
+            &mut VmWorkspace::default(),
         )
         .expect("generator runs");
 
@@ -228,7 +262,7 @@ fn required_parameters_and_integer_remainder_fail_without_panicking() {
                 pixel_count: 1,
                 pixel_fraction: 0.0,
             },
-            &mut DslVmScratch::default(),
+            &mut VmWorkspace::default(),
         )
         .expect_err("integer remainder by zero must become a runtime error");
     assert!(
@@ -244,8 +278,7 @@ impl SignalSampler for ConstantSignal {
     fn sample_signal(
         &mut self,
         _input: usize,
-        _seconds: f32,
-        _pixel_index: usize,
+        _sample_time: SampleTime,
     ) -> Result<Color, RuntimeError> {
         Ok(self.0)
     }

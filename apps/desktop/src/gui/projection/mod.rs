@@ -66,8 +66,8 @@ pub(super) fn project_sequence(
             .iter()
             .map(|builtin| {
                 graph_operator_definition_to_gui(
-                    OperatorRef::Builtin(builtin.clone()),
-                    builtin.definition(),
+                    OperatorRef::Builtin(*builtin),
+                    dawn_language::operator::builtin_operator_definition(*builtin),
                 )
             })
             .chain(

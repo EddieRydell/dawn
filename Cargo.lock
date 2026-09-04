@@ -1000,24 +1000,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "dawn-core"
-version = "0.1.0"
-dependencies = [
- "fugit",
- "libm",
-]
-
-[[package]]
 name = "dawn-desktop"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
  "camino",
+ "dawn-elaboration",
  "dawn-language",
  "dawn-output",
  "dawn-package",
  "dawn-project-io",
- "dawn-runtime",
  "glam",
  "ignore",
  "indexmap 2.14.0",
@@ -1039,12 +1031,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-elaboration"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "criterion",
+ "dawn-language",
+ "dawn-project-io",
+ "dawn-runtime",
+ "indexmap 2.14.0",
+]
+
+[[package]]
 name = "dawn-language"
 version = "0.1.0"
 dependencies = [
  "camino",
  "criterion",
- "dawn-core",
+ "dawn-runtime",
  "fugit",
  "indexmap 2.14.0",
  "uuid",
@@ -1055,8 +1059,8 @@ name = "dawn-output"
 version = "0.1.0"
 dependencies = [
  "artnet_protocol",
+ "dawn-elaboration",
  "dawn-language",
- "dawn-runtime",
  "indexmap 2.14.0",
  "sacn",
  "uuid",
@@ -1107,11 +1111,8 @@ dependencies = [
 name = "dawn-runtime"
 version = "0.1.0"
 dependencies = [
- "camino",
- "criterion",
- "dawn-language",
- "dawn-project-io",
- "indexmap 2.14.0",
+ "fugit",
+ "libm",
 ]
 
 [[package]]

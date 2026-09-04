@@ -135,7 +135,7 @@ impl Loader {
         let mut typed = if let Some(entrypoint) = self.entrypoint.clone() {
             self.resolve_project(&entrypoint)?
         } else {
-            self.scratch_project(roots.iter().next().cloned().unwrap_or_else(|| {
+            self.workspace_project(roots.iter().next().cloned().unwrap_or_else(|| {
                 dawn_language::identity::DocumentId::new(
                     self.source_graph.project_module_id(),
                     Utf8PathBuf::from(dawn_package::MANIFEST_FILE),
@@ -176,7 +176,7 @@ impl Loader {
         })
     }
 
-    fn scratch_project(&self, document: dawn_language::identity::DocumentId) -> DawnProject {
+    fn workspace_project(&self, document: dawn_language::identity::DocumentId) -> DawnProject {
         let project_identity = dawn_language::identity::SourceIdentity::from_document(
             document.clone(),
             "__package_compile_project".to_string(),

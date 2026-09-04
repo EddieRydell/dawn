@@ -9,7 +9,7 @@ impl DesktopState {
     pub(super) fn refresh_render_session(
         &self,
         project: &dawn_language::model::DawnProject,
-    ) -> Option<dawn_runtime::SequenceOutputPrepareError> {
+    ) -> Option<dawn_elaboration::SequenceOutputPrepareError> {
         let mut rendering = lock_unpoisoned(&self.sequence_render);
         let result = rendering.refresh_project(project);
         if result.is_err() {

@@ -7,18 +7,7 @@ use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum BuiltinOperator {
-    Max,
-    Add,
-    Multiply,
-    IntensityModulate,
-    Dim,
-    Invert,
-    Colorize,
-    Delay,
-    Echo,
-}
+pub use dawn_runtime::BuiltinOperator;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct OperatorDefinitionId(pub SourceIdentity);
@@ -86,49 +75,14 @@ impl OperatorDefinitionStore {
 
     pub fn resolve(&self, reference: &OperatorRef) -> Option<&OperatorDefinition> {
         match reference {
-            OperatorRef::Builtin(builtin) => Some(builtin.definition()),
+            OperatorRef::Builtin(builtin) => Some(builtin_operator_definition(*builtin)),
             OperatorRef::Custom(id) => self.get(id),
         }
     }
 }
 
-impl BuiltinOperator {
-    pub const ALL: [Self; 9] = [
-        Self::Max,
-        Self::Add,
-        Self::Multiply,
-        Self::IntensityModulate,
-        Self::Dim,
-        Self::Invert,
-        Self::Colorize,
-        Self::Delay,
-        Self::Echo,
-    ];
-
-    pub fn definition(&self) -> &'static OperatorDefinition {
-        &BUILTIN_DEFINITIONS[builtin_index(self)]
-    }
-
-    pub fn from_source_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .find(|operator| operator.definition().source_name == name)
-            .cloned()
-    }
-}
-
-fn builtin_index(operator: &BuiltinOperator) -> usize {
-    match operator {
-        BuiltinOperator::Max => 0,
-        BuiltinOperator::Add => 1,
-        BuiltinOperator::Multiply => 2,
-        BuiltinOperator::IntensityModulate => 3,
-        BuiltinOperator::Dim => 4,
-        BuiltinOperator::Invert => 5,
-        BuiltinOperator::Colorize => 6,
-        BuiltinOperator::Delay => 7,
-        BuiltinOperator::Echo => 8,
-    }
+pub fn builtin_operator_definition(operator: BuiltinOperator) -> &'static OperatorDefinition {
+    &BUILTIN_DEFINITIONS[operator.index()]
 }
 
 fn identifier(name: &str) -> Identifier {
@@ -165,7 +119,7 @@ fn definition(
     implementation: OperatorImplementation,
 ) -> OperatorDefinition {
     OperatorDefinition {
-        id: OperatorRef::Builtin(builtin.clone()),
+        id: OperatorRef::Builtin(builtin),
         source_name: source_name.to_string(),
         declaration_name: declaration_name.to_string(),
         display_name: display_name.to_string(),
@@ -570,7 +524,7 @@ pub fn effect_param_matches_type(value: &EffectParamValue, ty: &Type) -> bool {
 
 pub fn operator_reference_name(reference: &OperatorRef) -> &str {
     match reference {
-        OperatorRef::Builtin(builtin) => builtin.definition().source_name.as_str(),
+        OperatorRef::Builtin(builtin) => builtin_operator_definition(*builtin).source_name.as_str(),
         OperatorRef::Custom(id) => id.0.object(),
     }
 }

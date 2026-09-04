@@ -64,6 +64,18 @@ struct FunctionCompiler {
     param_reads: HashMap<ParamId, ValueSlot>,
 }
 
+fn constant_array_item(expr: &CheckedExpr) -> Option<Value> {
+    match &expr.kind {
+        CheckedExprKind::Literal(value) => Some(value.clone()),
+        CheckedExprKind::Array(items) => items
+            .iter()
+            .map(constant_array_item)
+            .collect::<Option<Vec<_>>>()
+            .map(|values| Value::Array(values.into())),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 enum Binding {
     Param(ParamId),
@@ -413,6 +425,16 @@ impl FunctionCompiler {
                 }
             },
             CheckedExprKind::Array(items) => {
+                if let Some(values) = items
+                    .iter()
+                    .map(constant_array_item)
+                    .collect::<Option<Vec<_>>>()
+                {
+                    let dst = self.allocate_slot(&result_ty);
+                    let constant = self.add_constant(Value::Array(values.into()));
+                    self.emit(Instruction::LoadConst { dst, constant });
+                    return dst;
+                }
                 let item_slots = items
                     .into_iter()
                     .map(|item| self.compile_expr(item))

@@ -19,7 +19,7 @@ pub(crate) struct PreviewRenderer {
     uniform_revision: Option<u64>,
     uniform_size: Option<PreviewSize>,
     camera: PreviewCamera,
-    color_scratch: Vec<PreviewColorGpu>,
+    color_workspace: Vec<PreviewColorGpu>,
 }
 
 impl PreviewRenderer {
@@ -177,7 +177,7 @@ impl PreviewRenderer {
             uniform_revision: None,
             uniform_size: None,
             camera: PreviewCamera::fit(PreviewBounds::default(), size),
-            color_scratch: Vec::new(),
+            color_workspace: Vec::new(),
         })
     }
 
@@ -185,7 +185,7 @@ impl PreviewRenderer {
         &mut self,
         size: PreviewSize,
         scene: Option<&PreviewScene>,
-        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
+        frame: Option<&dawn_elaboration::RenderedSequenceFrame>,
     ) {
         let size = size.clamp_to_max_dimension(self.max_surface_dimension);
         if size.width == 0 || size.height == 0 {
@@ -263,7 +263,7 @@ impl PreviewRenderer {
     fn update_scene(
         &mut self,
         scene: &PreviewScene,
-        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
+        frame: Option<&dawn_elaboration::RenderedSequenceFrame>,
         size: PreviewSize,
     ) {
         if self.uploaded_revision != Some(scene.revision) {
@@ -303,13 +303,13 @@ impl PreviewRenderer {
     fn update_colors(
         &mut self,
         scene: &PreviewScene,
-        frame: Option<&dawn_runtime::RenderedSequenceFrame>,
+        frame: Option<&dawn_elaboration::RenderedSequenceFrame>,
     ) {
-        self.color_scratch.clear();
-        self.color_scratch
+        self.color_workspace.clear();
+        self.color_workspace
             .resize(scene.instances.len(), PreviewColorGpu::black());
         if let Some(frame) = frame {
-            for (target, binding) in self.color_scratch.iter_mut().zip(&scene.bindings) {
+            for (target, binding) in self.color_workspace.iter_mut().zip(&scene.bindings) {
                 let color = frame
                     .elements
                     .iter()
@@ -322,11 +322,11 @@ impl PreviewRenderer {
                 }
             }
         }
-        if !self.color_scratch.is_empty() {
+        if !self.color_workspace.is_empty() {
             self.queue.write_buffer(
                 &self.color_buffer,
                 0,
-                bytemuck::cast_slice(&self.color_scratch),
+                bytemuck::cast_slice(&self.color_workspace),
             );
         }
     }

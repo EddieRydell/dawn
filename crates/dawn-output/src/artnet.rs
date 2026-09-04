@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::net::UdpSocket;
 
 use artnet_protocol::{ArtCommand, Output, PaddedData, PortAddress};
+use dawn_elaboration::ControllerPortFrame;
 use dawn_language::controller::{
     ArtNetConfig, ArtNetMode, ControllerId, ControllerPort, ControllerPortAddress, ControllerPortId,
 };
-use dawn_runtime::ControllerPortFrame;
 
 use crate::OutputError;
 

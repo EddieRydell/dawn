@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 camino.workspace = true
-dawn-core.workspace = true
+dawn-runtime.workspace = true
 fugit.workspace = true
 indexmap.workspace = true
 uuid.workspace = true

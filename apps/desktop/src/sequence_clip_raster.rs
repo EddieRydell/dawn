@@ -2,7 +2,7 @@
 //!
 //! The worker owns request coalescing, cancellation, cache records, and the
 //! pixel-token transport used by the Tauri protocol. Effect evaluation remains
-//! in `dawn-runtime`; pixel decoding and drawing remain in the frontend.
+//! in `dawn-elaboration`; pixel decoding and drawing remain in the frontend.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -13,6 +13,10 @@ use std::sync::{
 };
 use std::thread;
 
+use dawn_elaboration::{
+    EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
+    resolve_effect_target_pixel_addresses,
+};
 use dawn_language::dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
@@ -25,10 +29,6 @@ use dawn_language::sequence::{
 use dawn_language::setup::SetupId;
 use dawn_language::values::{Curve, DawnTime, Gradient};
 use dawn_project_io::ProjectSession;
-use dawn_runtime::{
-    EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
-    resolve_effect_target_pixel_addresses,
-};
 
 use crate::dto::{
     EffectRasterSettings, GuiDocumentRequest, SequenceClipRaster, SequenceClipRasterError,

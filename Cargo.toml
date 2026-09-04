@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop", "crates/dawn-core", "crates/dawn-language", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-runtime", "crates/dawn-package", "crates/dawn-cli"]
+members = ["apps/desktop", "crates/dawn-runtime", "crates/dawn-language", "crates/dawn-elaboration", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-package", "crates/dawn-cli"]
 resolver = "2"
 
 [workspace.package]
@@ -16,7 +16,7 @@ criterion = "0.8.2"
 directories = "6.0.0"
 dur = { version = "0.5.3", default-features = false }
 dawn-package = { path = "crates/dawn-package" }
-dawn-core = { path = "crates/dawn-core" }
+dawn-elaboration = { path = "crates/dawn-elaboration" }
 dawn-language = { path = "crates/dawn-language" }
 dawn-output = { path = "crates/dawn-output" }
 dawn-project-io = { path = "crates/dawn-project-io" }

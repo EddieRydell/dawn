@@ -1,1 +1,1 @@
-pub(crate) use dawn_core::dsl::bytecode::*;
+pub(crate) use dawn_runtime::dsl::bytecode::*;

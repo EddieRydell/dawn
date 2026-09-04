@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use dawn_language::dsl::{
-    BoundParams, CompiledEffect, DslVmScratch, Identifier, RunContext, Value, compile_effects,
+    BoundParams, CompiledEffect, Identifier, RunContext, Value, VmWorkspace, compile_effects,
 };
 use dawn_language::values::{Color, Curve, CurvePoint, Gradient, GradientStop, SampleDuration};
 use indexmap::IndexMap;
@@ -27,15 +27,15 @@ fn bench_effect_vm(c: &mut Criterion) {
         prepared_effect("ShimmerField", SHIMMER_FIELD_SOURCE, shimmer_field_params()),
     ];
     let contexts = sample_contexts();
-    let mut scratches = std::array::from_fn::<_, 4, _>(|_| DslVmScratch::default());
+    let mut workspacees = std::array::from_fn::<_, 4, _>(|_| VmWorkspace::default());
 
     c.bench_function("dsl_effect_suite_4x512_pixels", |b| {
         b.iter(|| {
-            for ((effect, bound), scratch) in effects.iter().zip(&mut scratches) {
+            for ((effect, bound), workspace) in effects.iter().zip(&mut workspacees) {
                 for context in &contexts {
                     black_box(
                         effect
-                            .sample_bound(black_box(bound), black_box(context), scratch)
+                            .sample_bound(black_box(bound), black_box(context), workspace)
                             .expect("sample benchmark effect should run"),
                     );
                 }
@@ -262,8 +262,8 @@ fn color_point(position: f32, red: u8, green: u8, blue: u8) -> GradientStop {
 
 fn criterion_config() -> Criterion {
     Criterion::default()
-        .warm_up_time(Duration::from_secs(8))
-        .measurement_time(Duration::from_secs(10))
+        .warm_up_time(Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(5))
         .noise_threshold(0.05)
 }
 
