@@ -1,25 +1,25 @@
-use dawn_language::dsl::Identifier;
-use dawn_language::dsl::{BoundParams, Value};
+use dawn_language::dsl::{BoundParams, BytecodeProgram, ParamDecl};
 use dawn_language::operator::{
-    BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
+    BuiltinOperator, OperatorImplementation, validate_composition_graph,
 };
 use dawn_language::sequence::{
-    AutomationMapping, AutomationTarget, CompositionGraphNodeId, CompositionGraphNodeKind,
-    GraphPortId, Sequence, SequenceCompositionGraph,
+    AutomationTarget, CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, Sequence,
+    SequenceCompositionGraph,
 };
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 
 use crate::sequence::effects::parameters::prepare_operator_params;
-use crate::sequence::effects::preparation::{automation_param, prepare_automation};
+use crate::sequence::effects::preparation::prepare_automation;
 use crate::sequence::targets::{PreparedTargetPixel, full_rig_target_pixels};
-use crate::{EffectParamTiming, PreparedAutomation, PreparedElement, PreparedLayer, RenderError};
+use crate::{EffectParamTiming, PreparedAutomation, PreparedElement, RenderError};
 use dawn_language::model::DawnProject;
 
 pub(crate) fn automation_for_composition_node(
     sequence: &Sequence,
     node_id: &CompositionGraphNodeId,
-) -> Vec<PreparedAutomation> {
+    params: &[ParamDecl],
+) -> Result<Vec<PreparedAutomation>, RenderError> {
     sequence
         .automation_clips
         .iter()
@@ -35,116 +35,24 @@ pub(crate) fn automation_for_composition_node(
                         } if target_node_id == node_id
                     )
                 })
-                .map(move |binding| prepare_automation(clip, binding))
+                .map(move |binding| prepare_automation(clip, binding, params))
         })
         .collect()
-}
-
-pub(crate) fn float_param(
-    params: &IndexMap<Identifier, Value>,
-    name: &str,
-) -> Result<f32, RenderError> {
-    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
-        message: format!("invalid operator parameter name `{name}`"),
-    })?;
-    params
-        .get(&name)
-        .and_then(|value| match value {
-            Value::Float(value) => Some(*value),
-            _ => None,
-        })
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
-        })
-}
-
-pub(crate) fn int_param(
-    params: &IndexMap<Identifier, Value>,
-    name: &str,
-) -> Result<i32, RenderError> {
-    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
-        message: format!("invalid operator parameter name `{name}`"),
-    })?;
-    params
-        .get(&name)
-        .and_then(|value| match value {
-            Value::Int(value) => Some(*value),
-            _ => None,
-        })
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
-        })
-}
-
-pub(crate) fn layer_cache_history(
-    graph: &PreparedSignalGraph,
-) -> Result<dawn_language::values::SampleDuration, RenderError> {
-    let mut history_seconds = 0.0_f32;
-    for node in &graph.nodes {
-        let PreparedSignalKind::Operator {
-            definition,
-            params,
-            automation,
-            ..
-        } = &node.kind
-        else {
-            continue;
-        };
-        if !matches!(
-            definition.implementation,
-            OperatorImplementation::Native(BuiltinOperator::Echo)
-        ) {
-            continue;
-        }
-        let mut delay = float_param(params, "seconds")?.max(0.0);
-        let mut repeats = int_param(params, "repeats")?.clamp(1, 32);
-        for automation in automation {
-            match (
-                automation_param(&automation.binding).as_str(),
-                &automation.binding.mapping,
-            ) {
-                ("seconds", AutomationMapping::Float { min, max }) => {
-                    delay = delay.max(*min).max(*max).max(0.0);
-                }
-                ("repeats", AutomationMapping::Int { min, max }) => {
-                    repeats = repeats.max(*min).max(*max).clamp(1, 32);
-                }
-                _ => {}
-            }
-        }
-        history_seconds = history_seconds.max(delay * repeats as f32);
-    }
-    if !history_seconds.is_finite() {
-        return Err(RenderError::InvalidTiming {
-            reason: "operator history exceeds the runtime clock range".to_string(),
-        });
-    }
-    if history_seconds <= 0.0 {
-        return Ok(dawn_language::values::SampleDuration::from_ticks(0));
-    }
-    let history = dawn_language::values::DawnDuration::try_from_seconds_f32(history_seconds)
-        .map_err(|_| RenderError::InvalidTiming {
-            reason: "operator history exceeds the runtime clock range".to_string(),
-        })?;
-    dawn_language::values::sample_duration_from_dawn_duration(&history).map_err(|_| {
-        RenderError::InvalidTiming {
-            reason: "operator history exceeds the runtime clock range".to_string(),
-        }
-    })
 }
 
 pub(crate) struct PrepareGraphContext<'a> {
     pub(crate) project: &'a DawnProject,
     pub(crate) sequence: &'a Sequence,
     pub(crate) elements: &'a [PreparedElement],
-    pub(crate) layers: &'a [PreparedLayer],
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedSignalGraph {
     pub(crate) output_index: usize,
-    pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
-    pub(crate) nodes: Vec<PreparedSignalNode>,
+    pub(crate) target: Arc<[PreparedTargetPixel]>,
+    pub(crate) nodes: Box<[PreparedSignalNode]>,
+    pub(crate) vm_scratch_count: usize,
+    pub(crate) frame_consumers: Box<[u16]>,
 }
 
 #[derive(Clone, Debug)]
@@ -158,22 +66,33 @@ pub(crate) enum PreparedSignalKind {
         layer_index: usize,
     },
     Operator {
-        definition: Box<OperatorDefinition>,
-        inputs: Vec<usize>,
-        params: IndexMap<dawn_language::dsl::Identifier, Value>,
-        automation: Vec<PreparedAutomation>,
-        bound_params: Option<BoundParams>,
+        operator: PreparedOperatorNode,
+        inputs: Box<[usize]>,
+        automation: Box<[PreparedAutomation]>,
+        vm_slot: u16,
     },
     Output {
-        inputs: Vec<usize>,
+        inputs: Box<[usize]>,
     },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PreparedOperator {
+    Native(BuiltinOperator),
+    Dsl(Box<BytecodeProgram>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedOperatorNode {
+    pub(crate) implementation: PreparedOperator,
+    pub(crate) params: BoundParams,
 }
 
 pub(crate) fn prepare_signal_graph(
     context: PrepareGraphContext<'_>,
     graph: &SequenceCompositionGraph,
 ) -> Result<PreparedSignalGraph, RenderError> {
-    let full_target = Arc::new(full_rig_target_pixels(context.elements)?);
+    let full_target = Arc::from(full_rig_target_pixels(context.elements)?);
     validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
         RenderError::BadGraph {
             message: error.message,
@@ -203,6 +122,7 @@ pub(crate) fn prepare_signal_graph(
         let prepared = match &node.kind {
             CompositionGraphNodeKind::Layer { layer_id } => {
                 let layer_index = context
+                    .sequence
                     .layers
                     .iter()
                     .position(|layer| layer.id == *layer_id)
@@ -224,8 +144,7 @@ pub(crate) fn prepare_signal_graph(
                     .resolve(&operator_node.operator)
                     .ok_or_else(|| RenderError::BadGraph {
                         message: "missing operator definition".to_string(),
-                    })?
-                    .clone();
+                    })?;
                 let inputs = definition
                     .inputs
                     .iter()
@@ -257,7 +176,7 @@ pub(crate) fn prepare_signal_graph(
                 let params = prepare_operator_params(
                     context.project,
                     context.sequence,
-                    &definition,
+                    definition,
                     &operator_node.params,
                     EffectParamTiming {
                         start: dawn_language::values::SampleTime::from_ticks(0),
@@ -269,20 +188,29 @@ pub(crate) fn prepare_signal_graph(
                         })?,
                     },
                 )?;
-                let automation = automation_for_composition_node(context.sequence, &node.id);
-                let bound_params = match (&definition.implementation, automation.is_empty()) {
-                    (OperatorImplementation::Dsl(compiled), true) => {
-                        Some(compiled.bind_params(&params)?)
+                let automation = automation_for_composition_node(
+                    context.sequence,
+                    &node.id,
+                    &definition.params,
+                )?;
+                let implementation = match &definition.implementation {
+                    OperatorImplementation::Dsl(compiled) => {
+                        PreparedOperator::Dsl(Box::new(compiled.bytecode.clone()))
                     }
-                    _ => None,
+                    OperatorImplementation::Native(builtin) => {
+                        PreparedOperator::Native(builtin.clone())
+                    }
+                };
+                let operator = PreparedOperatorNode {
+                    implementation,
+                    params: BoundParams::bind(&definition.params, &params)?,
                 };
                 PreparedSignalNode {
                     kind: PreparedSignalKind::Operator {
-                        definition: Box::new(definition),
-                        inputs,
-                        params,
-                        automation,
-                        bound_params,
+                        operator,
+                        inputs: inputs.into_boxed_slice(),
+                        automation: automation.into_boxed_slice(),
+                        vm_slot: 0,
                     },
                 }
             }
@@ -301,7 +229,9 @@ pub(crate) fn prepare_signal_graph(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 PreparedSignalNode {
-                    kind: PreparedSignalKind::Output { inputs },
+                    kind: PreparedSignalKind::Output {
+                        inputs: inputs.into_boxed_slice(),
+                    },
                 }
             }
         };
@@ -331,10 +261,75 @@ pub(crate) fn prepare_signal_graph(
         });
     }
 
+    let mut vm_depths = Vec::with_capacity(prepared_nodes.len());
+    let mut vm_scratch_count = 1;
+    for node in &mut prepared_nodes {
+        let (inputs, is_dsl, vm_slot) = match &mut node.kind {
+            PreparedSignalKind::Layer { .. } => {
+                vm_depths.push(0);
+                continue;
+            }
+            PreparedSignalKind::Operator {
+                operator,
+                inputs,
+                vm_slot,
+                ..
+            } => (
+                &inputs[..],
+                matches!(operator.implementation, PreparedOperator::Dsl(_)),
+                Some(vm_slot),
+            ),
+            PreparedSignalKind::Output { inputs } => (&inputs[..], false, None),
+        };
+        let input_depth = inputs
+            .iter()
+            .filter_map(|input| vm_depths.get(*input))
+            .copied()
+            .max()
+            .unwrap_or(0);
+        if is_dsl {
+            let slot = u16::try_from(input_depth).map_err(|_| RenderError::BadGraph {
+                message: "composition graph DSL nesting exceeds the runtime range".to_string(),
+            })?;
+            let Some(vm_slot) = vm_slot else {
+                return Err(RenderError::BadGraph {
+                    message: "DSL operator is missing its VM scratch slot".to_string(),
+                });
+            };
+            *vm_slot = slot;
+            let depth = input_depth + 1;
+            vm_scratch_count = vm_scratch_count.max(depth);
+            vm_depths.push(depth);
+        } else {
+            vm_depths.push(input_depth);
+        }
+    }
+
+    let mut frame_consumers = vec![0u16; prepared_nodes.len()];
+    for node in &prepared_nodes {
+        let inputs = match &node.kind {
+            PreparedSignalKind::Layer { .. } => continue,
+            PreparedSignalKind::Operator { inputs, .. } | PreparedSignalKind::Output { inputs } => {
+                inputs
+            }
+        };
+        for input in inputs {
+            frame_consumers[*input] =
+                frame_consumers[*input]
+                    .checked_add(1)
+                    .ok_or_else(|| RenderError::BadGraph {
+                        message: "composition graph has too many consumers for one signal"
+                            .to_string(),
+                    })?;
+        }
+    }
+
     Ok(PreparedSignalGraph {
         output_index,
         target: full_target,
-        nodes: prepared_nodes,
+        nodes: prepared_nodes.into_boxed_slice(),
+        vm_scratch_count,
+        frame_consumers: frame_consumers.into_boxed_slice(),
     })
 }
 

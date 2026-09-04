@@ -7,6 +7,8 @@ use crate::values::{Curve, DawnDuration, DawnTime, Gradient};
 use indexmap::IndexMap;
 use std::sync::LazyLock;
 
+pub use dawn_core::BuiltinEffect;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInst {
     pub id: EffectInstId,
@@ -29,15 +31,6 @@ pub struct EffectDefinitionId(pub SourceIdentity);
 pub enum EffectRef {
     Builtin(BuiltinEffect),
     Custom(EffectDefinitionId),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum BuiltinEffect {
-    Pulse,
-    Chase,
-    Spin,
-    MarkPulse,
-    MarkChase,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,40 +144,20 @@ impl EffectDefinitionStore {
 
     pub fn resolve(&self, reference: &EffectRef) -> Option<&EffectDefinition> {
         match reference {
-            EffectRef::Builtin(builtin) => Some(builtin.definition()),
+            EffectRef::Builtin(builtin) => Some(builtin_effect_definition(*builtin)),
             EffectRef::Custom(id) => self.get(id),
         }
     }
 }
 
-impl BuiltinEffect {
-    pub const ALL: [Self; 5] = [
-        Self::Pulse,
-        Self::Chase,
-        Self::Spin,
-        Self::MarkPulse,
-        Self::MarkChase,
-    ];
+pub fn builtin_effect_definition(effect: BuiltinEffect) -> &'static EffectDefinition {
+    &BUILTIN_EFFECT_DEFINITIONS[effect.index()]
+}
 
-    pub fn definition(self) -> &'static EffectDefinition {
-        &BUILTIN_EFFECT_DEFINITIONS[self.index()]
-    }
-
-    pub fn from_source_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|effect| effect.definition().source_name == name)
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Pulse => 0,
-            Self::Chase => 1,
-            Self::Spin => 2,
-            Self::MarkPulse => 3,
-            Self::MarkChase => 4,
-        }
-    }
+pub fn builtin_effect_from_source_name(name: &str) -> Option<BuiltinEffect> {
+    BuiltinEffect::ALL
+        .into_iter()
+        .find(|effect| builtin_effect_definition(*effect).source_name == name)
 }
 
 fn identifier(name: &str) -> crate::dsl::Identifier {

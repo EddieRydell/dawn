@@ -1,41 +1,34 @@
 use dawn_language::dsl::{
-    BoundParams, CompiledEffect, DslBindCache, DslVmScratch, Identifier, RuntimeError,
-    TargetItemValue, TargetValue, Value,
+    BoundParams, BytecodeProgram, DslBindCache, DslVmScratch, RuntimeError, TargetItemValue,
+    TargetValue,
 };
-use dawn_language::effect::{EffectInstId, EffectRef};
+use dawn_language::effect::{BuiltinEffect, EffectInstId, EffectRef};
 use dawn_language::element::ElementNodeId;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::NativeSample;
-use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, MarkCollectionKey, SequenceId, SequenceLayerId,
-};
+use dawn_language::sequence::{AutomationMapping, MarkCollectionKey, SequenceId};
 use dawn_language::setup::SetupId;
 use dawn_language::validation::validate_sequence;
-use dawn_language::values::Color;
+use dawn_language::values::{Color, Curve};
 use dawn_language::values::{
-    SampleDuration, SampleTime, sample_duration_from_dawn_duration, sample_duration_seconds_f32,
-    sample_time_from_seconds_f32,
+    SampleDuration, SampleTime, sample_duration_from_dawn_duration, sample_time_from_seconds_f32,
 };
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::composition::{
-    PrepareGraphContext, PreparedSignalGraph, layer_cache_history, prepare_signal_graph,
-};
-use super::composition::{sample_effect_into, sample_signal_graph, take_black_color_buffer};
+use super::composition::sample_signal_graph;
+use super::composition::{PrepareGraphContext, PreparedSignalGraph, prepare_signal_graph};
 use super::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
-use super::effects::sampling::{PreparedSampleContextGroup, PreparedSampleGroupCacheEntry};
-use super::elements::{PreparedElement, element_cell_offsets, prepare_elements};
+use super::elements::{PreparedElement, prepare_elements};
 use super::targets::{PreparedTargetCache, PreparedTargetPixel};
 use super::timeline::{frame_at_or_before, frame_count, prepare_timing, sample_time_for_frame};
 
 static NEXT_RENDER_CACHE_ID: AtomicU32 = AtomicU32::new(1);
 
-pub const MAX_GENERATED_EFFECTS: usize = 100_000;
-pub const MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER: usize = 4_096;
+pub const MAX_GENERATED_EFFECTS: usize = 4_096;
+pub const MAX_SIGNAL_CACHE_ENTRIES_PER_PIXEL: usize = 1_024;
 
 fn next_render_cache_id() -> u32 {
     NEXT_RENDER_CACHE_ID.fetch_add(1, Ordering::Relaxed)
@@ -53,26 +46,28 @@ pub struct PreparedSequenceRenderer {
     pub(crate) frame_rate: u32,
     pub(crate) frame_count: u32,
     pub(crate) duration: SampleDuration,
-    pub(crate) elements: Vec<PreparedElement>,
-    pub(crate) element_cell_offsets: Vec<usize>,
+    pub(crate) elements: Box<[PreparedElement]>,
+    pub(crate) element_cell_offsets: Box<[usize]>,
     pub(crate) pixel_count: usize,
-    pub(crate) effects: Vec<PreparedEffect>,
-    pub(crate) effects_by_layer: Vec<Vec<usize>>,
-    pub(crate) layers: Vec<PreparedLayer>,
+    pub(crate) effects: Box<[PreparedEffect]>,
+    pub(crate) effects_by_layer: Box<[Box<[usize]>]>,
+    pub(crate) layers: Box<[PreparedLayer]>,
     pub(crate) signal_graph: PreparedSignalGraph,
-    pub(crate) layer_cache_history: SampleDuration,
 }
 
 #[derive(Debug, Default)]
 pub struct SequenceRenderScratch {
-    pub(crate) effect_vm: Vec<DslVmScratch>,
+    pub(crate) effect_vm: DslVmScratch,
     pub(crate) operator_vm: Vec<DslVmScratch>,
-    pub(crate) bind_cache: DslBindCache,
-    pub(crate) signal_cache: HashMap<SignalCacheKey, Vec<Color>>,
-    pub(crate) signal_cache_time: Option<SampleTime>,
-    pub(crate) layer_cache: HashMap<SignalCacheKey, Vec<Color>>,
-    pub(crate) render_cache_id: Option<u32>,
+    pub(crate) signal_cache: Vec<CachedSignal>,
+    pub(crate) signal_frames: Vec<Option<Vec<Color>>>,
+    pub(crate) signal_consumers: Vec<u16>,
     pub(crate) color_buffers: Vec<Vec<Color>>,
+    pub(crate) effect_samples: Vec<CachedEffectSample>,
+    pub(crate) effect_automation: Vec<Option<EffectAutomationScratch>>,
+    pub(crate) operator_automation: Vec<Option<BoundParams>>,
+    pub(crate) render_cache_id: Option<u32>,
+    pub(crate) frame_colors: Vec<Color>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,7 +140,15 @@ impl PreparedSequenceRenderer {
         prepare_timing(sequence)?;
 
         let (elements, groups) = prepare_elements(project, tree)?;
-        let (element_cell_offsets, pixel_count) = element_cell_offsets(&elements);
+        let mut pixel_count = 0;
+        let element_cell_offsets = elements
+            .iter()
+            .map(|element| {
+                let offset = pixel_count;
+                pixel_count += element.pixel_count;
+                offset
+            })
+            .collect::<Vec<_>>();
         let element_ids = elements
             .iter()
             .map(|element| element.id)
@@ -153,60 +156,44 @@ impl PreparedSequenceRenderer {
         let mut effects = Vec::with_capacity(sequence.effects.len());
         let mut generated_child_count = 0usize;
         let mut bind_cache = DslBindCache::default();
-        let mut compiled_effects = HashMap::new();
+        let mut sample_programs = HashMap::new();
         let mut target_cache = PrepareTargetCache::default();
-        let layer_ids = sequence
+        let layers = sequence
             .layers
             .iter()
-            .map(|layer| layer.id.clone())
-            .collect::<IndexSet<_>>();
+            .map(|layer| PreparedLayer {
+                enabled: layer.enabled,
+            })
+            .collect::<Vec<_>>();
+        let mut effects_by_layer = vec![Vec::new(); layers.len()];
         for effect in &sequence.effects {
-            if !layer_ids.contains(&effect.layer_id) {
-                return Err(RenderError::BadGraph {
+            let layer_index = sequence
+                .layers
+                .iter()
+                .position(|layer| layer.id == effect.layer_id)
+                .ok_or_else(|| RenderError::BadGraph {
                     message: format!(
                         "effect {} references missing layer {}",
                         effect.id.0, effect.layer_id.0
                     ),
-                });
-            }
+                })?;
+            let first_prepared_effect = effects.len();
             prepare_effect_inst(
                 PrepareEffectContext {
                     project,
                     sequence,
-                    layer_id: effect.layer_id.clone(),
                     elements: &elements,
                     element_ids: &element_ids,
                     groups: &groups,
                     effects: &mut effects,
                     generated_child_count: &mut generated_child_count,
                     bind_cache: &mut bind_cache,
-                    compiled_effects: &mut compiled_effects,
+                    sample_programs: &mut sample_programs,
                     target_cache: &mut target_cache,
                 },
                 effect,
             )?;
-        }
-
-        let layers = sequence
-            .layers
-            .iter()
-            .map(|layer| PreparedLayer {
-                id: layer.id.clone(),
-                enabled: layer.enabled,
-            })
-            .collect::<Vec<_>>();
-        let mut effects_by_layer = vec![Vec::new(); layers.len()];
-        for (effect_index, effect) in effects.iter().enumerate() {
-            let layer_index = layers
-                .iter()
-                .position(|layer| layer.id == effect.layer_id)
-                .ok_or_else(|| RenderError::BadGraph {
-                    message: format!(
-                        "prepared effect references missing layer {}",
-                        effect.layer_id.0
-                    ),
-                })?;
-            effects_by_layer[layer_index].push(effect_index);
+            effects_by_layer[layer_index].extend(first_prepared_effect..effects.len());
         }
         for layer_effects in &mut effects_by_layer {
             layer_effects.sort_unstable_by(|left, right| {
@@ -228,24 +215,24 @@ impl PreparedSequenceRenderer {
                 project,
                 sequence,
                 elements: &elements,
-                layers: &layers,
             },
             &sequence.composition_graph,
         )?;
-        let layer_cache_history = layer_cache_history(&signal_graph)?;
         Ok(Self {
             render_cache_id: next_render_cache_id(),
             frame_rate,
             frame_count,
             duration,
-            elements,
-            element_cell_offsets,
+            elements: elements.into_boxed_slice(),
+            element_cell_offsets: element_cell_offsets.into_boxed_slice(),
             pixel_count,
-            effects,
-            effects_by_layer,
-            layers,
+            effects: effects.into_boxed_slice(),
+            effects_by_layer: effects_by_layer
+                .into_iter()
+                .map(Vec::into_boxed_slice)
+                .collect(),
+            layers: layers.into_boxed_slice(),
             signal_graph,
-            layer_cache_history,
         })
     }
 
@@ -294,6 +281,14 @@ impl PreparedSequenceRenderer {
         self.frame_rate
     }
 
+    pub fn pixel_count(&self) -> usize {
+        self.pixel_count
+    }
+
+    pub(crate) fn prepared_elements(&self) -> &[PreparedElement] {
+        &self.elements
+    }
+
     /// Samples the prepared show signal at an exact microsecond clock value.
     /// This is the controller-facing path: it performs no floating-point time
     /// conversion and reuses all caller-owned VM/render scratch memory.
@@ -302,8 +297,19 @@ impl PreparedSequenceRenderer {
         sample_time: SampleTime,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<Vec<RenderedElement>, RenderError> {
-        let mut colors = take_black_color_buffer(scratch, self.pixel_count);
-        self.sample_colors_into(sample_time, &mut colors, scratch)?;
+        let mut colors = std::mem::take(&mut scratch.frame_colors);
+        colors.resize(
+            self.pixel_count,
+            Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+        );
+        if let Err(error) = self.sample_colors_into(sample_time, &mut colors, scratch) {
+            scratch.frame_colors = colors;
+            return Err(error);
+        }
         let mut offset = 0;
         let rendered = self
             .elements
@@ -318,8 +324,7 @@ impl PreparedSequenceRenderer {
                 }
             })
             .collect();
-        colors.clear();
-        scratch.color_buffers.push(colors);
+        scratch.frame_colors = colors;
         Ok(rendered)
     }
 
@@ -348,16 +353,19 @@ impl PreparedSequenceRenderer {
     ) -> Result<(), RenderError> {
         if scratch.render_cache_id != Some(self.render_cache_id) {
             scratch.signal_cache.clear();
-            scratch.signal_cache_time = None;
-            scratch.layer_cache.clear();
+            scratch.signal_frames.clear();
+            scratch.color_buffers.clear();
             scratch.render_cache_id = Some(self.render_cache_id);
         }
         scratch
-            .effect_vm
-            .resize_with(self.effects.len(), DslVmScratch::default);
+            .effect_automation
+            .resize_with(self.effects.len(), || None);
         scratch
             .operator_vm
-            .resize_with(self.signal_graph.nodes.len(), DslVmScratch::default);
+            .resize_with(self.signal_graph.vm_scratch_count, DslVmScratch::default);
+        scratch
+            .operator_automation
+            .resize_with(self.signal_graph.nodes.len(), || None);
         if sample_time.ticks() >= self.duration.ticks() {
             output.fill(Color {
                 red: 0,
@@ -373,15 +381,14 @@ impl PreparedSequenceRenderer {
         self.duration
     }
 
-    pub fn active_effect_names(&self, frame_index: u32) -> Vec<&str> {
+    pub fn active_effect_count(&self, frame_index: u32) -> usize {
         let Ok(sample_time) = sample_time_for_frame(frame_index, self.frame_rate) else {
-            return Vec::new();
+            return 0;
         };
         self.effects
             .iter()
             .filter(|effect| effect.is_active(sample_time))
-            .map(|effect| effect.name.as_str())
-            .collect()
+            .count()
     }
 
     fn render_at(
@@ -399,66 +406,32 @@ impl PreparedSequenceRenderer {
             elements: rendered,
         })
     }
-
-    pub(crate) fn sample_layer(
-        &self,
-        layer_index: usize,
-        sample_time: dawn_language::values::SampleTime,
-        scratch: &mut SequenceRenderScratch,
-    ) -> Result<Vec<Color>, RenderError> {
-        let layer = &self.layers[layer_index];
-        let mut rendered = take_black_color_buffer(scratch, self.pixel_count);
-        if !layer.enabled {
-            return Ok(rendered);
-        }
-
-        if let Some(layer_effects) = self.effects_by_layer.get(layer_index) {
-            for effect_index in layer_effects {
-                let Some(effect) = self.effects.get(*effect_index) else {
-                    continue;
-                };
-                if effect.start_time > sample_time {
-                    break;
-                }
-                if !effect.is_active(sample_time) {
-                    continue;
-                }
-                sample_effect_into(
-                    effect,
-                    &self.element_cell_offsets,
-                    &mut rendered,
-                    sample_time,
-                    &mut scratch.effect_vm[*effect_index],
-                    &mut scratch.bind_cache,
-                )?;
-            }
-        }
-        Ok(rendered)
-    }
-
-    pub(crate) fn duration_seconds(&self) -> f32 {
-        sample_duration_seconds_f32(self.duration)
-    }
 }
 
-pub(crate) fn arc_key<T>(value: &Arc<T>) -> usize {
+pub(crate) fn arc_key<T: ?Sized>(value: &Arc<T>) -> usize {
     Arc::as_ptr(value).cast::<()>() as usize
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedEffect {
-    pub(crate) layer_id: SequenceLayerId,
     pub(crate) start_time: dawn_language::values::SampleTime,
     pub(crate) duration: SampleDuration,
-    pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
-    pub(crate) sample_groups: Option<Arc<Vec<PreparedSampleContextGroup>>>,
-    pub(crate) name: String,
+    pub(crate) target: Arc<[PreparedTargetPixel]>,
+    pub(crate) reuse_samples: bool,
     pub(crate) implementation: PreparedEffectImplementation,
-    pub(crate) params: IndexMap<Identifier, Value>,
-    pub(crate) automation: Vec<PreparedAutomation>,
+    pub(crate) automation: Option<Box<PreparedEffectAutomation>>,
 }
 
 impl PreparedEffect {
+    pub(crate) fn target_repeats_context(target: &[PreparedTargetPixel]) -> bool {
+        target.len()
+            > target
+                .iter()
+                .map(PreparedTargetPixel::pixel_count)
+                .max()
+                .unwrap_or(0)
+    }
+
     pub(crate) fn is_active(&self, sample_time: dawn_language::values::SampleTime) -> bool {
         sample_time >= self.start_time
             && self
@@ -467,16 +440,10 @@ impl PreparedEffect {
                 .is_some_and(|end| sample_time < end)
     }
 
-    pub(crate) fn duration_seconds(&self) -> f32 {
-        sample_duration_seconds_f32(self.duration)
-    }
-
-    pub(crate) fn local_seconds(&self, sample_time: dawn_language::values::SampleTime) -> f32 {
-        sample_duration_seconds_f32(
-            sample_time
-                .checked_duration_since(self.start_time)
-                .unwrap_or(SampleDuration::from_ticks(0)),
-        )
+    pub(crate) fn local_time(&self, sample_time: SampleTime) -> SampleDuration {
+        sample_time
+            .checked_duration_since(self.start_time)
+            .unwrap_or(SampleDuration::from_ticks(0))
     }
 
     pub(crate) fn progress(&self, sample_time: dawn_language::values::SampleTime) -> f32 {
@@ -490,18 +457,17 @@ impl PreparedEffect {
 #[derive(Clone, Debug)]
 pub(crate) enum PreparedEffectImplementation {
     Dsl {
-        definition: Arc<CompiledEffect>,
+        program: Arc<BytecodeProgram>,
         bound_params: BoundParams,
     },
     Native {
-        builtin: Option<dawn_language::effect::BuiltinEffect>,
         sample: NativeSample,
+        params: Option<(BuiltinEffect, BoundParams)>,
     },
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedLayer {
-    pub(crate) id: SequenceLayerId,
     pub(crate) enabled: bool,
 }
 
@@ -511,17 +477,51 @@ pub(crate) struct SignalCacheKey {
     pub(crate) sample_time: SampleTime,
 }
 
-impl Hash for SignalCacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.node_index.hash(state);
-        self.sample_time.ticks().hash(state);
-    }
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CachedSignal {
+    pub(crate) key: SignalCacheKey,
+    pub(crate) color: Color,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CachedEffectSample {
+    pub(crate) pixel_index: usize,
+    pub(crate) pixel_count: usize,
+    pub(crate) color: Color,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct EffectAutomationScratch {
+    pub(crate) params: Option<BoundParams>,
+    pub(crate) native_sample: Option<NativeSample>,
+    pub(crate) sample_time: Option<SampleTime>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedEffectAutomation {
+    pub(crate) bindings: Box<[PreparedAutomation]>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedAutomation {
-    pub(crate) clip: AutomationClip,
-    pub(crate) binding: AutomationBinding,
+    pub(crate) start: SampleTime,
+    pub(crate) duration: SampleDuration,
+    pub(crate) curve: Arc<Curve>,
+    pub(crate) mapping: AutomationMapping,
+    pub(crate) param_index: u16,
+}
+
+impl PreparedAutomation {
+    pub(crate) fn position(&self, sample_time: SampleTime) -> f32 {
+        let elapsed = sample_time
+            .checked_duration_since(self.start)
+            .map_or(0, |duration| duration.ticks());
+        if self.duration.ticks() == 0 {
+            0.0
+        } else {
+            (elapsed as f32 / self.duration.ticks() as f32).clamp(0.0, 1.0)
+        }
+    }
 }
 
 #[derive(Default)]
@@ -529,16 +529,14 @@ pub(crate) struct PrepareTargetCache {
     pub(crate) target: PreparedTargetCache,
     pub(crate) generated_targets: HashMap<usize, GeneratedTargetCacheEntry>,
     pub(crate) generator_context_targets: HashMap<usize, GeneratorContextTargetCacheEntry>,
-    pub(crate) sample_groups: HashMap<usize, PreparedSampleGroupCacheEntry>,
-    pub(crate) sample_group_eligibility: HashMap<usize, bool>,
 }
 
 pub(crate) struct GeneratedTargetCacheEntry {
     pub(crate) source: Arc<TargetItemValue>,
-    pub(crate) pixels: Arc<Vec<PreparedTargetPixel>>,
+    pub(crate) pixels: Arc<[PreparedTargetPixel]>,
 }
 
 pub(crate) struct GeneratorContextTargetCacheEntry {
-    pub(crate) source: Arc<Vec<PreparedTargetPixel>>,
+    pub(crate) source: Arc<[PreparedTargetPixel]>,
     pub(crate) target: Arc<TargetValue>,
 }

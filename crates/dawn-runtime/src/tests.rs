@@ -1,7 +1,7 @@
 use camino::Utf8PathBuf;
 use dawn_project_io::load_package;
 
-use crate::{PreparedSequenceOutput, RenderedElementState};
+use crate::{PreparedSequenceOutput, RenderedElementState, SequenceOutputScratch};
 
 fn example(name: &str) -> dawn_project_io::ProjectSession {
     let path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -107,6 +107,11 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
                 .fold(hash, |hash, slot| hash.wrapping_mul(16777619)
                     ^ u64::from(*slot)))
     );
+    let mut scratch = SequenceOutputScratch::default();
+    let sampled = renderer
+        .sample_into(first.sample_time, &mut scratch)
+        .unwrap();
+    assert_eq!(sampled, first.controller_frames);
 }
 
 #[test]

@@ -1000,6 +1000,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-core"
+version = "0.1.0"
+dependencies = [
+ "fugit",
+ "libm",
+]
+
+[[package]]
 name = "dawn-desktop"
 version = "0.1.0"
 dependencies = [
@@ -1036,6 +1044,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "criterion",
+ "dawn-core",
  "fugit",
  "indexmap 2.14.0",
  "uuid",

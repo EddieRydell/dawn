@@ -1,66 +1,24 @@
 use dawn_language::dsl::{
-    BoundParams, CompiledEffect, DslBindCache, DslVmScratch, GeneratedEffect, GeneratedEffectRef,
-    GeneratorContext, Identifier, ParamDecl, TargetItemValue, TargetPixelValue, TargetValue, Type,
-    Value,
+    BoundParams, BytecodeProgram, DslBindCache, DslVmScratch, EffectKind as RootEffectKind,
+    GeneratedEffect, GeneratedEffectRef, GeneratorContext, Identifier, ParamDecl, TargetItemValue,
+    TargetPixelValue, TargetValue, Type, Value,
 };
-use dawn_language::effect::{EffectDefinitionId, EffectImplementation, EffectRef};
+use dawn_language::effect::{
+    EffectDefinitionId, EffectImplementation, EffectRef, builtin_effect_definition,
+};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
-use dawn_language::sequence::SequenceLayerId;
-use dawn_language::values::{
-    SampleDuration, SampleTime, sample_duration_seconds_f32, sample_time_seconds_f32,
-};
-use indexmap::IndexMap;
+use dawn_language::values::{SampleDuration, SampleTime};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::sampling::{
-    prepare_sample_context_groups_cached, prepare_sample_groups_for_effect,
-    prepare_sample_groups_for_implementation,
-};
 use crate::MAX_GENERATED_EFFECTS;
-use crate::sequence::targets::PreparedTargetPixel;
+use crate::sequence::targets::{PreparedTargetPixel, sorted_sample_target};
 use crate::{
-    EffectKind as RootEffectKind, GeneratedTargetCacheEntry, GeneratorContextTargetCacheEntry,
-    PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, PreparedElement, RenderError,
-    arc_key,
+    GeneratedTargetCacheEntry, GeneratorContextTargetCacheEntry, PrepareTargetCache,
+    PreparedEffect, PreparedEffectImplementation, PreparedElement, RenderError, arc_key,
 };
-
-fn prepared_timing(
-    start_seconds: f32,
-    duration_seconds: f32,
-) -> Result<
-    (
-        dawn_language::values::SampleTime,
-        dawn_language::values::SampleDuration,
-    ),
-    RenderError,
-> {
-    let start_time =
-        dawn_language::values::sample_time_from_seconds_f32(start_seconds).map_err(|_| {
-            RenderError::InvalidTiming {
-                reason: "generated effect start exceeds the runtime clock range".to_string(),
-            }
-        })?;
-    let duration = dawn_language::values::DawnDuration::try_from_seconds_f32(duration_seconds)
-        .map_err(|_| RenderError::InvalidTiming {
-            reason: "generated effect duration must be positive and within the runtime clock range"
-                .to_string(),
-        })?;
-    let duration =
-        dawn_language::values::sample_duration_from_dawn_duration(&duration).map_err(|_| {
-            RenderError::InvalidTiming {
-                reason: "generated effect duration exceeds the runtime clock range".to_string(),
-            }
-        })?;
-    if duration.ticks() == 0 {
-        return Err(RenderError::InvalidTiming {
-            reason: "generated effect duration must be positive".to_string(),
-        });
-    }
-    Ok((start_time, duration))
-}
 
 const MAX_GENERATOR_DEPTH: usize = 4;
 const MAX_GENERATED_CHILDREN: usize = MAX_GENERATED_EFFECTS;
@@ -69,19 +27,18 @@ const MAX_GENERATED_CHILDREN: usize = MAX_GENERATED_EFFECTS;
 pub(crate) struct GeneratorExpansion {
     pub(crate) start_time: SampleTime,
     pub(crate) duration: SampleDuration,
-    pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
+    pub(crate) target: Arc<[PreparedTargetPixel]>,
     pub(crate) depth: usize,
     pub(crate) definition_source: SourceIdentity,
 }
 
 pub(crate) struct GeneratorPrepareContext<'a> {
     pub(crate) project: &'a DawnProject,
-    pub(crate) layer_id: SequenceLayerId,
     pub(crate) elements: &'a [PreparedElement],
     pub(crate) effects: &'a mut Vec<PreparedEffect>,
     pub(crate) generated_child_count: &'a mut usize,
     pub(crate) bind_cache: &'a mut DslBindCache,
-    pub(crate) compiled_effects: &'a mut HashMap<EffectDefinitionId, Arc<CompiledEffect>>,
+    pub(crate) sample_programs: &'a mut HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
     pub(crate) target_cache: &'a mut PrepareTargetCache,
 }
 
@@ -101,7 +58,8 @@ pub(crate) fn expand_generator(
     let generated = definition.generate_bound(
         params,
         &GeneratorContext {
-            duration: sample_duration_seconds_f32(expansion.duration),
+            start_time: expansion.start_time,
+            duration: expansion.duration,
             target,
         },
         &mut scratch,
@@ -115,7 +73,6 @@ pub(crate) fn expand_generator(
         *context.generated_child_count += 1;
         prepare_generated_child(
             context,
-            expansion.start_time,
             expansion.depth,
             &expansion.definition_source,
             child,
@@ -129,7 +86,7 @@ pub(crate) fn expand_native_generator(
     definition: &BoundNativeEffect,
     start_time: SampleTime,
     duration: SampleDuration,
-    target: Arc<Vec<PreparedTargetPixel>>,
+    target: Arc<[PreparedTargetPixel]>,
     depth: usize,
 ) -> Result<(), RenderError> {
     if depth >= MAX_GENERATOR_DEPTH {
@@ -138,7 +95,8 @@ pub(crate) fn expand_native_generator(
         });
     }
     let generated = definition.generate(&GeneratorContext {
-        duration: sample_duration_seconds_f32(duration),
+        start_time,
+        duration,
         target: generator_context_target(context.target_cache, &target),
     })?;
     for child in generated {
@@ -148,51 +106,38 @@ pub(crate) fn expand_native_generator(
             });
         }
         *context.generated_child_count += 1;
-        prepare_native_child(context, start_time, child)?;
+        prepare_native_child(context, child)?;
     }
     Ok(())
 }
 
 fn prepare_native_child(
     context: &mut GeneratorPrepareContext<'_>,
-    parent_start: SampleTime,
     child: NativeGeneratedEffect,
 ) -> Result<(), RenderError> {
-    if !child.duration_seconds.is_finite() || child.duration_seconds <= 0.0 {
-        return Err(RenderError::InvalidTiming {
-            reason: "generated effect duration must be positive and finite".to_string(),
-        });
-    }
     let target = prepared_pixels_from_generated_target_cached(
         context.target_cache,
         context.elements,
         child.target,
     )?;
-    let name = child.sample.display_name().to_string();
-    let (start_time, duration) = prepared_timing(
-        sample_time_seconds_f32(parent_start) + child.start_seconds,
-        child.duration_seconds,
-    )?;
+    let target = sorted_sample_target(&target);
+    let reuse_samples = PreparedEffect::target_repeats_context(&target);
     context.effects.push(PreparedEffect {
-        layer_id: context.layer_id.clone(),
-        start_time,
-        duration,
-        sample_groups: prepare_sample_context_groups_cached(context.target_cache, &target),
+        start_time: child.start_time,
+        duration: child.duration,
         target,
-        name,
+        reuse_samples,
         implementation: PreparedEffectImplementation::Native {
-            builtin: None,
             sample: child.sample,
+            params: None,
         },
-        params: IndexMap::new(),
-        automation: Vec::new(),
+        automation: None,
     });
     Ok(())
 }
 
 fn prepare_generated_child(
     context: &mut GeneratorPrepareContext<'_>,
-    parent_start: SampleTime,
     parent_depth: usize,
     definition_source: &SourceIdentity,
     child: GeneratedEffect,
@@ -220,60 +165,50 @@ fn prepare_generated_child(
                 ),
                 EffectRef::Builtin(builtin) => format!(
                     "generated built-in effect `{}` does not exist",
-                    builtin.definition().source_name
+                    builtin_effect_definition(*builtin).source_name
                 ),
             },
         })?;
     validate_generated_params(&definition.params, &child.params)?;
-    let duration_seconds = child.duration_seconds;
-    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
-        return Err(RenderError::InvalidTiming {
-            reason: "generated effect duration must be positive and finite".to_string(),
-        });
-    }
     let target = prepared_pixels_from_generated_target_cached(
         context.target_cache,
         context.elements,
         child.target,
     )?;
-    let start_seconds = sample_time_seconds_f32(parent_start) + child.start_seconds;
-    let (start_time, duration) = prepared_timing(start_seconds, duration_seconds)?;
+    let start_time = child.start_time;
+    let duration = child.duration;
     match &definition.implementation {
         EffectImplementation::Dsl(definition_compiled) => {
             let EffectRef::Custom(effect_id) = &effect_ref else {
                 unreachable!("DSL effects are custom")
             };
-            let compiled = context
-                .compiled_effects
-                .entry(effect_id.clone())
-                .or_insert_with(|| Arc::new(definition_compiled.clone()))
-                .clone();
-            let bound_params = compiled.bind_params_cached(&child.params, context.bind_cache)?;
+            let bound_params =
+                definition_compiled.bind_params_pairs_cached(&child.params, context.bind_cache)?;
             match definition.kind {
                 RootEffectKind::Sample => {
+                    let program = context
+                        .sample_programs
+                        .entry(effect_id.clone())
+                        .or_insert_with(|| Arc::new(definition_compiled.bytecode.clone()))
+                        .clone();
+                    let target = sorted_sample_target(&target);
+                    let reuse_samples = PreparedEffect::target_repeats_context(&target);
                     context.effects.push(PreparedEffect {
-                        layer_id: context.layer_id.clone(),
                         start_time,
                         duration,
-                        sample_groups: prepare_sample_groups_for_effect(
-                            context.target_cache,
-                            &compiled,
-                            &target,
-                        ),
                         target,
-                        name: definition.display_name.clone(),
+                        reuse_samples,
                         implementation: PreparedEffectImplementation::Dsl {
-                            definition: compiled,
+                            program,
                             bound_params,
                         },
-                        params: child.params,
-                        automation: Vec::new(),
+                        automation: None,
                     });
                     Ok(())
                 }
                 RootEffectKind::Generator => expand_generator(
                     context,
-                    &compiled,
+                    definition_compiled,
                     &bound_params,
                     GeneratorExpansion {
                         start_time,
@@ -286,32 +221,32 @@ fn prepare_generated_child(
             }
         }
         EffectImplementation::Native(builtin) => {
-            let bound = native_effect::bind(*builtin, &child.params)?;
+            let params = BoundParams::bind_pairs_cached(
+                &definition.params,
+                &child.params,
+                context.bind_cache,
+            )?;
+            let bound = native_effect::bind_prepared(*builtin, params)?;
             match definition.kind {
                 RootEffectKind::Sample => {
-                    let BoundNativeEffect::Sample(sample) = bound else {
+                    let BoundNativeEffect::Sample { sample, .. } = bound else {
                         return Err(RenderError::GeneratorPrepare {
                             message: "native sample effect bound as generator".to_string(),
                         });
                     };
                     let implementation = PreparedEffectImplementation::Native {
-                        builtin: Some(*builtin),
                         sample,
+                        params: None,
                     };
+                    let target = sorted_sample_target(&target);
+                    let reuse_samples = PreparedEffect::target_repeats_context(&target);
                     context.effects.push(PreparedEffect {
-                        layer_id: context.layer_id.clone(),
                         start_time,
                         duration,
-                        sample_groups: prepare_sample_groups_for_implementation(
-                            context.target_cache,
-                            &implementation,
-                            &target,
-                        ),
                         target,
-                        name: definition.display_name.clone(),
+                        reuse_samples,
                         implementation,
-                        params: child.params,
-                        automation: Vec::new(),
+                        automation: None,
                     });
                     Ok(())
                 }
@@ -330,17 +265,17 @@ fn prepare_generated_child(
 
 fn validate_generated_params(
     declarations: &[ParamDecl],
-    params: &IndexMap<Identifier, Value>,
+    params: &[(Identifier, Value)],
 ) -> Result<(), RenderError> {
-    for key in params.keys() {
-        if !declarations.iter().any(|param| &param.name == key) {
+    for (key, _) in params {
+        if !declarations.iter().any(|param| param.name == *key) {
             return Err(RenderError::GeneratorPrepare {
                 message: format!("unknown generated param `{}`", key.as_str()),
             });
         }
     }
     for param in declarations {
-        let Some(value) = params.get(&param.name) else {
+        let Some((_, value)) = params.iter().find(|(name, _)| *name == param.name) else {
             if param.default.is_none() {
                 return Err(RenderError::GeneratorPrepare {
                     message: format!("missing generated param `{}`", param.name.as_str()),
@@ -383,13 +318,13 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
 
 fn target_groups_from_pixels(pixels: &[PreparedTargetPixel]) -> Vec<Arc<TargetItemValue>> {
     vec![Arc::new(TargetItemValue {
-        pixels: Arc::new(pixels.iter().map(target_pixel_value).collect()),
+        pixels: Arc::from(pixels.iter().map(target_pixel_value).collect::<Vec<_>>()),
     })]
 }
 
 fn generator_context_target(
     cache: &mut PrepareTargetCache,
-    prepared_target: &Arc<Vec<PreparedTargetPixel>>,
+    prepared_target: &Arc<[PreparedTargetPixel]>,
 ) -> Arc<TargetValue> {
     let key = arc_key(prepared_target);
     if let Some(entry) = cache.generator_context_targets.get(&key)
@@ -412,10 +347,10 @@ fn generator_context_target(
 
 fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
     TargetPixelValue {
-        element_index: pixel.element_index as i32,
-        element_cell_index: pixel.element_cell_index as i32,
-        pixel_index: pixel.pixel_index as i32,
-        pixel_count: pixel.pixel_count as i32,
+        element_index: pixel.element_index() as i32,
+        element_cell_index: pixel.element_cell_index() as i32,
+        pixel_index: pixel.pixel_index() as i32,
+        pixel_count: pixel.pixel_count() as i32,
         pixel_fraction: pixel.pixel_fraction,
     }
 }
@@ -458,13 +393,13 @@ fn prepared_pixels_from_generated_target(
                 usize::try_from(pixel.pixel_count).map_err(|_| RenderError::GeneratorPrepare {
                     message: "generated target pixel context count cannot be negative".to_string(),
                 })?;
-            Ok(PreparedTargetPixel {
+            PreparedTargetPixel::new(
                 element_index,
                 element_cell_index,
                 pixel_index,
                 pixel_count,
-                pixel_fraction: pixel.pixel_fraction,
-            })
+                pixel.pixel_fraction,
+            )
         })
         .collect()
 }
@@ -473,14 +408,14 @@ fn prepared_pixels_from_generated_target_cached(
     cache: &mut PrepareTargetCache,
     elements: &[PreparedElement],
     target: Arc<TargetItemValue>,
-) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
+) -> Result<Arc<[PreparedTargetPixel]>, RenderError> {
     let key = arc_key(&target);
     if let Some(entry) = cache.generated_targets.get(&key)
         && Arc::ptr_eq(&entry.source, &target)
     {
         return Ok(Arc::clone(&entry.pixels));
     }
-    let pixels = Arc::new(prepared_pixels_from_generated_target(
+    let pixels = Arc::from(prepared_pixels_from_generated_target(
         elements,
         Arc::clone(&target),
     )?);

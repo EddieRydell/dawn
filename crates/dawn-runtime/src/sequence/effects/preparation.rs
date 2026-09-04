@@ -1,25 +1,47 @@
+use crate::RenderError;
+use crate::sequence::effects::generators::{
+    GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
+};
 use crate::sequence::effects::parameters::{EffectParamTiming, prepare_params};
-use crate::*;
-use dawn_language::sequence::{AutomationTarget, AutomationValue, automation_value_at};
+use crate::sequence::effects::sampling::apply_bound_automation;
+use crate::sequence::elements::PreparedElement;
+use crate::sequence::renderer::{
+    PrepareTargetCache, PreparedAutomation, PreparedEffect, PreparedEffectAutomation,
+    PreparedEffectImplementation,
+};
+use crate::sequence::targets::{
+    PreparedTargetPixel, generator_expansion_targets, prepare_target, prepare_target_pixels_cached,
+    sorted_sample_target,
+};
+use dawn_language::dsl::{
+    BoundParams, BytecodeProgram, DslBindCache, EffectKind, Identifier, ParamDecl,
+};
+use dawn_language::effect::{EffectDefinitionId, EffectImplementation, EffectInstId, EffectRef};
+use dawn_language::element::ElementNodeId;
+use dawn_language::model::DawnProject;
+use dawn_language::native_effect::{self, BoundNativeEffect};
+use dawn_language::sequence::{AutomationBinding, AutomationClip, AutomationTarget, Sequence};
+use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub(crate) struct PrepareEffectContext<'a> {
     pub(crate) project: &'a DawnProject,
     pub(crate) sequence: &'a Sequence,
-    pub(crate) layer_id: SequenceLayerId,
     pub(crate) elements: &'a [PreparedElement],
     pub(crate) element_ids: &'a IndexSet<ElementNodeId>,
     pub(crate) groups: &'a IndexMap<ElementNodeId, Vec<ElementNodeId>>,
     pub(crate) effects: &'a mut Vec<PreparedEffect>,
     pub(crate) generated_child_count: &'a mut usize,
     pub(crate) bind_cache: &'a mut DslBindCache,
-    pub(crate) compiled_effects: &'a mut HashMap<EffectDefinitionId, Arc<CompiledEffect>>,
+    pub(crate) sample_programs: &'a mut HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
     pub(crate) target_cache: &'a mut PrepareTargetCache,
 }
 
 pub(crate) fn prepare_effect_inst(
     context: PrepareEffectContext<'_>,
     effect: &dawn_language::effect::EffectInst,
-) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
+) -> Result<Arc<[PreparedTargetPixel]>, RenderError> {
     if effect.duration.is_zero() {
         return Err(RenderError::InvalidTiming {
             reason: "effect duration must be positive".to_string(),
@@ -50,12 +72,11 @@ pub(crate) fn prepare_effect_inst(
         context.elements,
         &effect.scope,
     )?;
-    let start_seconds = effect.start.as_seconds_f32();
     let param_timing = EffectParamTiming {
         start: start_time,
         duration,
     };
-    let automation = automation_for_effect(context.sequence, &effect.id);
+    let automation = automation_for_effect(context.sequence, &effect.id, &definition.params)?;
     let params = prepare_params(
         context.project,
         context.sequence,
@@ -69,22 +90,24 @@ pub(crate) fn prepare_effect_inst(
                     let EffectRef::Custom(id) = &effect.definition else {
                         unreachable!("DSL effects are custom")
                     };
-                    let compiled = context
-                        .compiled_effects
+                    let program = context
+                        .sample_programs
                         .entry(id.clone())
-                        .or_insert_with(|| Arc::new(compiled.clone()))
+                        .or_insert_with(|| Arc::new(compiled.bytecode.clone()))
                         .clone();
                     PreparedEffectImplementation::Dsl {
                         bound_params: compiled.bind_params_cached(&params, context.bind_cache)?,
-                        definition: compiled,
+                        program,
                     }
                 }
                 EffectImplementation::Native(builtin) => {
-                    match native_effect::bind(*builtin, &params)? {
-                        BoundNativeEffect::Sample(sample) => PreparedEffectImplementation::Native {
-                            builtin: Some(*builtin),
-                            sample,
-                        },
+                    match native_effect::bind_cached(*builtin, &params, context.bind_cache)? {
+                        BoundNativeEffect::Sample { sample, params } => {
+                            PreparedEffectImplementation::Native {
+                                sample,
+                                params: (!automation.is_empty()).then_some((*builtin, params)),
+                            }
+                        }
                         _ => {
                             return Err(RenderError::GeneratorPrepare {
                                 message: "native sample effect bound as generator".to_string(),
@@ -93,32 +116,33 @@ pub(crate) fn prepare_effect_inst(
                     }
                 }
             };
+            let target = sorted_sample_target(&target);
+            let reuse_samples = PreparedEffect::target_repeats_context(&target);
+            let automation = (!automation.is_empty()).then(|| {
+                Box::new(PreparedEffectAutomation {
+                    bindings: automation.into_boxed_slice(),
+                })
+            });
             context.effects.push(PreparedEffect {
-                layer_id: context.layer_id.clone(),
                 start_time,
                 duration,
                 target: Arc::clone(&target),
-                sample_groups: prepare_sample_groups_for_implementation(
-                    context.target_cache,
-                    &implementation,
-                    &target,
-                ),
-                name: definition.display_name.clone(),
+                reuse_samples,
                 implementation,
-                params,
                 automation,
             });
         }
         EffectKind::Generator => {
-            let params = apply_automation_params(params, &automation, start_seconds)?;
+            let mut params =
+                BoundParams::bind_cached(&definition.params, &params, context.bind_cache)?;
+            apply_bound_automation(&mut params, &automation, start_time)?;
             let mut generator_context = GeneratorPrepareContext {
                 project: context.project,
-                layer_id: context.layer_id.clone(),
                 elements: context.elements,
                 effects: context.effects,
                 generated_child_count: context.generated_child_count,
                 bind_cache: context.bind_cache,
-                compiled_effects: context.compiled_effects,
+                sample_programs: context.sample_programs,
                 target_cache: context.target_cache,
             };
             for expansion_target in generator_expansion_targets(&target, &effect.scope) {
@@ -127,17 +151,10 @@ pub(crate) fn prepare_effect_inst(
                         let EffectRef::Custom(id) = &effect.definition else {
                             unreachable!("DSL effects are custom")
                         };
-                        let compiled = generator_context
-                            .compiled_effects
-                            .entry(id.clone())
-                            .or_insert_with(|| Arc::new(compiled.clone()))
-                            .clone();
-                        let bound =
-                            compiled.bind_params_cached(&params, generator_context.bind_cache)?;
                         expand_generator(
                             &mut generator_context,
-                            &compiled,
-                            &bound,
+                            compiled,
+                            &params,
                             GeneratorExpansion {
                                 start_time,
                                 duration,
@@ -148,7 +165,7 @@ pub(crate) fn prepare_effect_inst(
                         )?;
                     }
                     EffectImplementation::Native(builtin) => {
-                        let bound = native_effect::bind(*builtin, &params)?;
+                        let bound = native_effect::bind_prepared(*builtin, params.clone())?;
                         expand_native_generator(
                             &mut generator_context,
                             &bound,
@@ -168,7 +185,8 @@ pub(crate) fn prepare_effect_inst(
 pub(crate) fn automation_for_effect(
     sequence: &Sequence,
     target_effect_id: &EffectInstId,
-) -> Vec<PreparedAutomation> {
+    params: &[ParamDecl],
+) -> Result<Vec<PreparedAutomation>, RenderError> {
     sequence
         .automation_clips
         .iter()
@@ -182,7 +200,7 @@ pub(crate) fn automation_for_effect(
                             if effect_id == target_effect_id
                     )
                 })
-                .map(move |binding| prepare_automation(clip, binding))
+                .map(move |binding| prepare_automation(clip, binding, params))
         })
         .collect()
 }
@@ -190,37 +208,37 @@ pub(crate) fn automation_for_effect(
 pub(crate) fn prepare_automation(
     clip: &AutomationClip,
     binding: &AutomationBinding,
-) -> PreparedAutomation {
-    let mut clip = clip.clone();
-    clip.curve
+    params: &[ParamDecl],
+) -> Result<PreparedAutomation, RenderError> {
+    let param = automation_param(binding);
+    let param_index = params
+        .iter()
+        .position(|declaration| declaration.name == *param)
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("automation targets unknown parameter `{}`", param.as_str()),
+        })?;
+    let start = dawn_language::values::sample_time_from_dawn_time(&clip.start).map_err(|_| {
+        RenderError::InvalidTiming {
+            reason: "automation start exceeds the runtime clock range".to_string(),
+        }
+    })?;
+    let duration = dawn_language::values::sample_duration_from_dawn_duration(&clip.duration)
+        .map_err(|_| RenderError::InvalidTiming {
+            reason: "automation duration exceeds the runtime clock range".to_string(),
+        })?;
+    let mut curve = clip.curve.clone();
+    curve
         .points
         .sort_by(|left, right| left.position.total_cmp(&right.position));
-    PreparedAutomation {
-        clip,
-        binding: binding.clone(),
-    }
-}
-
-pub(crate) fn apply_automation_params(
-    mut params: IndexMap<Identifier, Value>,
-    automation: &[PreparedAutomation],
-    sample_seconds: f32,
-) -> Result<IndexMap<Identifier, Value>, RenderError> {
-    for automation in automation {
-        let value = automation_value_at(&automation.clip, &automation.binding, sample_seconds)
-            .map(|value| match value {
-                AutomationValue::Int(value) => Value::Int(value),
-                AutomationValue::Float(value) => Value::Float(value),
-                AutomationValue::Bool(value) => Value::Bool(value),
-                AutomationValue::Enum(value) => Value::Enum(value),
-                AutomationValue::Curve(value) => Value::Curve(Arc::new(value)),
-            })
-            .ok_or_else(|| RenderError::BadGraph {
-                message: "enum automation mapping has no values".to_string(),
-            })?;
-        params.insert(automation_param(&automation.binding).clone(), value);
-    }
-    Ok(params)
+    Ok(PreparedAutomation {
+        start,
+        duration,
+        curve: Arc::new(curve),
+        mapping: binding.mapping.clone(),
+        param_index: u16::try_from(param_index).map_err(|_| RenderError::BadGraph {
+            message: "effect or operator has too many parameters".to_string(),
+        })?,
+    })
 }
 
 pub(crate) fn automation_param(binding: &AutomationBinding) -> &Identifier {

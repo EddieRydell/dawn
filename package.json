@@ -17,10 +17,10 @@
     "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "check": "pnpm generate:bindings && pnpm typecheck && pnpm lint && pnpm --dir apps/desktop/frontend knip && pnpm frontend:build && pnpm frontend:test && pnpm rust:fmt && pnpm rust:check && pnpm rust:test && pnpm rust:clippy",
     "ci": "pnpm check",
-    "bench:effect-vm": "cargo bench -p dawn-language --bench effect_vm_bench && cargo bench -p dawn-runtime --bench render_bench",
+    "bench:effect-vm": "pnpm bench:effect-vm:quick && cargo bench -p dawn-language --bench effect_vm_bench && cargo bench -p dawn-runtime --bench render_bench",
     "bench:effect-vm:quick": "cargo bench -p dawn-language --bench effect_vm_bench -- --quick && cargo bench -p dawn-runtime --bench render_bench -- --quick",
-    "bench:effect-vm:save": "cargo bench -p dawn-language --bench effect_vm_bench -- --save-baseline effect-vm && cargo bench -p dawn-runtime --bench render_bench -- --save-baseline effect-vm",
-    "bench:effect-vm:compare": "cargo bench -p dawn-language --bench effect_vm_bench -- --baseline effect-vm && cargo bench -p dawn-runtime --bench render_bench -- --baseline effect-vm",
+    "bench:effect-vm:save": "pnpm bench:effect-vm:quick && cargo bench -p dawn-language --bench effect_vm_bench -- --save-baseline effect-vm && cargo bench -p dawn-runtime --bench render_bench -- --save-baseline effect-vm",
+    "bench:effect-vm:compare": "pnpm bench:effect-vm:quick && cargo bench -p dawn-language --bench effect_vm_bench -- --baseline effect-vm && cargo bench -p dawn-runtime --bench render_bench -- --baseline effect-vm",
     "build": "pnpm generate:bindings && pnpm --dir apps/desktop/frontend build",
     "tauri": "pnpm --dir apps/desktop exec tauri"
   }

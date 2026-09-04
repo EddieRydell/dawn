@@ -269,7 +269,10 @@ pub(super) fn write_effect_fields(
         );
     }
     let reference = match definition {
-        EffectRef::Builtin(builtin) => format!("builtins.{}", builtin.definition().source_name),
+        EffectRef::Builtin(builtin) => format!(
+            "builtins.{}",
+            dawn_language::effect::builtin_effect_definition(*builtin).source_name
+        ),
         EffectRef::Custom(definition) => write_source_reference(
             session,
             from_document,

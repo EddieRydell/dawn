@@ -6,7 +6,7 @@ use super::ast::{
 use super::diagnostic::Diagnostic;
 use super::lexer::{Keyword, TextSpan, Token, TokenKind, lex};
 use super::types::{Identifier, Type, Value};
-use crate::effect::BuiltinEffect;
+use crate::effect::builtin_effect_from_source_name;
 use crate::values::Color;
 use std::sync::Arc;
 
@@ -383,7 +383,7 @@ impl<'source> Parser<'source> {
             return Some(GeneratedEffectRef::Local(namespace_or_local));
         }
 
-        let Some(builtin) = BuiltinEffect::from_source_name(effect_name.as_str()) else {
+        let Some(builtin) = builtin_effect_from_source_name(effect_name.as_str()) else {
             self.error(
                 effect_span,
                 format!("unknown built-in effect `{}`", effect_name.as_str()),
@@ -764,7 +764,7 @@ impl<'source> Parser<'source> {
                     };
                     values.push(value);
                 }
-                Some(Value::Array(Arc::new(values)))
+                Some(Value::Array(Arc::from(values)))
             }
             _ => {
                 self.error(expr.span, "param defaults must be literal values");

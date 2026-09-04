@@ -88,16 +88,3 @@ pub(crate) fn prepare_elements(
     }
     Ok((elements, groups))
 }
-
-pub(crate) fn element_cell_offsets(elements: &[PreparedElement]) -> (Vec<usize>, usize) {
-    let mut pixel_count = 0usize;
-    let offsets = elements
-        .iter()
-        .map(|element| {
-            let offset = pixel_count;
-            pixel_count += element.pixel_count;
-            offset
-        })
-        .collect();
-    (offsets, pixel_count)
-}

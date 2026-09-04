@@ -1,6 +1,7 @@
 use super::GeneratedEffectRef;
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
+pub use dawn_core::dsl::{OperatorInputDecl, ParamDecl};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Module {
@@ -17,22 +18,10 @@ pub(crate) struct OperatorDecl {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct OperatorInputDecl {
-    pub name: Identifier,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EffectDecl {
     pub name: Identifier,
     pub params: Vec<ParamDecl>,
     pub entrypoint: FunctionDecl,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ParamDecl {
-    pub name: Identifier,
-    pub ty: Type,
-    pub default: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

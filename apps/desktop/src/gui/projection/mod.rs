@@ -478,7 +478,7 @@ fn effect_definitions(session: &ProjectSession) -> Vec<SequenceEffectDefinition>
     BuiltinEffect::ALL
         .into_iter()
         .map(|builtin| {
-            let definition = builtin.definition();
+            let definition = dawn_language::effect::builtin_effect_definition(builtin);
             SequenceEffectDefinition {
                 name: definition.display_name.clone(),
                 kind: match definition.kind {

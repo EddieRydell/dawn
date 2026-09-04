@@ -2,7 +2,8 @@ use super::ast::{BinaryOp, UnaryOp};
 use super::bytecode::{
     ArithmeticOp, BoolSlot, BytecodeProgram, ColorBinary, ColorSlot, CompareOp, ContextRead,
     FloatBinary, FloatSlot, FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot,
-    LocalId, MarkOp, ParamId, RefSlot, SlotLayout, Target, TargetItemsOp, ValueSlot,
+    LocalId, MarkOp, ParamId, PoolSpan, RefSlot, SlotLayout, Target, TargetItemsOp, TargetMember,
+    ValueSlot,
 };
 use super::checked::{
     CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule,
@@ -50,6 +51,9 @@ fn compile_operator(operator: CheckedOperatorDecl) -> CompiledOperator {
 struct FunctionCompiler {
     instructions: Vec<Instruction>,
     constants: Vec<Value>,
+    value_operands: Vec<ValueSlot>,
+    emit_fields: Vec<(Identifier, ValueSlot)>,
+    generated_effects: Vec<super::GeneratedEffectRef>,
     scopes: Vec<IndexMap<Identifier, Binding>>,
     param_types: Vec<Type>,
     layout: SlotLayout,
@@ -181,6 +185,9 @@ impl FunctionCompiler {
         Self {
             instructions: Vec::new(),
             constants: Vec::new(),
+            value_operands: Vec::new(),
+            emit_fields: Vec::new(),
+            generated_effects: Vec::new(),
             scopes: vec![param_scope],
             param_types: params.iter().map(|param| param.ty.clone()).collect(),
             layout: SlotLayout::default(),
@@ -216,8 +223,11 @@ impl FunctionCompiler {
         });
         self.emit(Instruction::Return(void));
         BytecodeProgram {
-            instructions: self.instructions,
-            constants: self.constants,
+            instructions: self.instructions.into_boxed_slice(),
+            constants: self.constants.into_boxed_slice(),
+            value_operands: self.value_operands.into_boxed_slice(),
+            emit_fields: self.emit_fields.into_boxed_slice(),
+            generated_effects: self.generated_effects.into_boxed_slice(),
             layout: self.layout,
         }
     }
@@ -258,7 +268,7 @@ impl FunctionCompiler {
                     }
                     None => {
                         let slot = self.allocate_local(name, &ty);
-                        self.emit(Instruction::LoadDefault { dst: slot, ty });
+                        self.emit_default(slot, &ty);
                     }
                 }
             }
@@ -345,7 +355,9 @@ impl FunctionCompiler {
                 let fields = fields
                     .into_iter()
                     .map(|(name, value)| (name, self.compile_expr(value)))
-                    .collect();
+                    .collect::<Vec<_>>();
+                let fields = self.add_emit_fields(fields);
+                let effect = self.add_generated_effect(effect);
                 self.emit(Instruction::Emit { effect, fields });
             }
             CheckedStmt::Return(expr) => {
@@ -404,7 +416,8 @@ impl FunctionCompiler {
                 let item_slots = items
                     .into_iter()
                     .map(|item| self.compile_expr(item))
-                    .collect();
+                    .collect::<Vec<_>>();
+                let item_slots = self.add_value_operands(item_slots);
                 let dst = self.allocate_slot(&result_ty);
                 let dst = self.ref_slot(dst);
                 self.emit(Instruction::MakeArray {
@@ -439,17 +452,14 @@ impl FunctionCompiler {
                 self.emit(Instruction::Member {
                     dst,
                     target,
-                    member,
+                    member: target_member(&member),
                 });
                 dst
             }
             CheckedExprKind::Call { callee, args } => {
                 let CheckedExprKind::Variable(name) = callee.kind else {
                     let dst = self.allocate_slot(&result_ty);
-                    self.emit(Instruction::LoadDefault {
-                        dst,
-                        ty: Type::Void,
-                    });
+                    self.emit_default(dst, &Type::Void);
                     return dst;
                 };
                 self.compile_builtin_call(name, args, result_ty)
@@ -773,10 +783,7 @@ impl FunctionCompiler {
                         right: self.color_slot(right),
                         amount,
                     }),
-                    _ => self.emit(Instruction::LoadDefault {
-                        dst,
-                        ty: Type::Void,
-                    }),
+                    _ => self.emit_default(dst, &Type::Void),
                 }
             }
             "rgb" => {
@@ -799,6 +806,7 @@ impl FunctionCompiler {
             }
             "srand" | "rand" => {
                 let args = self.compile_float_args(args);
+                let args = self.add_float_operands(args);
                 let dst = self.float_slot(dst);
                 self.emit(Instruction::Rand { dst, args });
             }
@@ -899,6 +907,7 @@ impl FunctionCompiler {
                     _ => unreachable!("matched mark builtin"),
                 };
                 let args = self.compile_args(args);
+                let args = self.add_value_operands(args);
                 self.emit(Instruction::Mark { dst, op, args });
             }
             "fixtures" | "pixels" | "sections" | "count" | "pick" => {
@@ -911,12 +920,10 @@ impl FunctionCompiler {
                     _ => unreachable!("matched target builtin"),
                 };
                 let args = self.compile_args(args);
+                let args = self.add_value_operands(args);
                 self.emit(Instruction::TargetItems { dst, op, args });
             }
-            _ => self.emit(Instruction::LoadDefault {
-                dst,
-                ty: Type::Void,
-            }),
+            _ => self.emit_default(dst, &Type::Void),
         }
         dst
     }
@@ -1182,6 +1189,34 @@ impl FunctionCompiler {
         self.constants.len() - 1
     }
 
+    fn emit_default(&mut self, dst: ValueSlot, ty: &Type) {
+        let constant = self.add_constant(ty.default_value());
+        self.emit(Instruction::LoadConst { dst, constant });
+    }
+
+    fn add_value_operands(&mut self, values: Vec<ValueSlot>) -> PoolSpan {
+        let span = pool_span(self.value_operands.len(), values.len());
+        self.value_operands.extend(values);
+        span
+    }
+
+    fn add_float_operands(&mut self, values: Vec<FloatSlot>) -> PoolSpan {
+        self.add_value_operands(values.into_iter().map(ValueSlot::Float).collect())
+    }
+
+    fn add_emit_fields(&mut self, values: Vec<(Identifier, ValueSlot)>) -> PoolSpan {
+        let span = pool_span(self.emit_fields.len(), values.len());
+        self.emit_fields.extend(values);
+        span
+    }
+
+    fn add_generated_effect(&mut self, effect: super::GeneratedEffectRef) -> u32 {
+        debug_assert!(u32::try_from(self.generated_effects.len()).is_ok());
+        let index = self.generated_effects.len() as u32;
+        self.generated_effects.push(effect);
+        index
+    }
+
     fn current_target(&self) -> Target {
         self.instructions.len()
     }
@@ -1207,6 +1242,25 @@ impl FunctionCompiler {
             } => *existing = target,
             _ => {}
         }
+    }
+}
+
+fn pool_span(start: usize, len: usize) -> PoolSpan {
+    debug_assert!(u32::try_from(start).is_ok() && u32::try_from(len).is_ok());
+    PoolSpan {
+        start: start as u32,
+        len: len as u32,
+    }
+}
+
+fn target_member(member: &Identifier) -> TargetMember {
+    match member.as_str() {
+        "element_index" => TargetMember::ElementIndex,
+        "element_cell_index" => TargetMember::ElementCellIndex,
+        "pixel_index" => TargetMember::PixelIndex,
+        "pixel_count" => TargetMember::PixelCount,
+        "pixel_fraction" => TargetMember::PixelFraction,
+        _ => unreachable!("checked TargetItem member is known"),
     }
 }
 

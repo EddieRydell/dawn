@@ -149,6 +149,20 @@ pub enum PatchValue {
     Slots(Vec<u8>),
 }
 
+impl PatchValue {
+    pub fn empty(value_type: &PatchValueType) -> Self {
+        let width = value_type.width();
+        match value_type {
+            PatchValueType::Color { .. } => Self::Colors(Vec::with_capacity(width)),
+            PatchValueType::Scalar { .. } => Self::Scalars(Vec::with_capacity(width)),
+            PatchValueType::Indexed { .. } => Self::Indexed(Vec::with_capacity(width)),
+            PatchValueType::FixtureState { .. } => Self::FixtureStates(Vec::with_capacity(width)),
+            PatchValueType::Components { .. } => Self::Components(Vec::with_capacity(width)),
+            PatchValueType::Slots { .. } => Self::Slots(Vec::with_capacity(width)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FilterEvaluationError {
     TypeMismatch,
@@ -166,7 +180,28 @@ pub fn evaluate_filter(
     input: &PatchValue,
     profiles: &FixtureProfileStore,
 ) -> Result<Vec<PatchValue>, FilterEvaluationError> {
-    let output = match (filter, input) {
+    let mut outputs = (0..filter.output_port_count())
+        .map(|port| {
+            let output_type = filter
+                .output_type(PatchPortId(port))
+                .ok_or(FilterEvaluationError::TypeMismatch)?;
+            Ok(PatchValue::empty(&output_type))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    evaluate_filter_into(filter, input, profiles, &mut outputs)?;
+    Ok(outputs)
+}
+
+pub fn evaluate_filter_into(
+    filter: &FilterDefinition,
+    input: &PatchValue,
+    profiles: &FixtureProfileStore,
+    outputs: &mut [PatchValue],
+) -> Result<(), FilterEvaluationError> {
+    if outputs.len() != usize::from(filter.output_port_count()) {
+        return Err(FilterEvaluationError::TypeMismatch);
+    }
+    match (filter, input) {
         (
             FilterDefinition::ColorBreakdown {
                 capability,
@@ -175,8 +210,14 @@ pub fn evaluate_filter(
             PatchValue::Colors(colors),
         ) => {
             check_width(*cell_count, colors.len())?;
-            let mut components =
-                Vec::with_capacity(*cell_count * color_component_count(capability));
+            let [PatchValue::Components(components)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            components.clear();
+            let required = cell_count * color_component_count(capability);
+            if components.capacity() < required {
+                components.reserve(required);
+            }
             for color in colors {
                 let rgb = [
                     f32::from(color.red) / 255.0,
@@ -200,16 +241,18 @@ pub fn evaluate_filter(
                     }
                 }
             }
-            PatchValue::Components(components)
         }
         (FilterDefinition::DimmingCurve { curve, width }, PatchValue::Components(values)) => {
             check_width(*width, values.len())?;
-            PatchValue::Components(
+            let [PatchValue::Components(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            output.clear();
+            output.extend(
                 values
                     .iter()
-                    .map(|value| apply_dimming_curve(curve, *value))
-                    .collect(),
-            )
+                    .map(|value| apply_dimming_curve(curve, *value)),
+            );
         }
         (
             FilterDefinition::ScaleInvert {
@@ -220,25 +263,36 @@ pub fn evaluate_filter(
             PatchValue::Components(values),
         ) => {
             check_width(*width, values.len())?;
-            PatchValue::Components(
-                values
-                    .iter()
-                    .map(|value| {
-                        let value = if *invert {
-                            1.0 - value.clamp(0.0, 1.0)
-                        } else {
-                            *value
-                        };
-                        (value * scale).clamp(0.0, 1.0)
-                    })
-                    .collect(),
-            )
+            let [PatchValue::Components(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            output.clear();
+            output.extend(values.iter().map(|value| {
+                let value = if *invert {
+                    1.0 - value.clamp(0.0, 1.0)
+                } else {
+                    *value
+                };
+                (value * scale).clamp(0.0, 1.0)
+            }));
         }
-        (FilterDefinition::FanOut { width, outputs }, PatchValue::Components(values)) => {
+        (
+            FilterDefinition::FanOut {
+                width,
+                outputs: output_count,
+            },
+            PatchValue::Components(values),
+        ) => {
             check_width(*width, values.len())?;
-            return Ok((0..*outputs)
-                .map(|_| PatchValue::Components(values.clone()))
-                .collect());
+            if usize::from(*output_count) != outputs.len() {
+                return Err(FilterEvaluationError::TypeMismatch);
+            }
+            for output in outputs {
+                let PatchValue::Components(output) = output else {
+                    return Err(FilterEvaluationError::TypeMismatch);
+                };
+                output.clone_from(values);
+            }
         }
         (
             FilterDefinition::ComponentReorder {
@@ -250,33 +304,43 @@ pub fn evaluate_filter(
         ) => {
             let per_cell = usize::from(*components_per_cell);
             check_width(per_cell * *cell_count, values.len())?;
-            let mut output = Vec::with_capacity(values.len());
+            let [PatchValue::Components(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            output.clear();
             for cell in values.chunks_exact(per_cell) {
                 output.extend(order.iter().map(|component| cell[usize::from(*component)]));
             }
-            PatchValue::Components(output)
         }
         (FilterDefinition::IndexedValueMapping { entries, width }, PatchValue::Indexed(values)) => {
             check_width(*width, values.len())?;
-            PatchValue::Components(
-                values
-                    .iter()
-                    .map(|value| {
-                        entries
-                            .get(value)
-                            .copied()
-                            .ok_or(FilterEvaluationError::MissingIndexedMapping(*value))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
+            let [PatchValue::Components(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            output.clear();
+            for value in values {
+                output.push(
+                    entries
+                        .get(value)
+                        .copied()
+                        .ok_or(FilterEvaluationError::MissingIndexedMapping(*value))?,
+                );
+            }
         }
         (FilterDefinition::Quantize8 { width }, PatchValue::Components(values)) => {
             check_width(*width, values.len())?;
-            PatchValue::Slots(values.iter().map(|value| quantize8(*value)).collect())
+            let [PatchValue::Slots(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            output.clear();
+            output.extend(values.iter().map(|value| quantize8(*value)));
         }
         (FilterDefinition::Quantize16 { width, byte_order }, PatchValue::Components(values)) => {
             check_width(*width, values.len())?;
-            let mut slots = Vec::with_capacity(*width * 2);
+            let [PatchValue::Slots(slots)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            slots.clear();
             for value in values {
                 let encoded = quantize16(*value).to_be_bytes();
                 match byte_order {
@@ -284,7 +348,6 @@ pub fn evaluate_filter(
                     ByteOrder::FineCoarse => slots.extend([encoded[1], encoded[0]]),
                 }
             }
-            PatchValue::Slots(slots)
         }
         (
             FilterDefinition::FixtureProfileEncoding {
@@ -299,15 +362,14 @@ pub fn evaluate_filter(
                 .definitions
                 .get(profile)
                 .ok_or_else(|| FilterEvaluationError::MissingFixtureProfile(profile.clone()))?;
-            PatchValue::Slots(encode_fixture_states(
-                profile_definition,
-                states,
-                *slot_count,
-            )?)
+            let [PatchValue::Slots(output)] = outputs else {
+                return Err(FilterEvaluationError::TypeMismatch);
+            };
+            encode_fixture_states_into(profile_definition, states, *slot_count, output)?;
         }
         _ => return Err(FilterEvaluationError::TypeMismatch),
-    };
-    Ok(vec![output])
+    }
+    Ok(())
 }
 
 pub fn apply_dimming_curve(curve: &DimmingCurve, value: f32) -> f32 {
@@ -354,20 +416,14 @@ fn check_width(expected: usize, actual: usize) -> Result<(), FilterEvaluationErr
     }
 }
 
-fn encode_fixture_states(
+fn encode_fixture_states_into(
     profile: &crate::fixture_profile::FixtureProfile,
     states: &[FixtureState],
     slot_count: usize,
-) -> Result<Vec<u8>, FilterEvaluationError> {
-    let mut output = vec![0; states.len() * slot_count];
-    let fine_functions = profile
-        .channels
-        .iter()
-        .filter_map(|channel| match channel.role {
-            FixtureChannelRole::Fine { function } => Some(function),
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
+    output: &mut Vec<u8>,
+) -> Result<(), FilterEvaluationError> {
+    output.clear();
+    output.resize(states.len() * slot_count, 0);
     for (fixture_index, state) in states.iter().enumerate() {
         for channel in &profile.channels {
             let slot = usize::from(channel.slot);
@@ -381,8 +437,7 @@ fn encode_fixture_states(
                     component,
                 } => {
                     let FixtureControlValue::Color(color) = state
-                        .functions
-                        .get(&function)
+                        .get(function)
                         .ok_or(FilterEvaluationError::MissingFixtureFunction)?
                     else {
                         return Err(FilterEvaluationError::TypeMismatch);
@@ -407,8 +462,7 @@ fn encode_fixture_states(
                         .get(&function)
                         .ok_or(FilterEvaluationError::MissingFixtureFunction)?;
                     let value = state
-                        .functions
-                        .get(&function)
+                        .get(function)
                         .ok_or(FilterEvaluationError::MissingFixtureFunction)?;
                     let normalized = match value {
                         FixtureControlValue::Normalized(value) => {
@@ -430,7 +484,7 @@ fn encode_fixture_states(
                                 .ok_or(FilterEvaluationError::MissingFixtureEntry)?;
                             let dmx = f32::from(entry.dmx_min)
                                 + f32::from(entry.dmx_max - entry.dmx_min) * range.clamp(0.0, 1.0);
-                            dmx / if fine_functions.contains(&function) {
+                            dmx / if has_fine_channel(profile, function) {
                                 65_535.0
                             } else {
                                 255.0
@@ -443,7 +497,9 @@ fn encode_fixture_states(
                     let encoded =
                         quantize16(apply_dimming_curve(&channel.curve, normalized)).to_be_bytes();
                     match channel.role {
-                        FixtureChannelRole::Coarse { .. } if fine_functions.contains(&function) => {
+                        FixtureChannelRole::Coarse { .. }
+                            if has_fine_channel(profile, function) =>
+                        {
                             encoded[0]
                         }
                         FixtureChannelRole::Fine { .. } => encoded[1],
@@ -455,7 +511,19 @@ fn encode_fixture_states(
             output[fixture_index * slot_count + slot] = encoded;
         }
     }
-    Ok(output)
+    Ok(())
+}
+
+fn has_fine_channel(
+    profile: &crate::fixture_profile::FixtureProfile,
+    function: crate::fixture_profile::FixtureFunctionId,
+) -> bool {
+    profile.channels.iter().any(|channel| {
+        matches!(
+            channel.role,
+            FixtureChannelRole::Fine { function: candidate } if candidate == function
+        )
+    })
 }
 
 #[derive(Clone, Debug, PartialEq)]

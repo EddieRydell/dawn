@@ -1,15 +1,11 @@
-use dawn_language::dsl::{CompiledEffect, DslBindCache, DslVmScratch, RunContext, RuntimeError};
-use dawn_language::native_effect::{self, BoundNativeEffect};
-use dawn_language::values::{Color, Marks, sample_time_seconds_f32};
+use dawn_language::dsl::{DslVmScratch, RunContext, RuntimeError};
+use dawn_language::native_effect::{self, NativeSample};
+use dawn_language::values::{Color, SampleTime};
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use super::preparation::apply_automation_params;
 use crate::sequence::color::compose_max;
 use crate::sequence::targets::PreparedTargetPixel;
-use crate::{
-    PrepareTargetCache, PreparedEffect, PreparedEffectImplementation, RenderError, arc_key,
-};
+use crate::{EffectAutomationScratch, PreparedEffect, PreparedEffectImplementation, RenderError};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreparedSampleContext {
@@ -36,12 +32,6 @@ impl From<PreparedSampleContext> for PreparedSampleContextKey {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedSampleContextGroup {
-    pub(crate) context: PreparedSampleContext,
-    pub(crate) target_indexes: Vec<usize>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct PreparedSampledEffectPixels {
     pub(crate) pixels: Vec<PreparedSampledEffectPixel>,
     pub(crate) groups: Option<Vec<PreparedSampledEffectPixelGroup>>,
@@ -65,47 +55,37 @@ pub(crate) struct TargetColorAddress {
     pub(crate) element_cell_index: usize,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct PreparedSampleGroupCacheEntry {
-    pub(crate) source: Arc<Vec<PreparedTargetPixel>>,
-    pub(crate) groups: Option<Arc<Vec<PreparedSampleContextGroup>>>,
-}
-
 pub(crate) fn render_sampled_effect_target_colors(
     effect: &PreparedEffect,
     effect_pixels: &PreparedSampledEffectPixels,
     rendered: &mut [Color],
     sample_time: dawn_language::values::SampleTime,
     scratch: &mut DslVmScratch,
-    bind_cache: &mut DslBindCache,
 ) -> Result<(), RenderError> {
-    let local_seconds = effect.local_seconds(sample_time);
+    let local_time = effect.local_time(sample_time);
     let progress = effect.progress(sample_time);
-    let automated =
-        effect_implementation_at(effect, sample_time_seconds_f32(sample_time), bind_cache)?;
-    let implementation = automated.as_ref().unwrap_or(&effect.implementation);
-    match implementation {
-        PreparedEffectImplementation::Dsl {
-            definition,
-            bound_params,
-        } => render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
-            definition.sample_bound(
-                bound_params,
-                &run_context(effect, sample_context, progress, local_seconds),
-                scratch,
-            )
-        }),
-        PreparedEffectImplementation::Native { sample, .. } => {
-            render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
-                sample.sample(&run_context(
-                    effect,
-                    sample_context,
-                    progress,
-                    local_seconds,
-                ))
-            })
-        }
-    }
+    let automated = effect_params_at(effect, sample_time)?;
+    let native_sample = match (&effect.implementation, automated.as_ref()) {
+        (
+            PreparedEffectImplementation::Native {
+                params: Some((builtin, _)),
+                ..
+            },
+            Some(params),
+        ) => Some(native_effect::prepare_sample(*builtin, params)?),
+        _ => None,
+    };
+    render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
+        sample_effect_group(
+            effect,
+            automated.as_ref(),
+            native_sample.as_ref(),
+            sample_context,
+            progress,
+            local_time,
+            scratch,
+        )
+    })
 }
 
 #[inline(always)]
@@ -128,8 +108,8 @@ fn render_sampled_effect_pixels(
     for sampled in &effect_pixels.pixels {
         let pixel = &sampled.pixel;
         let color = sample(PreparedSampleContext {
-            pixel_index: pixel.pixel_index,
-            pixel_count: pixel.pixel_count,
+            pixel_index: pixel.pixel_index(),
+            pixel_count: pixel.pixel_count(),
             pixel_fraction: pixel.pixel_fraction,
         })?;
         for row in &sampled.rows {
@@ -146,38 +126,39 @@ fn run_context(
     effect: &PreparedEffect,
     sample_context: PreparedSampleContext,
     progress: f32,
-    local_seconds: f32,
+    local_time: dawn_language::values::SampleDuration,
 ) -> RunContext {
     RunContext {
         progress,
-        seconds: local_seconds,
-        duration: effect.duration_seconds(),
+        time: local_time,
+        duration: effect.duration,
         pixel_index: sample_context.pixel_index as i32,
         pixel_count: sample_context.pixel_count as i32,
         pixel_fraction: sample_context.pixel_fraction,
-        global_marks: Marks { marks: Vec::new() },
     }
 }
 
 #[inline(always)]
 pub(crate) fn sample_effect_pixel(
     effect: &PreparedEffect,
-    implementation: &PreparedEffectImplementation,
+    params: Option<&dawn_language::dsl::BoundParams>,
+    native_sample: Option<&NativeSample>,
     pixel: &PreparedTargetPixel,
     progress: f32,
-    local_seconds: f32,
+    local_time: dawn_language::values::SampleDuration,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     sample_effect_group(
         effect,
-        implementation,
+        params,
+        native_sample,
         PreparedSampleContext {
-            pixel_index: pixel.pixel_index,
-            pixel_count: pixel.pixel_count,
+            pixel_index: pixel.pixel_index(),
+            pixel_count: pixel.pixel_count(),
             pixel_fraction: pixel.pixel_fraction,
         },
         progress,
-        local_seconds,
+        local_time,
         scratch,
     )
 }
@@ -185,136 +166,148 @@ pub(crate) fn sample_effect_pixel(
 #[inline(always)]
 pub(crate) fn sample_effect_group(
     effect: &PreparedEffect,
-    implementation: &PreparedEffectImplementation,
+    params: Option<&dawn_language::dsl::BoundParams>,
+    native_sample: Option<&NativeSample>,
     sample_context: PreparedSampleContext,
     progress: f32,
-    local_seconds: f32,
+    local_time: dawn_language::values::SampleDuration,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
-    let context = run_context(effect, sample_context, progress, local_seconds);
-    match implementation {
+    let context = run_context(effect, sample_context, progress, local_time);
+    match &effect.implementation {
         PreparedEffectImplementation::Dsl {
-            definition,
+            program,
             bound_params,
-        } => definition.sample_bound(bound_params, &context, scratch),
-        PreparedEffectImplementation::Native { sample, .. } => sample.sample(&context),
+        } => program.sample_effect(params.unwrap_or(bound_params), &context, scratch),
+        PreparedEffectImplementation::Native { sample, .. } => {
+            let sample_time = effect
+                .start_time
+                .checked_add_duration(local_time)
+                .unwrap_or(effect.start_time);
+            native_sample
+                .unwrap_or(sample)
+                .sample(&context, sample_time)
+        }
     }
 }
 
-pub(crate) fn effect_implementation_at(
+fn effect_params_at(
     effect: &PreparedEffect,
-    sample_seconds: f32,
-    bind_cache: &mut DslBindCache,
-) -> Result<Option<PreparedEffectImplementation>, RenderError> {
-    if effect.automation.is_empty() {
+    sample_time: SampleTime,
+) -> Result<Option<dawn_language::dsl::BoundParams>, RenderError> {
+    let Some(automation) = &effect.automation else {
         return Ok(None);
-    }
-    let params =
-        apply_automation_params(effect.params.clone(), &effect.automation, sample_seconds)?;
-    Ok(Some(match &effect.implementation {
-        PreparedEffectImplementation::Dsl { definition, .. } => PreparedEffectImplementation::Dsl {
-            bound_params: definition.bind_params_cached(&params, bind_cache)?,
-            definition: Arc::clone(definition),
-        },
-        PreparedEffectImplementation::Native { builtin, .. } => match builtin {
-            Some(builtin) => match native_effect::bind(*builtin, &params)? {
-                BoundNativeEffect::Sample(sample) => PreparedEffectImplementation::Native {
-                    builtin: Some(*builtin),
-                    sample,
-                },
-                _ => {
-                    return Err(RenderError::GeneratorPrepare {
-                        message: "automated native sample bound as generator".to_string(),
-                    });
-                }
-            },
-            None => {
-                return Err(RenderError::GeneratorPrepare {
-                    message: "missing native effect identity".to_string(),
-                });
-            }
-        },
-    }))
+    };
+    let mut params = implementation_params(&effect.implementation)?.clone();
+    apply_bound_automation(&mut params, &automation.bindings, sample_time)?;
+    Ok(Some(params))
 }
 
-fn prepare_sample_context_groups(
-    target: &[PreparedTargetPixel],
-) -> Option<Vec<PreparedSampleContextGroup>> {
-    let mut group_indexes = HashMap::<PreparedSampleContextKey, usize>::new();
-    let mut groups = Vec::<PreparedSampleContextGroup>::new();
-    let mut has_repeated_context = false;
+pub(crate) fn prepare_effect_params<'a>(
+    effect: &PreparedEffect,
+    sample_time: SampleTime,
+    scratch: &'a mut EffectAutomationScratch,
+) -> Result<&'a dawn_language::dsl::BoundParams, RenderError> {
+    let automation = effect
+        .automation
+        .as_ref()
+        .ok_or_else(|| RenderError::BadGraph {
+            message: "automated effect is missing its prepared automation".to_string(),
+        })?;
+    if scratch.params.is_none() {
+        scratch.params = Some(implementation_params(&effect.implementation)?.clone());
+    }
+    if scratch.sample_time == Some(sample_time) {
+        return scratch
+            .params
+            .as_ref()
+            .ok_or_else(|| RenderError::GeneratorPrepare {
+                message: "automated effect parameters are missing".to_string(),
+            });
+    }
+    let params = scratch
+        .params
+        .as_mut()
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: "automated effect parameters are missing".to_string(),
+        })?;
+    apply_bound_automation(params, &automation.bindings, sample_time)?;
+    scratch.native_sample = None;
+    scratch.sample_time = Some(sample_time);
+    scratch
+        .params
+        .as_ref()
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: "automated effect parameters are missing".to_string(),
+        })
+}
 
-    for (target_index, pixel) in target.iter().enumerate() {
-        let context = PreparedSampleContext {
-            pixel_index: pixel.pixel_index,
-            pixel_count: pixel.pixel_count,
-            pixel_fraction: pixel.pixel_fraction,
-        };
-        let key = PreparedSampleContextKey::from(context);
-        if let Some(group_index) = group_indexes.get(&key) {
-            has_repeated_context = true;
-            groups[*group_index].target_indexes.push(target_index);
-        } else {
-            group_indexes.insert(key, groups.len());
-            groups.push(PreparedSampleContextGroup {
-                context,
-                target_indexes: vec![target_index],
+pub(crate) fn prepare_native_sample<'a>(
+    effect: &PreparedEffect,
+    sample_time: SampleTime,
+    scratch: &'a mut EffectAutomationScratch,
+) -> Result<&'a NativeSample, RenderError> {
+    let builtin = match &effect.implementation {
+        PreparedEffectImplementation::Native {
+            params: Some((builtin, _)),
+            ..
+        } => *builtin,
+        _ => {
+            return Err(RenderError::BadGraph {
+                message: "automated native effect has no bound parameters".to_string(),
             });
         }
+    };
+    prepare_effect_params(effect, sample_time, scratch)?;
+    if scratch.native_sample.is_none() {
+        let params = scratch
+            .params
+            .as_ref()
+            .ok_or_else(|| RenderError::GeneratorPrepare {
+                message: "automated effect parameters are missing".to_string(),
+            })?;
+        scratch.native_sample = Some(native_effect::prepare_sample(builtin, params)?);
     }
-
-    has_repeated_context.then_some(groups)
+    scratch
+        .native_sample
+        .as_ref()
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: "automated native effect sample is missing".to_string(),
+        })
 }
 
-pub(crate) fn prepare_sample_context_groups_cached(
-    cache: &mut PrepareTargetCache,
-    target: &Arc<Vec<PreparedTargetPixel>>,
-) -> Option<Arc<Vec<PreparedSampleContextGroup>>> {
-    let key = arc_key(target);
-    if let Some(entry) = cache.sample_groups.get(&key)
-        && Arc::ptr_eq(&entry.source, target)
-    {
-        return entry.groups.clone();
+pub(crate) fn apply_bound_automation(
+    params: &mut dawn_language::dsl::BoundParams,
+    automation: &[crate::PreparedAutomation],
+    sample_time: SampleTime,
+) -> Result<(), RenderError> {
+    for binding in automation {
+        params.apply_automation(
+            usize::from(binding.param_index),
+            &binding.curve,
+            &binding.mapping,
+            binding.position(sample_time),
+        )?;
     }
-    let groups = prepare_sample_context_groups(target).map(Arc::new);
-    cache.sample_groups.insert(
-        key,
-        PreparedSampleGroupCacheEntry {
-            source: Arc::clone(target),
-            groups: groups.clone(),
-        },
-    );
-    groups
+    Ok(())
 }
 
-pub(crate) fn prepare_sample_groups_for_effect(
-    cache: &mut PrepareTargetCache,
-    compiled: &Arc<CompiledEffect>,
-    target: &Arc<Vec<PreparedTargetPixel>>,
-) -> Option<Arc<Vec<PreparedSampleContextGroup>>> {
-    let compiled_key = arc_key(compiled);
-    let eligible = *cache
-        .sample_group_eligibility
-        .entry(compiled_key)
-        .or_insert_with(|| compiled.sample_reads_only_written_slots());
-    eligible
-        .then(|| prepare_sample_context_groups_cached(cache, target))
-        .flatten()
-}
-
-pub(crate) fn prepare_sample_groups_for_implementation(
-    cache: &mut PrepareTargetCache,
+fn implementation_params(
     implementation: &PreparedEffectImplementation,
-    target: &Arc<Vec<PreparedTargetPixel>>,
-) -> Option<Arc<Vec<PreparedSampleContextGroup>>> {
-    match implementation {
-        PreparedEffectImplementation::Dsl { definition, .. } => {
-            prepare_sample_groups_for_effect(cache, definition, target)
+) -> Result<&dawn_language::dsl::BoundParams, RenderError> {
+    let params = match implementation {
+        PreparedEffectImplementation::Dsl { bound_params, .. } => bound_params,
+        PreparedEffectImplementation::Native {
+            params: Some((_, params)),
+            ..
+        } => params,
+        PreparedEffectImplementation::Native { params: None, .. } => {
+            return Err(RenderError::BadGraph {
+                message: "automation requires a parameterized sample effect".to_string(),
+            });
         }
-        PreparedEffectImplementation::Native { .. } => {
-            prepare_sample_context_groups_cached(cache, target)
-        }
-    }
+    };
+    Ok(params)
 }
 
 pub(crate) fn prepare_sampled_effect_pixel_groups(
@@ -326,8 +319,8 @@ pub(crate) fn prepare_sampled_effect_pixel_groups(
 
     for sampled in pixels {
         let context = PreparedSampleContext {
-            pixel_index: sampled.pixel.pixel_index,
-            pixel_count: sampled.pixel.pixel_count,
+            pixel_index: sampled.pixel.pixel_index(),
+            pixel_count: sampled.pixel.pixel_count(),
             pixel_fraction: sampled.pixel.pixel_fraction,
         };
         let key = PreparedSampleContextKey::from(context);

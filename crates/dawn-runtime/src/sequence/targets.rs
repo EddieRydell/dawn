@@ -44,8 +44,8 @@ pub fn resolve_effect_target_pixel_addresses(
     Ok(pixels
         .into_iter()
         .map(|pixel| RenderedTargetPixelAddress {
-            element_id: elements[pixel.element_index].id,
-            element_cell_index: pixel.element_cell_index,
+            element_id: elements[pixel.element_index()].id,
+            element_cell_index: pixel.element_cell_index(),
         })
         .collect())
 }
@@ -58,16 +58,51 @@ pub(crate) struct PreparedTargetSelection {
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedTargetPixel {
-    pub(crate) element_index: usize,
-    pub(crate) element_cell_index: usize,
-    pub(crate) pixel_index: usize,
-    pub(crate) pixel_count: usize,
+    element_index: u16,
+    element_cell_index: u16,
+    pixel_index: u32,
+    pixel_count: u32,
     pub(crate) pixel_fraction: f32,
+}
+
+impl PreparedTargetPixel {
+    pub(crate) fn new(
+        element_index: usize,
+        element_cell_index: usize,
+        pixel_index: usize,
+        pixel_count: usize,
+        pixel_fraction: f32,
+    ) -> Result<Self, RenderError> {
+        Ok(Self {
+            element_index: u16::try_from(element_index).map_err(|_| RenderError::BadTarget)?,
+            element_cell_index: u16::try_from(element_cell_index)
+                .map_err(|_| RenderError::BadTarget)?,
+            pixel_index: u32::try_from(pixel_index).map_err(|_| RenderError::BadTarget)?,
+            pixel_count: u32::try_from(pixel_count).map_err(|_| RenderError::BadTarget)?,
+            pixel_fraction,
+        })
+    }
+
+    pub(crate) fn element_index(&self) -> usize {
+        self.element_index as usize
+    }
+
+    pub(crate) fn element_cell_index(&self) -> usize {
+        self.element_cell_index as usize
+    }
+
+    pub(crate) fn pixel_index(&self) -> usize {
+        self.pixel_index as usize
+    }
+
+    pub(crate) fn pixel_count(&self) -> usize {
+        self.pixel_count as usize
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct PreparedTargetCache {
-    prepared_targets: HashMap<PreparedTargetCacheKey, Arc<Vec<PreparedTargetPixel>>>,
+    prepared_targets: HashMap<PreparedTargetCacheKey, Arc<[PreparedTargetPixel]>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -103,13 +138,13 @@ pub(crate) fn full_rig_target_pixels(
             } else {
                 element_cell_index as f32 / (element.pixel_count - 1) as f32
             };
-            pixels.push(PreparedTargetPixel {
+            pixels.push(PreparedTargetPixel::new(
                 element_index,
                 element_cell_index,
                 pixel_index,
-                pixel_count: element.pixel_count,
+                element.pixel_count,
                 pixel_fraction,
-            });
+            )?);
         }
     }
     Ok(pixels)
@@ -187,13 +222,13 @@ pub(crate) fn prepare_target_pixels(
                 ),
                 EffectScope::WholeTarget => (whole_index, total_target_pixels),
             };
-            pixels.push(PreparedTargetPixel {
+            pixels.push(PreparedTargetPixel::new(
                 element_index,
                 element_cell_index,
                 pixel_index,
                 pixel_count,
-                pixel_fraction: pixel_fraction(pixel_index, pixel_count),
-            });
+                pixel_fraction(pixel_index, pixel_count),
+            )?);
             whole_index += 1;
         }
     }
@@ -222,7 +257,7 @@ pub(crate) fn prepare_target_pixels_cached(
     target: &PreparedTargetSelection,
     elements: &[PreparedElement],
     scope: &EffectScope,
-) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
+) -> Result<Arc<[PreparedTargetPixel]>, RenderError> {
     let key = PreparedTargetCacheKey {
         target: target.clone(),
         scope: PreparedTargetScopeKey::from(scope),
@@ -230,15 +265,26 @@ pub(crate) fn prepare_target_pixels_cached(
     if let Some(pixels) = cache.prepared_targets.get(&key) {
         return Ok(Arc::clone(pixels));
     }
-    let pixels = Arc::new(prepare_target_pixels(target, elements, scope)?);
+    let pixels = Arc::from(prepare_target_pixels(target, elements, scope)?);
     cache.prepared_targets.insert(key, Arc::clone(&pixels));
     Ok(pixels)
 }
 
+pub(crate) fn sorted_sample_target(
+    target: &Arc<[PreparedTargetPixel]>,
+) -> Arc<[PreparedTargetPixel]> {
+    if target.is_sorted_by_key(|pixel| (pixel.element_index, pixel.element_cell_index)) {
+        return Arc::clone(target);
+    }
+    let mut sorted = target.to_vec();
+    sorted.sort_by_key(|pixel| (pixel.element_index, pixel.element_cell_index));
+    Arc::from(sorted)
+}
+
 pub(crate) fn generator_expansion_targets(
-    target: &Arc<Vec<PreparedTargetPixel>>,
+    target: &Arc<[PreparedTargetPixel]>,
     scope: &EffectScope,
-) -> Vec<Arc<Vec<PreparedTargetPixel>>> {
+) -> Vec<Arc<[PreparedTargetPixel]>> {
     match scope {
         EffectScope::WholeTarget => vec![Arc::clone(target)],
         EffectScope::PerFixture => {
@@ -248,7 +294,7 @@ pub(crate) fn generator_expansion_targets(
 
             for pixel in target.iter() {
                 if current_element_index.is_some_and(|index| index != pixel.element_index) {
-                    targets.push(Arc::new(element_pixels));
+                    targets.push(Arc::from(element_pixels));
                     element_pixels = Vec::new();
                 }
                 current_element_index = Some(pixel.element_index);
@@ -256,10 +302,20 @@ pub(crate) fn generator_expansion_targets(
             }
 
             if !element_pixels.is_empty() {
-                targets.push(Arc::new(element_pixels));
+                targets.push(Arc::from(element_pixels));
             }
 
             targets
         }
+    }
+}
+
+#[cfg(test)]
+mod representation_tests {
+    use super::PreparedTargetPixel;
+
+    #[test]
+    fn prepared_target_pixel_stays_32_bit_compact() {
+        assert_eq!(std::mem::size_of::<PreparedTargetPixel>(), 16);
     }
 }

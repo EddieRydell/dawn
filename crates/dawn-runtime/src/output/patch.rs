@@ -1,207 +1,370 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use dawn_language::element::{ElementSelection, ElementTree};
-use dawn_language::fixture_profile::FixtureProfileStore;
+use dawn_language::element::{ElementNodeKind, ElementTree};
+use dawn_language::fixture_profile::{FixtureProfileId, FixtureProfileStore, FixtureState};
 use dawn_language::patch::{
-    PatchGraph, PatchNode, PatchNodeId, PatchPortId, PatchValue, evaluate_filter,
+    FilterDefinition, PatchGraph, PatchNode, PatchNodeId, PatchPortId, PatchValue, PatchValueType,
+    evaluate_filter_into,
 };
 
 use super::errors::{SequenceOutputPrepareError, SequenceOutputRenderError};
 use super::frame::{ControllerPortFrame, RenderedElementState};
-use super::values::check_source_width;
 
-pub(crate) fn evaluate_patch(
-    tree: &ElementTree,
-    patch: &PatchGraph,
-    profiles: &FixtureProfileStore,
-    elements: &[RenderedElementState],
-    empty_frames: &[ControllerPortFrame],
-) -> Result<Vec<ControllerPortFrame>, SequenceOutputRenderError> {
-    let order = patch
-        .validate()
-        .map_err(|error| SequenceOutputRenderError::Patch(format!("{error:?}")))?;
-    let incoming = patch
-        .edges
-        .iter()
-        .map(|edge| (edge.to, (edge.from, edge.from_port)))
-        .collect::<HashMap<_, _>>();
-    let mut values: HashMap<(PatchNodeId, PatchPortId), PatchValue> = HashMap::new();
-    let mut frames = empty_frames.to_vec();
-    for id in order {
-        match patch.nodes.get(&id).ok_or_else(|| {
-            SequenceOutputRenderError::Patch("prepared patch node disappeared".to_string())
-        })? {
-            PatchNode::Source(source) => {
-                values.insert(
-                    (id, PatchPortId(0)),
-                    source_value(tree, &source.selection, &source.output, elements)?,
-                );
-            }
-            PatchNode::Filter(filter) => {
-                let source = incoming.get(&id).ok_or_else(|| {
-                    SequenceOutputRenderError::Patch("filter input is missing".to_string())
-                })?;
-                let input = values.get(source).ok_or_else(|| {
-                    SequenceOutputRenderError::Patch("filter source value is missing".to_string())
-                })?;
-                for (port, output) in evaluate_filter(filter, input, profiles)
-                    .map_err(|error| SequenceOutputRenderError::Patch(format!("{error:?}")))?
-                    .into_iter()
-                    .enumerate()
-                {
-                    values.insert((id, PatchPortId(port as u16)), output);
-                }
-            }
-            PatchNode::Sink(sink) => {
-                let source = incoming.get(&id).ok_or_else(|| {
-                    SequenceOutputRenderError::Patch("sink input is missing".to_string())
-                })?;
-                let PatchValue::Slots(slots) = values.get(source).ok_or_else(|| {
-                    SequenceOutputRenderError::Patch("sink source value is missing".to_string())
-                })?
-                else {
-                    return Err(SequenceOutputRenderError::Patch(
-                        "sink input is not a slot vector".to_string(),
-                    ));
-                };
-                let frame = frames
-                    .iter_mut()
-                    .find(|frame| frame.controller == sink.controller && frame.port == sink.port)
-                    .ok_or_else(|| {
-                        SequenceOutputRenderError::Patch(
-                            "sink controller port is missing".to_string(),
-                        )
-                    })?;
-                let start = usize::from(sink.start_slot);
-                let end = start + usize::from(sink.slot_count);
-                if slots.len() != usize::from(sink.slot_count) || end > frame.slots.len() {
-                    return Err(SequenceOutputRenderError::Patch(
-                        "sink width does not match its destination".to_string(),
-                    ));
-                }
-                frame.slots[start..end].copy_from_slice(slots);
-            }
-        }
-    }
-    Ok(frames)
+static NEXT_PATCH_ID: AtomicU32 = AtomicU32::new(1);
+
+#[derive(Clone)]
+pub(crate) struct PreparedPatch {
+    id: u32,
+    steps: Box<[PreparedPatchStep]>,
+    value_types: Box<[PatchValueType]>,
 }
 
-fn source_value(
-    tree: &ElementTree,
-    selection: &ElementSelection,
-    output: &dawn_language::patch::PatchValueType,
-    elements: &[RenderedElementState],
-) -> Result<PatchValue, SequenceOutputRenderError> {
-    let addresses = tree.flatten_selection(selection).map_err(|error| {
-        SequenceOutputRenderError::Patch(format!("invalid source selection: {error:?}"))
-    })?;
-    match output {
-        dawn_language::patch::PatchValueType::Color { width } => {
-            let colors = addresses
-                .iter()
-                .map(
-                    |address| match elements.iter().find(|state| state.node() == address.node) {
-                        Some(RenderedElementState::Color { cells, .. }) => {
-                            cells.get(address.cell as usize).copied()
+#[derive(Clone)]
+enum PreparedPatchStep {
+    Source {
+        output: usize,
+        source: PreparedPatchSource,
+    },
+    Filter {
+        input: usize,
+        output_start: usize,
+        output_count: usize,
+        filter: FilterDefinition,
+    },
+    Sink {
+        input: usize,
+        frame: usize,
+        start: usize,
+        end: usize,
+    },
+}
+
+#[derive(Clone)]
+struct PreparedPatchSource {
+    cells: Box<[PreparedSourceCell]>,
+    kind: PreparedSourceKind,
+}
+
+#[derive(Clone, Copy)]
+struct PreparedSourceCell {
+    element: usize,
+    cell: usize,
+}
+
+#[derive(Clone)]
+enum PreparedSourceKind {
+    Color,
+    Scalar,
+    Indexed,
+    FixtureState(FixtureProfileId),
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PatchScratch {
+    patch_id: Option<u32>,
+    values: Vec<PatchValue>,
+}
+
+impl PreparedPatch {
+    pub(crate) fn prepare(
+        tree: &ElementTree,
+        patch: &PatchGraph,
+        frames: &[ControllerPortFrame],
+    ) -> Result<Self, SequenceOutputPrepareError> {
+        let order = patch
+            .validate()
+            .map_err(|error| SequenceOutputPrepareError::InvalidPatch(format!("{error:?}")))?;
+        let incoming = patch
+            .edges
+            .iter()
+            .map(|edge| (edge.to, (edge.from, edge.from_port)))
+            .collect::<HashMap<_, _>>();
+        let element_indexes = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| !matches!(node.kind, ElementNodeKind::Group { .. }))
+            .enumerate()
+            .map(|(index, (id, _))| (*id, index))
+            .collect::<HashMap<_, _>>();
+        let mut outputs = HashMap::<(PatchNodeId, PatchPortId), usize>::new();
+        let mut value_types = Vec::new();
+        let mut steps = Vec::with_capacity(order.len());
+
+        for id in order {
+            let node = patch.nodes.get(&id).ok_or_else(|| {
+                SequenceOutputPrepareError::InvalidPatch(
+                    "validated patch node disappeared".to_string(),
+                )
+            })?;
+            match node {
+                PatchNode::Source(source) => {
+                    let addresses = tree.flatten_selection(&source.selection).map_err(|error| {
+                        SequenceOutputPrepareError::InvalidPatch(format!(
+                            "invalid source selection: {error:?}"
+                        ))
+                    })?;
+                    if addresses.len() != source.output.width() {
+                        return Err(SequenceOutputPrepareError::InvalidPatch(
+                            "patch source width does not match its selected element span"
+                                .to_string(),
+                        ));
+                    }
+                    let cells = addresses
+                        .into_iter()
+                        .map(|address| {
+                            Ok(PreparedSourceCell {
+                                element: *element_indexes.get(&address.node).ok_or_else(|| {
+                                    SequenceOutputPrepareError::InvalidPatch(
+                                        "patch source references a group or missing element"
+                                            .to_string(),
+                                    )
+                                })?,
+                                cell: address.cell as usize,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, SequenceOutputPrepareError>>()?;
+                    let kind = match &source.output {
+                        PatchValueType::Color { .. } => PreparedSourceKind::Color,
+                        PatchValueType::Scalar { .. } => PreparedSourceKind::Scalar,
+                        PatchValueType::Indexed { .. } => PreparedSourceKind::Indexed,
+                        PatchValueType::FixtureState { profile, .. } => {
+                            PreparedSourceKind::FixtureState(profile.clone())
                         }
-                        Some(RenderedElementState::Fixture { color, .. }) if address.cell == 0 => {
+                        PatchValueType::Components { .. } | PatchValueType::Slots { .. } => {
+                            return Err(SequenceOutputPrepareError::InvalidPatch(
+                                "patch source declares a derived value type".to_string(),
+                            ));
+                        }
+                    };
+                    let output = value_types.len();
+                    value_types.push(source.output.clone());
+                    outputs.insert((id, PatchPortId(0)), output);
+                    steps.push(PreparedPatchStep::Source {
+                        output,
+                        source: PreparedPatchSource {
+                            cells: cells.into_boxed_slice(),
+                            kind,
+                        },
+                    });
+                }
+                PatchNode::Filter(filter) => {
+                    let input = incoming
+                        .get(&id)
+                        .and_then(|source| outputs.get(source))
+                        .copied()
+                        .ok_or_else(|| {
+                            SequenceOutputPrepareError::InvalidPatch(
+                                "filter input is missing".to_string(),
+                            )
+                        })?;
+                    let output_start = value_types.len();
+                    let output_count = usize::from(filter.output_port_count());
+                    for port in 0..filter.output_port_count() {
+                        let value_type =
+                            filter.output_type(PatchPortId(port)).ok_or_else(|| {
+                                SequenceOutputPrepareError::InvalidPatch(
+                                    "filter output is invalid".to_string(),
+                                )
+                            })?;
+                        outputs.insert((id, PatchPortId(port)), value_types.len());
+                        value_types.push(value_type);
+                    }
+                    steps.push(PreparedPatchStep::Filter {
+                        input,
+                        output_start,
+                        output_count,
+                        filter: filter.clone(),
+                    });
+                }
+                PatchNode::Sink(sink) => {
+                    let input = incoming
+                        .get(&id)
+                        .and_then(|source| outputs.get(source))
+                        .copied()
+                        .ok_or_else(|| {
+                            SequenceOutputPrepareError::InvalidPatch(
+                                "sink input is missing".to_string(),
+                            )
+                        })?;
+                    let frame = frames
+                        .iter()
+                        .position(|frame| {
+                            frame.controller == sink.controller && frame.port == sink.port
+                        })
+                        .ok_or_else(|| {
+                            SequenceOutputPrepareError::InvalidPatch(
+                                "patch sink references a controller port outside the active setup"
+                                    .to_string(),
+                            )
+                        })?;
+                    let start = usize::from(sink.start_slot);
+                    let end = start
+                        .checked_add(usize::from(sink.slot_count))
+                        .ok_or_else(|| {
+                            SequenceOutputPrepareError::InvalidPatch(
+                                "patch sink slot range overflowed".to_string(),
+                            )
+                        })?;
+                    if end > frames[frame].slots.len() {
+                        return Err(SequenceOutputPrepareError::InvalidPatch(
+                            "patch sink exceeds its controller port".to_string(),
+                        ));
+                    }
+                    steps.push(PreparedPatchStep::Sink {
+                        input,
+                        frame,
+                        start,
+                        end,
+                    });
+                }
+            }
+        }
+
+        Ok(Self {
+            id: NEXT_PATCH_ID.fetch_add(1, Ordering::Relaxed),
+            steps: steps.into_boxed_slice(),
+            value_types: value_types.into_boxed_slice(),
+        })
+    }
+
+    pub(crate) fn evaluate(
+        &self,
+        profiles: &FixtureProfileStore,
+        elements: &[RenderedElementState],
+        frames: &mut [ControllerPortFrame],
+        scratch: &mut PatchScratch,
+    ) -> Result<(), SequenceOutputRenderError> {
+        if scratch.patch_id != Some(self.id) {
+            scratch.values = self.value_types.iter().map(PatchValue::empty).collect();
+            scratch.patch_id = Some(self.id);
+        }
+        for frame in frames.iter_mut() {
+            frame.slots.fill(0);
+        }
+        for step in &self.steps {
+            match step {
+                PreparedPatchStep::Source { output, source } => {
+                    source.write(elements, &mut scratch.values[*output])?;
+                }
+                PreparedPatchStep::Filter {
+                    input,
+                    output_start,
+                    output_count,
+                    filter,
+                } => {
+                    let (inputs, outputs) = scratch.values.split_at_mut(*output_start);
+                    let input = inputs.get(*input).ok_or_else(|| {
+                        SequenceOutputRenderError::Patch(
+                            "prepared filter input is out of bounds".to_string(),
+                        )
+                    })?;
+                    let outputs = outputs.get_mut(..*output_count).ok_or_else(|| {
+                        SequenceOutputRenderError::Patch(
+                            "prepared filter output is out of bounds".to_string(),
+                        )
+                    })?;
+                    evaluate_filter_into(filter, input, profiles, outputs)
+                        .map_err(|error| SequenceOutputRenderError::Patch(format!("{error:?}")))?;
+                }
+                PreparedPatchStep::Sink {
+                    input,
+                    frame,
+                    start,
+                    end,
+                } => {
+                    let PatchValue::Slots(slots) = &scratch.values[*input] else {
+                        return Err(SequenceOutputRenderError::Patch(
+                            "prepared sink input is not a slot vector".to_string(),
+                        ));
+                    };
+                    if slots.len() != end - start {
+                        return Err(SequenceOutputRenderError::Patch(
+                            "prepared sink width changed".to_string(),
+                        ));
+                    }
+                    frames[*frame].slots[*start..*end].copy_from_slice(slots);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PreparedPatchSource {
+    fn write(
+        &self,
+        elements: &[RenderedElementState],
+        output: &mut PatchValue,
+    ) -> Result<(), SequenceOutputRenderError> {
+        match (&self.kind, output) {
+            (PreparedSourceKind::Color, PatchValue::Colors(output)) => {
+                output.clear();
+                for cell in &self.cells {
+                    let value = match elements.get(cell.element) {
+                        Some(RenderedElementState::Color { cells, .. }) => {
+                            cells.get(cell.cell).copied()
+                        }
+                        Some(RenderedElementState::Fixture { color, .. }) if cell.cell == 0 => {
                             Some(*color)
                         }
                         _ => None,
-                    },
-                )
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    SequenceOutputRenderError::Patch(
-                        "color source targets a non-color element".to_string(),
-                    )
-                })?;
-            check_source_width(*width, colors.len())?;
-            Ok(PatchValue::Colors(colors))
-        }
-        dawn_language::patch::PatchValueType::Scalar { width } => {
-            let values = addresses
-                .iter()
-                .map(
-                    |address| match elements.iter().find(|state| state.node() == address.node) {
+                    }
+                    .ok_or_else(source_type_error)?;
+                    output.push(value);
+                }
+            }
+            (PreparedSourceKind::Scalar, PatchValue::Scalars(output)) => {
+                output.clear();
+                for cell in &self.cells {
+                    let value = match elements.get(cell.element) {
                         Some(RenderedElementState::Scalar { cells, .. }) => {
-                            cells.get(address.cell as usize).copied()
+                            cells.get(cell.cell).copied()
                         }
                         _ => None,
-                    },
-                )
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    SequenceOutputRenderError::Patch(
-                        "scalar source targets a non-scalar element".to_string(),
-                    )
-                })?;
-            check_source_width(*width, values.len())?;
-            Ok(PatchValue::Scalars(values))
-        }
-        dawn_language::patch::PatchValueType::Indexed { width } => {
-            let values = addresses
-                .iter()
-                .map(
-                    |address| match elements.iter().find(|state| state.node() == address.node) {
+                    }
+                    .ok_or_else(source_type_error)?;
+                    output.push(value);
+                }
+            }
+            (PreparedSourceKind::Indexed, PatchValue::Indexed(output)) => {
+                output.clear();
+                for cell in &self.cells {
+                    let value = match elements.get(cell.element) {
                         Some(RenderedElementState::Indexed { cells, .. }) => {
-                            cells.get(address.cell as usize).copied()
+                            cells.get(cell.cell).copied()
                         }
                         _ => None,
-                    },
-                )
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    SequenceOutputRenderError::Patch(
-                        "indexed source targets a non-indexed element".to_string(),
-                    )
-                })?;
-            check_source_width(*width, values.len())?;
-            Ok(PatchValue::Indexed(values))
-        }
-        dawn_language::patch::PatchValueType::FixtureState { width, profile } => {
-            let values = addresses
-                .iter()
-                .map(
-                    |address| match elements.iter().find(|state| state.node() == address.node) {
+                    }
+                    .ok_or_else(source_type_error)?;
+                    output.push(value);
+                }
+            }
+            (PreparedSourceKind::FixtureState(profile), PatchValue::FixtureStates(output)) => {
+                output.resize_with(self.cells.len(), || FixtureState {
+                    functions: Vec::new(),
+                });
+                for (output, cell) in output.iter_mut().zip(&self.cells) {
+                    let state = match elements.get(cell.element) {
                         Some(RenderedElementState::Fixture {
                             profile: found,
                             state,
                             ..
-                        }) if found == profile && address.cell == 0 => Some(state.clone()),
+                        }) if found == profile && cell.cell == 0 => Some(state),
                         _ => None,
-                    },
-                )
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    SequenceOutputRenderError::Patch(
-                        "fixture source targets an incompatible profile".to_string(),
-                    )
-                })?;
-            check_source_width(*width, values.len())?;
-            Ok(PatchValue::FixtureStates(values))
+                    }
+                    .ok_or_else(source_type_error)?;
+                    output.functions.clone_from(&state.functions);
+                }
+            }
+            _ => return Err(source_type_error()),
         }
-        _ => Err(SequenceOutputRenderError::Patch(
-            "patch source declares a derived value type".to_string(),
-        )),
+        Ok(())
     }
 }
 
-pub(crate) fn validate_patch_sources(
-    tree: &ElementTree,
-    patch: &PatchGraph,
-) -> Result<(), SequenceOutputPrepareError> {
-    for node in patch.nodes.values() {
-        if let PatchNode::Source(source) = node {
-            let addresses = tree
-                .flatten_selection(&source.selection)
-                .map_err(|error| SequenceOutputPrepareError::InvalidPatch(format!("{error:?}")))?;
-            if addresses.len() != source.output.width() {
-                return Err(SequenceOutputPrepareError::InvalidPatch(
-                    "patch source width does not match its selected element span".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(())
+fn source_type_error() -> SequenceOutputRenderError {
+    SequenceOutputRenderError::Patch(
+        "prepared patch source no longer matches its element type".to_string(),
+    )
 }

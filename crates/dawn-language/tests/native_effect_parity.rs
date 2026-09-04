@@ -4,10 +4,11 @@ use dawn_language::dsl::{
 };
 use dawn_language::effect::BuiltinEffect;
 use dawn_language::native_effect::{self, BoundNativeEffect};
-use dawn_language::values::{Color, Curve, CurvePoint, DawnTime, Gradient, GradientStop, Marks};
+use dawn_language::values::{
+    Color, Curve, CurvePoint, Gradient, GradientStop, Marks, SampleDuration, SampleTime,
+};
 use indexmap::IndexMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 fn id(value: &str) -> Identifier {
     Identifier::new(value.to_string()).unwrap()
@@ -55,7 +56,7 @@ fn gradient() -> Arc<Gradient> {
 fn target() -> Arc<TargetValue> {
     Arc::new(TargetValue {
         groups: vec![Arc::new(TargetItemValue {
-            pixels: Arc::new(
+            pixels: Arc::from(
                 (0..24)
                     .map(|pixel| TargetPixelValue {
                         element_index: 0,
@@ -64,7 +65,7 @@ fn target() -> Arc<TargetValue> {
                         pixel_count: 24,
                         pixel_fraction: pixel as f32 / 23.0,
                     })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
         })],
     })
@@ -74,8 +75,8 @@ fn target() -> Arc<TargetValue> {
 fn mark_pulse_matches_reference_schedule_and_samples() {
     let marks = Arc::new(Marks {
         marks: vec![
-            DawnTime(Duration::from_secs_f32(0.5)),
-            DawnTime(Duration::from_secs_f32(1.25)),
+            SampleDuration::from_ticks(500_000),
+            SampleDuration::from_ticks(1_250_000),
         ],
     });
     let params = IndexMap::from([
@@ -109,7 +110,8 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
         .find(|effect| effect.name().as_str() == "MarkPulseChild")
         .unwrap();
     let context = GeneratorContext {
-        duration: 4.0,
+        start_time: SampleTime::from_ticks(1_000_000),
+        duration: SampleDuration::from_ticks(4_000_000),
         target: target(),
     };
     let reference = generator
@@ -129,23 +131,28 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
         .unwrap();
     assert_eq!(generated.len(), reference.len());
     for (native, reference) in generated.iter().zip(&reference) {
-        assert_eq!(native.start_seconds, reference.start_seconds);
-        assert_eq!(native.duration_seconds, reference.duration_seconds);
+        assert_eq!(native.start_time, reference.start_time);
+        assert_eq!(native.duration, reference.duration);
         assert_eq!(native.target, reference.target);
-        let bound = child.bind_params(&reference.params).unwrap();
+        let bound = child.bind_params_pairs(&reference.params).unwrap();
         for pixel in native.target.pixels.iter() {
             for progress in [0.0, 0.25, 0.75, 1.0] {
                 let context = RunContext {
                     progress,
-                    seconds: progress * native.duration_seconds,
-                    duration: native.duration_seconds,
+                    time: SampleDuration::from_ticks(
+                        (progress * native.duration.ticks() as f32).round() as u32,
+                    ),
+                    duration: native.duration,
                     pixel_index: pixel.pixel_index,
                     pixel_count: pixel.pixel_count,
                     pixel_fraction: pixel.pixel_fraction,
-                    global_marks: Marks { marks: Vec::new() },
                 };
+                let sample_time = native
+                    .start_time
+                    .checked_add_duration(context.time)
+                    .unwrap();
                 assert_eq!(
-                    native.sample.sample(&context).unwrap(),
+                    native.sample.sample(&context, sample_time).unwrap(),
                     child
                         .sample_bound(&bound, &context, &mut Default::default())
                         .unwrap()

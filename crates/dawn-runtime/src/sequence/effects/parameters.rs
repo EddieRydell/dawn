@@ -3,9 +3,7 @@ use dawn_language::effect::{CurveSource, EffectParamValue, GradientSource};
 use dawn_language::model::DawnProject;
 use dawn_language::operator::OperatorDefinition;
 use dawn_language::sequence::Sequence;
-use dawn_language::values::{
-    DawnTime, Marks, SampleDuration, SampleTime, sample_time_from_dawn_time,
-};
+use dawn_language::values::{Marks, SampleDuration, SampleTime, sample_time_from_dawn_time};
 use indexmap::IndexMap;
 use std::sync::Arc;
 
@@ -89,7 +87,7 @@ fn prepare_param_value(
                         let mark = sample_time_from_dawn_time(mark).ok()?;
                         (mark >= timing.start && mark < end).then(|| {
                             let elapsed = mark.checked_duration_since(timing.start)?;
-                            Some(DawnTime::from_micros(u64::from(elapsed.ticks())))
+                            Some(elapsed)
                         })?
                     })
                     .collect(),
@@ -119,7 +117,7 @@ fn prepare_param_value(
             .iter()
             .map(|value| prepare_param_value(project, sequence, value, timing))
             .collect::<Result<Vec<_>, _>>()
-            .map(Arc::new)
+            .map(Arc::from)
             .map(Value::Array),
     }
 }

@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use dawn_language::control::{ControlClip, ControlTarget, ControlValue, controls_overlap};
-use dawn_language::element::{ElementCellAddress, ElementNodeId, ElementNodeKind, ElementTree};
+use dawn_language::element::{ElementNodeId, ElementNodeKind, ElementTree};
 use dawn_language::fixture_profile::{
     FixtureBehaviorRule, FixtureControlValue, FixtureFunctionId, FixtureFunctionKind,
     FixtureProfileStore,
@@ -16,10 +16,25 @@ use super::values::{black, sample_curve, sample_gradient, set_cell};
 
 #[derive(Clone)]
 pub(crate) struct PreparedControl {
-    clip: ControlClip,
+    id: u32,
     start: SampleTime,
     duration: SampleDuration,
-    addresses: Vec<ElementCellAddress>,
+    kind: PreparedControlKind,
+    value: ControlValue,
+    addresses: Box<[PreparedControlAddress]>,
+}
+
+#[derive(Clone, Copy)]
+enum PreparedControlKind {
+    Scalar,
+    Indexed,
+    Fixture(FixtureFunctionId),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct PreparedControlAddress {
+    element: u32,
+    cell: u32,
 }
 
 pub(crate) fn prepare_controls(
@@ -27,7 +42,18 @@ pub(crate) fn prepare_controls(
     profiles: &FixtureProfileStore,
     clips: &[ControlClip],
 ) -> Result<Vec<PreparedControl>, SequenceOutputPrepareError> {
-    let mut prepared = Vec::new();
+    let rendered_nodes = tree
+        .nodes
+        .iter()
+        .filter(|(_, node)| !matches!(node.kind, ElementNodeKind::Group { .. }))
+        .map(|(id, _)| *id)
+        .collect::<Vec<_>>();
+    let element_indexes = rendered_nodes
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index as u32))
+        .collect::<HashMap<_, _>>();
+    let mut prepared = Vec::with_capacity(clips.len());
     for clip in clips {
         let start = sample_time_from_dawn_time(&clip.start).map_err(|_| {
             SequenceOutputPrepareError::InvalidControl {
@@ -80,35 +106,62 @@ pub(crate) fn prepare_controls(
                 }
             }
         }
+        let kind = match clip.target {
+            ControlTarget::Scalar(_) => PreparedControlKind::Scalar,
+            ControlTarget::Indexed(_) => PreparedControlKind::Indexed,
+            ControlTarget::FixtureFunction { function, .. } => {
+                PreparedControlKind::Fixture(function)
+            }
+        };
+        let addresses = addresses
+            .into_iter()
+            .map(|address| {
+                Ok(PreparedControlAddress {
+                    element: *element_indexes.get(&address.node).ok_or_else(|| {
+                        SequenceOutputPrepareError::InvalidControl {
+                            clip: clip.id.0,
+                            reason: "control target is not a renderable element".to_string(),
+                        }
+                    })?,
+                    cell: address.cell,
+                })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
         prepared.push(PreparedControl {
-            clip: clip.clone(),
+            id: clip.id.0,
             start,
             duration,
+            kind,
+            value: clip.value.clone(),
             addresses,
         });
     }
     for (index, left) in prepared.iter().enumerate() {
-        for right in prepared.iter().skip(index + 1) {
-            if controls_overlap(&left.clip, &right.clip)
+        for (right_index, right) in prepared.iter().enumerate().skip(index + 1) {
+            if controls_overlap(&clips[index], &clips[right_index])
                 && left
                     .addresses
                     .iter()
                     .any(|address| right.addresses.contains(address))
-                && control_function(&left.clip.target) == control_function(&right.clip.target)
+                && control_function(&clips[index].target)
+                    == control_function(&clips[right_index].target)
             {
                 let address = left
                     .addresses
                     .iter()
                     .find(|address| right.addresses.contains(address))
                     .copied()
-                    .unwrap_or(ElementCellAddress {
-                        node: ElementNodeId(0),
+                    .unwrap_or(PreparedControlAddress {
+                        element: 0,
                         cell: 0,
                     });
                 return Err(SequenceOutputPrepareError::ControlConflict {
-                    first: left.clip.id.0,
-                    second: right.clip.id.0,
-                    node: address.node,
+                    first: left.id,
+                    second: right.id,
+                    node: rendered_nodes
+                        .get(address.element as usize)
+                        .copied()
+                        .unwrap_or(ElementNodeId(0)),
                     cell: address.cell,
                 });
             }
@@ -128,8 +181,9 @@ pub(crate) fn apply_controls(
     elements: &mut [RenderedElementState],
     controls: &[PreparedControl],
     sample_time: SampleTime,
-) -> Result<HashSet<(ElementNodeId, FixtureFunctionId)>, SequenceOutputRenderError> {
-    let mut explicit = HashSet::new();
+    explicit: &mut Vec<(u32, FixtureFunctionId)>,
+) -> Result<(), SequenceOutputRenderError> {
+    explicit.clear();
     for prepared in controls {
         let Some(elapsed) = sample_time.checked_duration_since(prepared.start) else {
             continue;
@@ -143,58 +197,57 @@ pub(crate) fn apply_controls(
             elapsed.ticks() as f32 / prepared.duration.ticks() as f32
         };
         for address in &prepared.addresses {
-            let state = elements
-                .iter_mut()
-                .find(|state| state.node() == address.node)
-                .ok_or_else(|| SequenceOutputRenderError::Control {
-                    clip: prepared.clip.id.0,
+            let state = elements.get_mut(address.element as usize).ok_or_else(|| {
+                SequenceOutputRenderError::Control {
+                    clip: prepared.id,
                     reason: "rendered target is missing".to_string(),
-                })?;
-            match (&prepared.clip.target, &prepared.clip.value, state) {
+                }
+            })?;
+            match (prepared.kind, &prepared.value, state) {
                 (
-                    ControlTarget::Scalar(_),
+                    PreparedControlKind::Scalar,
                     ControlValue::ConstantNormalized(value),
                     RenderedElementState::Scalar { cells, .. },
-                ) => set_cell(cells, address.cell, *value, prepared.clip.id.0)?,
+                ) => set_cell(cells, address.cell, *value, prepared.id)?,
                 (
-                    ControlTarget::Scalar(_),
+                    PreparedControlKind::Scalar,
                     ControlValue::NormalizedCurve(curve),
                     RenderedElementState::Scalar { cells, .. },
                 ) => set_cell(
                     cells,
                     address.cell,
                     sample_curve(curve, position),
-                    prepared.clip.id.0,
+                    prepared.id,
                 )?,
                 (
-                    ControlTarget::Indexed(_),
+                    PreparedControlKind::Indexed,
                     ControlValue::Indexed { option, .. },
                     RenderedElementState::Indexed { cells, .. },
-                ) => set_cell(cells, address.cell, option.0, prepared.clip.id.0)?,
+                ) => set_cell(cells, address.cell, option.0, prepared.id)?,
                 (
-                    ControlTarget::FixtureFunction { function, .. },
+                    PreparedControlKind::Fixture(function),
                     value,
                     RenderedElementState::Fixture { state, .. },
                 ) => {
                     let value = fixture_control_value(value, position).ok_or_else(|| {
                         SequenceOutputRenderError::Control {
-                            clip: prepared.clip.id.0,
+                            clip: prepared.id,
                             reason: "control value does not match the fixture function".to_string(),
                         }
                     })?;
-                    state.functions.insert(*function, value);
-                    explicit.insert((address.node, *function));
+                    state.insert(function, value);
+                    explicit.push((address.element, function));
                 }
                 _ => {
                     return Err(SequenceOutputRenderError::Control {
-                        clip: prepared.clip.id.0,
+                        clip: prepared.id,
                         reason: "control value does not match its target".to_string(),
                     });
                 }
             }
         }
     }
-    Ok(explicit)
+    Ok(())
 }
 
 fn fixture_control_value(value: &ControlValue, position: f32) -> Option<FixtureControlValue> {
@@ -220,9 +273,9 @@ fn fixture_control_value(value: &ControlValue, position: f32) -> Option<FixtureC
 pub(crate) fn apply_fixture_behavior_rules(
     elements: &mut [RenderedElementState],
     profiles: &FixtureProfileStore,
-    explicit: &HashSet<(ElementNodeId, FixtureFunctionId)>,
+    explicit: &[(u32, FixtureFunctionId)],
 ) -> Result<(), SequenceOutputRenderError> {
-    for element in elements {
+    for (element_index, element) in elements.iter_mut().enumerate() {
         let RenderedElementState::Fixture {
             node,
             profile,
@@ -237,13 +290,11 @@ pub(crate) fn apply_fixture_behavior_rules(
         })?;
         let active = *color != black();
         for (function, definition) in &profile.functions {
-            if explicit.contains(&(*node, *function)) {
+            if explicit.contains(&(element_index as u32, *function)) {
                 continue;
             }
             if matches!(definition.kind, FixtureFunctionKind::ColorMixing { .. }) {
-                state
-                    .functions
-                    .insert(*function, FixtureControlValue::Color(*color));
+                state.insert(*function, FixtureControlValue::Color(*color));
             }
         }
         for rule in &profile.behavior_rules {
@@ -253,7 +304,7 @@ pub(crate) fn apply_fixture_behavior_rules(
                 | FixtureBehaviorRule::ColorWheel { function, .. }
                 | FixtureBehaviorRule::PrismGate { function, .. } => *function,
             };
-            if explicit.contains(&(*node, function)) {
+            if explicit.contains(&(element_index as u32, function)) {
                 continue;
             }
             let value = match rule {
@@ -283,7 +334,7 @@ pub(crate) fn apply_fixture_behavior_rules(
                     range: 0.0,
                 },
             };
-            state.functions.insert(function, value);
+            state.insert(function, value);
         }
     }
     Ok(())

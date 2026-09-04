@@ -4,11 +4,31 @@
 //! not own UI request scheduling, raster caching, pixel transport, or Canvas
 //! decoding; those belong to the desktop adapter and frontend respectively.
 
+use crate::RenderError;
 use crate::sequence::color::black;
-use crate::sequence::timeline::{
-    first_frame_at_or_after, frame_at_or_before, sample_time_for_frame,
+use crate::sequence::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
+use crate::sequence::effects::sampling::{
+    PreparedSampledEffectPixel, PreparedSampledEffectPixels, TargetColorAddress,
+    evenly_sample_indices, prepare_sampled_effect_pixel_groups,
+    render_sampled_effect_target_colors,
 };
-use crate::*;
+use crate::sequence::elements::{PreparedElement, prepare_elements};
+use crate::sequence::renderer::{PrepareTargetCache, PreparedEffect};
+use crate::sequence::targets::PreparedTargetPixel;
+use crate::sequence::timeline::{
+    first_frame_at_or_after, frame_at_or_before, frame_count, prepare_timing, sample_time_for_frame,
+};
+use dawn_language::dsl::{BytecodeProgram, DslBindCache, DslVmScratch};
+use dawn_language::effect::{EffectDefinitionId, EffectInstId};
+use dawn_language::element::ElementNodeId;
+use dawn_language::model::DawnProject;
+use dawn_language::sequence::{Sequence, SequenceId};
+use dawn_language::setup::SetupId;
+use dawn_language::validation::validate_sequence;
+use dawn_language::values::{Color, SampleDuration, SampleTime};
+use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PreparedEffectRasterRenderer {
@@ -17,20 +37,19 @@ pub struct PreparedEffectRasterRenderer {
     index_start_frame: u32,
     start_time: SampleTime,
     duration: SampleDuration,
-    target: Arc<Vec<PreparedTargetPixel>>,
-    effects: Vec<PreparedEffect>,
+    target: Arc<[PreparedTargetPixel]>,
+    effects: Box<[PreparedEffect]>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PreparedEffectRasterSample {
     row_count: usize,
-    effect_pixels: Vec<PreparedSampledEffectPixels>,
+    effect_pixels: Box<[PreparedSampledEffectPixels]>,
 }
 
 #[derive(Debug, Default)]
 pub struct EffectRasterRenderScratch {
-    effect_vm: Vec<DslVmScratch>,
-    bind_cache: DslBindCache,
+    effect_vm: DslVmScratch,
 }
 
 pub struct EffectRasterPrepareBatch<'a> {
@@ -42,7 +61,7 @@ pub struct EffectRasterPrepareBatch<'a> {
     frame_rate: u32,
     frame_count: u32,
     bind_cache: DslBindCache,
-    compiled_effects: HashMap<EffectDefinitionId, Arc<CompiledEffect>>,
+    sample_programs: HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
     target_cache: PrepareTargetCache,
 }
 
@@ -108,8 +127,8 @@ impl PreparedEffectRasterRenderer {
             if let Some(pixel) = self.target.get(target_index) {
                 sample_lookup
                     .entry(TargetColorAddress {
-                        element_index: pixel.element_index,
-                        element_cell_index: pixel.element_cell_index,
+                        element_index: pixel.element_index(),
+                        element_cell_index: pixel.element_cell_index(),
                     })
                     .or_default()
                     .push(row_index);
@@ -125,8 +144,8 @@ impl PreparedEffectRasterRenderer {
                     .filter_map(|pixel| {
                         sample_lookup
                             .get(&TargetColorAddress {
-                                element_index: pixel.element_index,
-                                element_cell_index: pixel.element_cell_index,
+                                element_index: pixel.element_index(),
+                                element_cell_index: pixel.element_cell_index(),
                             })
                             .map(|rows| PreparedSampledEffectPixel {
                                 pixel: pixel.clone(),
@@ -137,7 +156,8 @@ impl PreparedEffectRasterRenderer {
                 let groups = prepare_sampled_effect_pixel_groups(&pixels);
                 PreparedSampledEffectPixels { pixels, groups }
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         PreparedEffectRasterSample {
             row_count,
             effect_pixels,
@@ -170,9 +190,6 @@ impl PreparedEffectRasterRenderer {
         frame_index: u32,
         scratch: &mut EffectRasterRenderScratch,
     ) -> Result<Vec<Color>, RenderError> {
-        scratch
-            .effect_vm
-            .resize_with(self.effects.len(), DslVmScratch::default);
         let sample_time = sample_time_for_frame(frame_index, self.frame_rate)?;
         let mut rendered = vec![black(); sample.row_count];
 
@@ -188,8 +205,7 @@ impl PreparedEffectRasterRenderer {
                 effect_pixels,
                 &mut rendered,
                 sample_time,
-                &mut scratch.effect_vm[effect_index],
-                &mut scratch.bind_cache,
+                &mut scratch.effect_vm,
             )?;
         }
 
@@ -242,7 +258,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             frame_rate,
             frame_count,
             bind_cache: DslBindCache::default(),
-            compiled_effects: HashMap::new(),
+            sample_programs: HashMap::new(),
             target_cache: PrepareTargetCache::default(),
         })
     }
@@ -265,14 +281,13 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             PrepareEffectContext {
                 project: self.project,
                 sequence: self.sequence,
-                layer_id: SequenceLayerId(0),
                 elements: &self.elements,
                 element_ids: &self.element_ids,
                 groups: &self.groups,
                 effects: &mut effects,
                 generated_child_count: &mut generated_child_count,
                 bind_cache: &mut self.bind_cache,
-                compiled_effects: &mut self.compiled_effects,
+                sample_programs: &mut self.sample_programs,
                 target_cache: &mut self.target_cache,
             },
             effect,
@@ -296,7 +311,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             start_time,
             duration,
             target,
-            effects,
+            effects: effects.into_boxed_slice(),
         })
     }
 }

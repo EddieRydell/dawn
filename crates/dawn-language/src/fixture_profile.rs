@@ -153,7 +153,23 @@ pub enum FixtureControlValue {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FixtureState {
-    pub functions: IndexMap<FixtureFunctionId, FixtureControlValue>,
+    pub functions: Vec<(FixtureFunctionId, FixtureControlValue)>,
+}
+
+impl FixtureState {
+    pub fn get(&self, function: FixtureFunctionId) -> Option<&FixtureControlValue> {
+        self.functions
+            .iter()
+            .find_map(|(id, value)| (*id == function).then_some(value))
+    }
+
+    pub fn insert(&mut self, function: FixtureFunctionId, value: FixtureControlValue) {
+        if let Some((_, current)) = self.functions.iter_mut().find(|(id, _)| *id == function) {
+            *current = value;
+        } else {
+            self.functions.push((function, value));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

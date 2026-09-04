@@ -3,8 +3,12 @@ use crate::dsl::types::Identifier;
 use crate::effect::{EffectInst, EffectInstId};
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
-use crate::sampling::sample_curve;
-use crate::values::{Color, Curve, CurvePoint, DawnDuration, DawnTime};
+use crate::values::{Color, Curve, DawnDuration, DawnTime};
+pub use dawn_core::automation::{
+    AutomationMapping, AutomationValue,
+    automation_value_at_position as automation_mapping_value_at_position,
+    curve_window_into as curve_window_into_at_position,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SequenceId(pub SourceIdentity);
@@ -178,88 +182,39 @@ pub enum AutomationTarget {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum AutomationMapping {
-    Float { min: f32, max: f32 },
-    Int { min: i32, max: i32 },
-    Bool,
-    Enum { values: Vec<Identifier> },
-    Curve { min: f32, max: f32 },
-}
-
-pub enum AutomationValue {
-    Int(i32),
-    Float(f32),
-    Bool(bool),
-    Enum(Identifier),
-    Curve(Curve),
-}
-
 pub fn automation_value_at(
     clip: &AutomationClip,
     binding: &AutomationBinding,
     sample_seconds: f32,
 ) -> Option<AutomationValue> {
-    let normalized = sample_automation_clip(clip, sample_seconds);
-    Some(match &binding.mapping {
-        AutomationMapping::Float { min, max } => {
-            AutomationValue::Float(lerp(*min, *max, normalized))
-        }
-        AutomationMapping::Int { min, max } => {
-            AutomationValue::Int(lerp(*min as f32, *max as f32, normalized).round() as i32)
-        }
-        AutomationMapping::Bool => AutomationValue::Bool(normalized >= 0.5),
-        AutomationMapping::Enum { values } => {
-            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f32).floor() as usize)
-                .min(values.len().checked_sub(1)?);
-            AutomationValue::Enum(values[index].clone())
-        }
-        AutomationMapping::Curve { min, max } => {
-            AutomationValue::Curve(curve_window(clip, *min, *max, sample_seconds))
-        }
-    })
+    automation_mapping_value_at(clip, &binding.mapping, sample_seconds)
 }
 
-fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f32) -> f32 {
+pub fn automation_mapping_value_at(
+    clip: &AutomationClip,
+    mapping: &AutomationMapping,
+    sample_seconds: f32,
+) -> Option<AutomationValue> {
     let duration = clip.duration.as_seconds_f32();
     let position = if duration <= 0.0 {
         0.0
     } else {
         ((sample_seconds - clip.start.as_seconds_f32()) / duration).clamp(0.0, 1.0)
     };
-    sample_curve(&clip.curve, position).clamp(0.0, 1.0)
+    automation_mapping_value_at_position(&clip.curve, mapping, position)
 }
 
-fn curve_window(clip: &AutomationClip, min: f32, max: f32, sample_seconds: f32) -> Curve {
+pub fn curve_window_into(
+    output: &mut Curve,
+    clip: &AutomationClip,
+    min: f32,
+    max: f32,
+    sample_seconds: f32,
+) {
     let duration = clip.duration.as_seconds_f32().max(f32::EPSILON);
     let sample_position =
         ((sample_seconds - clip.start.as_seconds_f32()) / duration).clamp(0.0, 1.0);
-    let points = clip
-        .curve
-        .points
-        .iter()
-        .filter_map(|point| {
-            let position = point.position - sample_position;
-            (0.0..=1.0).contains(&position).then(|| CurvePoint {
-                position,
-                value: lerp(min, max, point.value),
-            })
-        })
-        .collect::<Vec<_>>();
-    Curve {
-        points: if points.is_empty() {
-            vec![CurvePoint {
-                position: 0.0,
-                value: lerp(min, max, sample_automation_clip(clip, sample_seconds)),
-            }]
-        } else {
-            points
-        },
-    }
-}
-
-fn lerp(min: f32, max: f32, amount: f32) -> f32 {
-    min + (max - min) * amount.clamp(0.0, 1.0)
+    curve_window_into_at_position(output, &clip.curve, min, max, sample_position);
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

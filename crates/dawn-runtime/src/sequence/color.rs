@@ -1,8 +1,4 @@
-use dawn_language::dsl::{Identifier, Value};
 use dawn_language::values::Color;
-use indexmap::IndexMap;
-
-use crate::RenderError;
 
 pub(super) fn compose_max(target: &mut Color, source: Color) {
     target.red = target.red.max(source.red);
@@ -56,24 +52,6 @@ fn scale_channel(value: u8, amount: f32) -> u8 {
 
 pub(super) fn intensity(color: Color) -> f32 {
     f32::from(color.red.max(color.green).max(color.blue)) / 255.0
-}
-
-pub(super) fn color_param(
-    params: &IndexMap<Identifier, Value>,
-    name: &str,
-) -> Result<Color, RenderError> {
-    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
-        message: format!("invalid operator parameter name `{name}`"),
-    })?;
-    params
-        .get(&name)
-        .and_then(|value| match value {
-            Value::Color(value) => Some(*value),
-            _ => None,
-        })
-        .ok_or_else(|| RenderError::BadGraph {
-            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
-        })
 }
 
 pub(crate) fn black() -> Color {

@@ -7,22 +7,30 @@ use super::bytecode::{
 use super::types::{Identifier, Type, Value};
 use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue};
 use super::{CompiledEffect, CompiledOperator, EffectKind, ParamDecl};
-use crate::values::{Color, Curve, Gradient, Marks};
-use indexmap::IndexMap;
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::automation::{AutomationMapping, AutomationValue, automation_value_at_position};
+use crate::values::{
+    Color, Curve, Gradient, Marks, SampleDuration, SampleTime, sample_duration_from_seconds_f32,
+    sample_duration_seconds_f32, sample_time_with_seconds_offset,
+};
+use alloc::format;
+#[cfg(not(feature = "atomic"))]
+use alloc::rc::Rc as Arc;
+use alloc::string::String;
+#[cfg(feature = "atomic")]
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
 
 pub const MAX_VM_INSTRUCTIONS_PER_INVOCATION: usize = 10_000;
 
 #[derive(Clone, Debug)]
 pub struct RunContext {
     pub progress: f32,
-    pub seconds: f32,
-    pub duration: f32,
+    pub time: SampleDuration,
+    pub duration: SampleDuration,
     pub pixel_index: i32,
     pub pixel_count: i32,
     pub pixel_fraction: f32,
-    pub global_marks: Marks,
 }
 
 pub type OperatorRunContext = RunContext;
@@ -38,17 +46,18 @@ pub trait SignalSampler {
 
 #[derive(Clone, Debug)]
 pub struct GeneratorContext {
-    pub duration: f32,
+    pub start_time: SampleTime,
+    pub duration: SampleDuration,
     pub target: Arc<TargetValue>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeneratedEffect {
     pub definition: GeneratedEffectRef,
-    pub start_seconds: f32,
-    pub duration_seconds: f32,
+    pub start_time: SampleTime,
+    pub duration: SampleDuration,
     pub target: Arc<TargetItemValue>,
-    pub params: IndexMap<Identifier, Value>,
+    pub params: Vec<(Identifier, Value)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,15 +73,188 @@ impl RuntimeError {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct BoundParams {
     values: Vec<BoundParamValue>,
 }
 
+impl BoundParams {
+    pub fn bind<'a, P>(declarations: &[ParamDecl], params: P) -> Result<Self, RuntimeError>
+    where
+        P: Clone + IntoIterator<Item = (&'a Identifier, &'a Value)>,
+    {
+        Self::bind_cached(declarations, params, &mut DslBindCache::default())
+    }
+
+    pub fn bind_cached<'a, P>(
+        declarations: &[ParamDecl],
+        params: P,
+        cache: &mut DslBindCache,
+    ) -> Result<Self, RuntimeError>
+    where
+        P: Clone + IntoIterator<Item = (&'a Identifier, &'a Value)>,
+    {
+        if let Some(name) = params
+            .clone()
+            .into_iter()
+            .map(|(name, _)| name)
+            .find(|name| !declarations.iter().any(|param| param.name == **name))
+        {
+            return Err(RuntimeError::new(format!(
+                "unknown parameter `{}`",
+                name.as_str()
+            )));
+        }
+        let mut bound = Self::default();
+        bind_values(declarations, cache, &mut bound, |param| {
+            resolve_param(param, params.clone())
+        })?;
+        Ok(bound)
+    }
+
+    pub fn bind_pairs(
+        declarations: &[ParamDecl],
+        params: &[(Identifier, Value)],
+    ) -> Result<Self, RuntimeError> {
+        Self::bind(
+            declarations,
+            params.iter().map(|(name, value)| (name, value)),
+        )
+    }
+
+    pub fn bind_pairs_cached(
+        declarations: &[ParamDecl],
+        params: &[(Identifier, Value)],
+        cache: &mut DslBindCache,
+    ) -> Result<Self, RuntimeError> {
+        Self::bind_cached(
+            declarations,
+            params.iter().map(|(name, value)| (name, value)),
+            cache,
+        )
+    }
+
+    pub fn apply_automation(
+        &mut self,
+        param_index: usize,
+        automation_curve: &Curve,
+        mapping: &AutomationMapping,
+        position: f32,
+    ) -> Result<(), RuntimeError> {
+        let value = self
+            .values
+            .get_mut(param_index)
+            .ok_or_else(|| RuntimeError::new("invalid automated parameter slot"))?;
+        if let AutomationMapping::Curve { min, max } = mapping {
+            let BoundParamValue::Curve(curve) = value else {
+                return Err(RuntimeError::new(
+                    "curve automation targets a non-curve parameter",
+                ));
+            };
+            Arc::make_mut(curve).update_window(automation_curve, *min, *max, position);
+            return Ok(());
+        }
+        let automated = automation_value_at_position(automation_curve, mapping, position)
+            .ok_or_else(|| RuntimeError::new("enum automation mapping has no values"))?;
+        value.update_automation(automated)
+    }
+
+    pub fn int(&self, index: usize) -> Result<i32, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Int(value)) => Ok(*value),
+            _ => Err(RuntimeError::new("expected int parameter")),
+        }
+    }
+
+    pub fn float(&self, index: usize) -> Result<f32, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Float(value)) => Ok(*value),
+            Some(BoundParamValue::Int(value)) => Ok(*value as f32),
+            _ => Err(RuntimeError::new("expected float parameter")),
+        }
+    }
+
+    pub fn boolean(&self, index: usize) -> Result<bool, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Bool(value)) => Ok(*value),
+            _ => Err(RuntimeError::new("expected bool parameter")),
+        }
+    }
+
+    pub fn color(&self, index: usize) -> Result<Color, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Color(value)) => Ok(*value),
+            _ => Err(RuntimeError::new("expected color parameter")),
+        }
+    }
+
+    pub fn marks(&self, index: usize) -> Result<Arc<Marks>, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Marks(value)) => Ok(Arc::clone(value)),
+            _ => Err(RuntimeError::new("expected marks parameter")),
+        }
+    }
+
+    pub fn curve(&self, index: usize) -> Result<Arc<Curve>, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Curve(value)) => Ok(value.raw()),
+            _ => Err(RuntimeError::new("expected curve parameter")),
+        }
+    }
+
+    pub fn gradient(&self, index: usize) -> Result<Arc<Gradient>, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Gradient(value)) => Ok(value.raw()),
+            _ => Err(RuntimeError::new("expected gradient parameter")),
+        }
+    }
+
+    pub fn array(&self, index: usize) -> Result<&[Value], RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Array(value)) => Ok(value),
+            _ => Err(RuntimeError::new("expected array parameter")),
+        }
+    }
+
+    pub fn enum_name(&self, index: usize) -> Result<&str, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Enum(value)) => Ok(value.as_str()),
+            _ => Err(RuntimeError::new("expected enum parameter")),
+        }
+    }
+
+    pub fn sample_curve(&self, index: usize, position: f32) -> Result<f32, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Curve(value)) => sample_prepared_curve(value, position),
+            _ => Err(RuntimeError::new("expected curve parameter")),
+        }
+    }
+
+    pub fn curve_crossing(
+        &self,
+        index: usize,
+        value: f32,
+        fallback: f32,
+    ) -> Result<f32, RuntimeError> {
+        let curve = match self.values.get(index) {
+            Some(BoundParamValue::Curve(value)) => value,
+            _ => return Err(RuntimeError::new("expected curve parameter")),
+        };
+        curve_crossing(curve, value, fallback)
+    }
+
+    pub fn sample_gradient(&self, index: usize, position: f32) -> Result<Color, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Gradient(value)) => sample_prepared_gradient(value, position),
+            _ => Err(RuntimeError::new("expected gradient parameter")),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DslBindCache {
-    curves: HashMap<usize, Arc<PreparedCurve>>,
-    gradients: HashMap<usize, Arc<PreparedGradient>>,
+    curves: Vec<(usize, Arc<PreparedCurve>)>,
+    gradients: Vec<(usize, Arc<PreparedGradient>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +270,7 @@ enum BoundParamValue {
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<PreparedCurve>),
     Gradient(Arc<PreparedGradient>),
-    Array(Arc<Vec<Value>>),
+    Array(Arc<[Value]>),
     Enum(Identifier),
 }
 
@@ -128,26 +310,45 @@ impl BoundParamValue {
             Self::Enum(value) => RuntimeValue::Enum(value.clone()),
         }
     }
+
+    fn update_automation(&mut self, value: AutomationValue) -> Result<(), RuntimeError> {
+        match (self, value) {
+            (Self::Int(output), AutomationValue::Int(value)) => *output = value,
+            (Self::Float(output), AutomationValue::Float(value)) => *output = value,
+            (Self::Bool(output), AutomationValue::Bool(value)) => *output = value,
+            (Self::Enum(output), AutomationValue::Enum(value)) => output.clone_from(&value),
+            _ => {
+                return Err(RuntimeError::new(
+                    "automation value has the wrong parameter type",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl DslBindCache {
     fn prepared_curve(&mut self, raw: Arc<Curve>) -> Arc<PreparedCurve> {
         let key = Arc::as_ptr(&raw).cast::<()>() as usize;
-        if let Some(curve) = self.curves.get(&key) {
+        if let Some((_, curve)) = self.curves.iter().find(|(candidate, _)| *candidate == key) {
             return Arc::clone(curve);
         }
         let curve = Arc::new(PreparedCurve::new(raw));
-        self.curves.insert(key, Arc::clone(&curve));
+        self.curves.push((key, Arc::clone(&curve)));
         curve
     }
 
     fn prepared_gradient(&mut self, raw: Arc<Gradient>) -> Arc<PreparedGradient> {
         let key = Arc::as_ptr(&raw).cast::<()>() as usize;
-        if let Some(gradient) = self.gradients.get(&key) {
+        if let Some((_, gradient)) = self
+            .gradients
+            .iter()
+            .find(|(candidate, _)| *candidate == key)
+        {
             return Arc::clone(gradient);
         }
         let gradient = Arc::new(PreparedGradient::new(raw));
-        self.gradients.insert(key, Arc::clone(&gradient));
+        self.gradients.push((key, Arc::clone(&gradient)));
         gradient
     }
 }
@@ -210,6 +411,18 @@ impl PreparedCurve {
     fn raw(&self) -> Arc<Curve> {
         Arc::clone(&self.raw)
     }
+
+    fn update_window(&mut self, curve: &Curve, min: f32, max: f32, position: f32) {
+        crate::automation::curve_window_into(
+            Arc::make_mut(&mut self.raw),
+            curve,
+            min,
+            max,
+            position,
+        );
+        prepare_float_segments_into(&self.raw, &mut self.segments);
+        prepare_curve_crossings_into(&self.segments, &mut self.crossings);
+    }
 }
 
 impl PreparedGradient {
@@ -227,8 +440,6 @@ impl PreparedGradient {
 pub struct DslVmScratch {
     registers: VmRegisters,
     param_overrides: Vec<Option<RuntimeValue>>,
-    dirty_param_overrides: Vec<usize>,
-    generated: Vec<GeneratedEffect>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -252,82 +463,43 @@ impl VmRegisters {
             layout: bytecode.layout,
         };
         if self.layout == Some(layout)
-            && self.ints.len() == bytecode.layout.ints
-            && self.floats.len() == bytecode.layout.floats
-            && self.bools.len() == bytecode.layout.bools
-            && self.colors.len() == bytecode.layout.colors
-            && self.refs.len() == bytecode.layout.refs
+            && self.ints.len() == bytecode.layout.ints as usize
+            && self.floats.len() == bytecode.layout.floats as usize
+            && self.bools.len() == bytecode.layout.bools as usize
+            && self.colors.len() == bytecode.layout.colors as usize
+            && self.refs.len() == bytecode.layout.refs as usize
         {
             return;
         }
         self.layout = Some(layout);
         self.ints.clear();
-        self.ints.resize(bytecode.layout.ints, 0);
+        self.ints.resize(bytecode.layout.ints as usize, 0);
         self.floats.clear();
-        self.floats.resize(bytecode.layout.floats, 0.0);
+        self.floats.resize(bytecode.layout.floats as usize, 0.0);
         self.bools.clear();
-        self.bools.resize(bytecode.layout.bools, false);
+        self.bools.resize(bytecode.layout.bools as usize, false);
         self.colors.clear();
-        self.colors.resize(bytecode.layout.colors, black());
+        self.colors.resize(bytecode.layout.colors as usize, black());
         self.refs.clear();
-        self.refs.resize(bytecode.layout.refs, RuntimeValue::Void);
+        self.refs
+            .resize(bytecode.layout.refs as usize, RuntimeValue::Void);
     }
 }
 
-pub(crate) fn bind_effect_params(
-    effect: &CompiledEffect,
-    params: &IndexMap<Identifier, Value>,
-) -> Result<BoundParams, RuntimeError> {
-    let mut cache = DslBindCache::default();
-    bind_effect_params_cached(effect, params, &mut cache)
-}
-
-pub(crate) fn bind_effect_params_cached(
-    effect: &CompiledEffect,
-    params: &IndexMap<Identifier, Value>,
+fn bind_values(
+    declarations: &[ParamDecl],
     cache: &mut DslBindCache,
-) -> Result<BoundParams, RuntimeError> {
-    Ok(BoundParams {
-        values: effect
-            .params
-            .iter()
-            .map(|param| {
-                Ok(bind_param_value(
-                    &param.ty,
-                    resolve_param(param, params)?,
-                    cache,
-                ))
-            })
-            .collect::<Result<_, RuntimeError>>()?,
-    })
-}
-
-pub(crate) fn bind_operator_params(
-    operator: &CompiledOperator,
-    params: &IndexMap<Identifier, Value>,
-) -> Result<BoundParams, RuntimeError> {
-    let mut cache = DslBindCache::default();
-    bind_operator_params_cached(operator, params, &mut cache)
-}
-
-pub(crate) fn bind_operator_params_cached(
-    operator: &CompiledOperator,
-    params: &IndexMap<Identifier, Value>,
-    cache: &mut DslBindCache,
-) -> Result<BoundParams, RuntimeError> {
-    Ok(BoundParams {
-        values: operator
-            .params
-            .iter()
-            .map(|param| {
-                Ok(bind_param_value(
-                    &param.ty,
-                    resolve_param(param, params)?,
-                    cache,
-                ))
-            })
-            .collect::<Result<_, RuntimeError>>()?,
-    })
+    bound: &mut BoundParams,
+    mut resolve: impl FnMut(&ParamDecl) -> Result<Value, RuntimeError>,
+) -> Result<(), RuntimeError> {
+    bound.values.clear();
+    bound.values.reserve(declarations.len());
+    for param in declarations {
+        bound
+            .values
+            .push(bind_param_value(&param.ty, resolve(param)?, cache));
+    }
+    Ok(())
 }
 
 pub(crate) fn run_sample_effect(
@@ -339,11 +511,21 @@ pub(crate) fn run_sample_effect(
     if effect.kind != EffectKind::Sample {
         return Err(RuntimeError::new("cannot sample generator effect"));
     }
+    run_sample_program(&effect.bytecode, params, context, scratch)
+}
+
+pub(super) fn run_sample_program(
+    bytecode: &BytecodeProgram,
+    params: &BoundParams,
+    context: &RunContext,
+    scratch: &mut DslVmScratch,
+) -> Result<Color, RuntimeError> {
     let mut vm = Vm::new(
-        &effect.bytecode,
+        bytecode,
         params,
         VmContext::Sample(context),
         scratch,
+        None,
         None,
     );
     vm.run_color()
@@ -358,15 +540,17 @@ pub(crate) fn run_generator_effect(
     if effect.kind != EffectKind::Generator {
         return Err(RuntimeError::new("cannot generate sample effect"));
     }
+    let mut generated = Vec::new();
     let mut vm = Vm::new(
         &effect.bytecode,
         params,
         VmContext::Generator(context),
         scratch,
         None,
+        Some(&mut generated),
     );
     let _ = vm.run()?;
-    Ok(std::mem::take(&mut vm.scratch.generated))
+    Ok(generated)
 }
 
 pub(crate) fn run_operator(
@@ -376,12 +560,23 @@ pub(crate) fn run_operator(
     sampler: &mut dyn SignalSampler,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
+    run_operator_program(&operator.bytecode, params, context, sampler, scratch)
+}
+
+pub(super) fn run_operator_program(
+    bytecode: &BytecodeProgram,
+    params: &BoundParams,
+    context: &OperatorRunContext,
+    sampler: &mut dyn SignalSampler,
+    scratch: &mut DslVmScratch,
+) -> Result<Color, RuntimeError> {
     let mut vm = Vm::new(
-        &operator.bytecode,
+        bytecode,
         params,
         VmContext::Sample(context),
         scratch,
         Some(sampler),
+        None,
     );
     vm.run_color()
 }
@@ -402,7 +597,7 @@ enum RuntimeValue {
     Gradient(Arc<Gradient>),
     PreparedCurve(Arc<PreparedCurve>),
     PreparedGradient(Arc<PreparedGradient>),
-    Array(Arc<Vec<Value>>),
+    Array(Arc<[Value]>),
     Enum(Identifier),
 }
 
@@ -455,6 +650,7 @@ struct Vm<'a> {
     ip: usize,
     loop_iterations: usize,
     signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
+    generated: Option<&'a mut Vec<GeneratedEffect>>,
 }
 
 #[derive(Clone, Copy)]
@@ -470,21 +666,14 @@ impl<'a> Vm<'a> {
         context: VmContext<'a>,
         scratch: &'a mut DslVmScratch,
         signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
+        generated: Option<&'a mut Vec<GeneratedEffect>>,
     ) -> Self {
         scratch.registers.prepare(bytecode);
         if scratch.param_overrides.len() != params.values.len() {
             scratch.param_overrides.clear();
             scratch.param_overrides.resize(params.values.len(), None);
-            scratch.dirty_param_overrides.clear();
         } else {
-            for index in scratch.dirty_param_overrides.drain(..) {
-                if let Some(slot) = scratch.param_overrides.get_mut(index) {
-                    *slot = None;
-                }
-            }
-        }
-        if matches!(context, VmContext::Generator(_)) {
-            scratch.generated.clear();
+            scratch.param_overrides.fill(None);
         }
         Self {
             bytecode,
@@ -494,6 +683,7 @@ impl<'a> Vm<'a> {
             ip: 0,
             loop_iterations: 0,
             signal_sampler,
+            generated,
         }
     }
 
@@ -521,9 +711,6 @@ impl<'a> Vm<'a> {
                         .ok_or_else(|| RuntimeError::new("invalid constant slot"))?;
                     self.set_const_value(*dst, value)?;
                 }
-                Instruction::LoadDefault { dst, ty } => {
-                    self.set_value(*dst, RuntimeValue::from_value(&ty.default_value()))?;
-                }
                 Instruction::LoadIntParam { dst, param } => {
                     self.load_int_param(*dst, *param)?;
                 }
@@ -548,20 +735,21 @@ impl<'a> Vm<'a> {
                     let Some(slot) = self.scratch.param_overrides.get_mut(*param) else {
                         return Err(RuntimeError::new("invalid param slot"));
                     };
-                    if slot.is_none() {
-                        self.scratch.dirty_param_overrides.push(*param);
-                    }
                     *slot = Some(value);
                 }
                 Instruction::Move { dst, src } => {
                     self.copy_slot(*dst, *src)?;
                 }
                 Instruction::MakeArray { dst, items } => {
+                    let items = self
+                        .bytecode
+                        .value_operands(*items)
+                        .ok_or_else(|| RuntimeError::new("invalid value operand span"))?;
                     let values = items
                         .iter()
                         .map(|item| self.value(*item).map(runtime_to_value))
                         .collect::<Result<Vec<_>, _>>()?;
-                    self.set_ref(*dst, RuntimeValue::Array(Arc::new(values)))?;
+                    self.set_ref(*dst, RuntimeValue::Array(Arc::from(values)))?;
                 }
                 Instruction::Index { dst, target, index } => {
                     let target = self.value(*target)?;
@@ -747,15 +935,15 @@ impl<'a> Vm<'a> {
                 Instruction::SectionPosition { dst, width } => {
                     let width = self.float(*width)?.max(1.0);
                     let index = sample_context(self.context)?.pixel_index as f32;
-                    self.set_float(*dst, (index - (index / width).floor() * width) / width)?;
+                    self.set_float(*dst, (index - libm::floorf(index / width) * width) / width)?;
                 }
                 Instruction::FloatUnary { dst, op, value } => {
                     let value = self.float(*value)?;
                     let result = match op {
-                        FloatUnary::Sin => value.sin(),
-                        FloatUnary::Cos => value.cos(),
+                        FloatUnary::Sin => libm::sinf(value),
+                        FloatUnary::Cos => libm::cosf(value),
                         FloatUnary::Abs => value.abs(),
-                        FloatUnary::Floor => value.floor(),
+                        FloatUnary::Floor => libm::floorf(value),
                     };
                     self.set_float(*dst, result)?;
                 }
@@ -895,7 +1083,7 @@ impl<'a> Vm<'a> {
                 } => {
                     self.set_color(
                         *dst,
-                        hsv(
+                        crate::sampling::hsv(
                             self.float(*hue)?,
                             self.float(*saturation)?,
                             self.float(*value)?,
@@ -903,7 +1091,12 @@ impl<'a> Vm<'a> {
                     )?;
                 }
                 Instruction::Rand { dst, args } => {
-                    self.set_float(*dst, self.random(args))?;
+                    let args = self
+                        .bytecode
+                        .value_operands(*args)
+                        .ok_or_else(|| RuntimeError::new("invalid random operand span"))?;
+                    let random = self.random(args)?;
+                    self.set_float(*dst, random)?;
                 }
                 Instruction::CurveFloatClamped {
                     dst,
@@ -1004,129 +1197,160 @@ impl<'a> Vm<'a> {
                     };
                     self.set_int(*dst, value)?;
                 }
-                Instruction::Mark { dst, op, args } => match op {
-                    MarkOp::Count => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let value = i32::try_from(marks.marks.len())
-                            .map_err(|_| RuntimeError::new("mark count exceeds int range"))?;
-                        self.set_int(self.int_slot_value(*dst)?, value)?;
+                Instruction::Mark { dst, op, args } => {
+                    let args = self
+                        .bytecode
+                        .value_operands(*args)
+                        .ok_or_else(|| RuntimeError::new("invalid mark operand span"))?;
+                    match op {
+                        MarkOp::Count => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let value = i32::try_from(marks.marks.len())
+                                .map_err(|_| RuntimeError::new("mark count exceeds int range"))?;
+                            self.set_int(self.int_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::At => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let index = self.int_arg(args, 1)?;
+                            let fallback = self.optional_float_arg(args, 2)?.unwrap_or(0.0);
+                            let value = mark_at_from(marks, index, fallback)?;
+                            self.set_float(self.float_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::Prev => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
+                                sample_context(self.context)
+                                    .map(|context| sample_duration_seconds_f32(context.time))
+                                    .unwrap_or(0.0),
+                            );
+                            let fallback = self.optional_float_arg(args, 2)?.unwrap_or(0.0);
+                            let index = prev_index(marks, seconds)?;
+                            let value = if index < 0 {
+                                fallback
+                            } else {
+                                mark_at_from(marks, index, fallback)?
+                            };
+                            self.set_float(self.float_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::PrevIndex => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
+                                sample_context(self.context)
+                                    .map(|context| sample_duration_seconds_f32(context.time))
+                                    .unwrap_or(0.0),
+                            );
+                            let value = prev_index(marks, seconds)?;
+                            self.set_int(self.int_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::NextIndex => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
+                                sample_context(self.context)
+                                    .map(|context| sample_duration_seconds_f32(context.time))
+                                    .unwrap_or(0.0),
+                            );
+                            let value = next_index(marks, seconds)?;
+                            self.set_int(self.int_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::Elapsed => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
+                                sample_context(self.context)
+                                    .map(|context| sample_duration_seconds_f32(context.time))
+                                    .unwrap_or(0.0),
+                            );
+                            let value = elapsed(marks, seconds)?;
+                            self.set_float(self.float_slot_value(*dst)?, value)?;
+                        }
+                        MarkOp::Phase => {
+                            let marks = self.mark_arg(args, 0)?;
+                            let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
+                                sample_context(self.context)
+                                    .map(|context| sample_duration_seconds_f32(context.time))
+                                    .unwrap_or(0.0),
+                            );
+                            let duration = match self.context {
+                                VmContext::Sample(context) => {
+                                    sample_duration_seconds_f32(context.duration)
+                                }
+                                VmContext::Generator(context) => {
+                                    sample_duration_seconds_f32(context.duration)
+                                }
+                            };
+                            let value = phase(marks, seconds, duration)?;
+                            self.set_float(self.float_slot_value(*dst)?, value)?;
+                        }
                     }
-                    MarkOp::At => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let index = self.int_arg(args, 1)?;
-                        let fallback = self.optional_float_arg(args, 2)?.unwrap_or(0.0);
-                        let value = mark_at_from(marks, index, fallback)?;
-                        self.set_float(self.float_slot_value(*dst)?, value)?;
+                }
+                Instruction::TargetItems { dst, op, args } => {
+                    let args = self
+                        .bytecode
+                        .value_operands(*args)
+                        .ok_or_else(|| RuntimeError::new("invalid target operand span"))?;
+                    match op {
+                        TargetItemsOp::Fixtures => {
+                            let target = self.ref_arg(args, 0)?;
+                            self.set_value(
+                                *dst,
+                                RuntimeValue::TargetItems(Arc::new(fixtures(target)?)),
+                            )?
+                        }
+                        TargetItemsOp::Pixels => {
+                            let target = self.ref_arg(args, 0)?;
+                            self.set_value(
+                                *dst,
+                                RuntimeValue::TargetItems(Arc::new(pixels(target)?)),
+                            )?
+                        }
+                        TargetItemsOp::Sections => {
+                            let target = self.ref_arg(args, 0)?;
+                            let width = self.float_arg(args, 1)?;
+                            self.set_value(
+                                *dst,
+                                RuntimeValue::TargetItems(Arc::new(sections(target, width)?)),
+                            )?
+                        }
+                        TargetItemsOp::Count => {
+                            let target = self.ref_arg(args, 0)?;
+                            self.set_value(
+                                *dst,
+                                RuntimeValue::Int(target_items(target)?.groups.len() as i32),
+                            )?
+                        }
+                        TargetItemsOp::Pick => {
+                            let target = self.ref_arg(args, 0)?;
+                            let items = target_items(target)?;
+                            let index = usize::try_from(self.int_arg(args, 1)?).map_err(|_| {
+                                RuntimeError::new("target item index cannot be negative")
+                            })?;
+                            self.set_value(
+                                *dst,
+                                RuntimeValue::TargetItem(
+                                    items.groups.get(index).cloned().ok_or_else(|| {
+                                        RuntimeError::new("target item index out of bounds")
+                                    })?,
+                                ),
+                            )?;
+                        }
                     }
-                    MarkOp::Prev => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
-                            sample_context(self.context)
-                                .map(|context| context.seconds)
-                                .unwrap_or(0.0),
-                        );
-                        let fallback = self.optional_float_arg(args, 2)?.unwrap_or(0.0);
-                        let index = prev_index(marks, seconds)?;
-                        let value = if index < 0 {
-                            fallback
-                        } else {
-                            mark_at_from(marks, index, fallback)?
-                        };
-                        self.set_float(self.float_slot_value(*dst)?, value)?;
-                    }
-                    MarkOp::PrevIndex => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
-                            sample_context(self.context)
-                                .map(|context| context.seconds)
-                                .unwrap_or(0.0),
-                        );
-                        let value = prev_index(marks, seconds)?;
-                        self.set_int(self.int_slot_value(*dst)?, value)?;
-                    }
-                    MarkOp::NextIndex => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
-                            sample_context(self.context)
-                                .map(|context| context.seconds)
-                                .unwrap_or(0.0),
-                        );
-                        let value = next_index(marks, seconds)?;
-                        self.set_int(self.int_slot_value(*dst)?, value)?;
-                    }
-                    MarkOp::Elapsed => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
-                            sample_context(self.context)
-                                .map(|context| context.seconds)
-                                .unwrap_or(0.0),
-                        );
-                        let value = elapsed(marks, seconds)?;
-                        self.set_float(self.float_slot_value(*dst)?, value)?;
-                    }
-                    MarkOp::Phase => {
-                        let marks = self.mark_arg(args, 0)?;
-                        let seconds = self.optional_float_arg(args, 1)?.unwrap_or(
-                            sample_context(self.context)
-                                .map(|context| context.seconds)
-                                .unwrap_or(0.0),
-                        );
-                        let duration = match self.context {
-                            VmContext::Sample(context) => context.duration,
-                            VmContext::Generator(context) => context.duration,
-                        };
-                        let value = phase(marks, seconds, duration)?;
-                        self.set_float(self.float_slot_value(*dst)?, value)?;
-                    }
-                },
-                Instruction::TargetItems { dst, op, args } => match op {
-                    TargetItemsOp::Fixtures => {
-                        let target = self.ref_arg(args, 0)?;
-                        self.set_value(
-                            *dst,
-                            RuntimeValue::TargetItems(Arc::new(fixtures(target)?)),
-                        )?
-                    }
-                    TargetItemsOp::Pixels => {
-                        let target = self.ref_arg(args, 0)?;
-                        self.set_value(*dst, RuntimeValue::TargetItems(Arc::new(pixels(target)?)))?
-                    }
-                    TargetItemsOp::Sections => {
-                        let target = self.ref_arg(args, 0)?;
-                        let width = self.float_arg(args, 1)?;
-                        self.set_value(
-                            *dst,
-                            RuntimeValue::TargetItems(Arc::new(sections(target, width)?)),
-                        )?
-                    }
-                    TargetItemsOp::Count => {
-                        let target = self.ref_arg(args, 0)?;
-                        self.set_value(
-                            *dst,
-                            RuntimeValue::Int(target_items(target)?.groups.len() as i32),
-                        )?
-                    }
-                    TargetItemsOp::Pick => {
-                        let target = self.ref_arg(args, 0)?;
-                        let items = target_items(target)?;
-                        let index = usize::try_from(self.int_arg(args, 1)?).map_err(|_| {
-                            RuntimeError::new("target item index cannot be negative")
-                        })?;
-                        self.set_value(
-                            *dst,
-                            RuntimeValue::TargetItem(items.groups.get(index).cloned().ok_or_else(
-                                || RuntimeError::new("target item index out of bounds"),
-                            )?),
-                        )?;
-                    }
-                },
+                }
                 Instruction::CheckLoopLimit => {
                     self.loop_iterations += 1;
                     if self.loop_iterations > MAX_VM_INSTRUCTIONS_PER_INVOCATION {
                         return Err(RuntimeError::new("loop iteration limit exceeded"));
                     }
                 }
-                Instruction::Emit { effect, fields } => self.emit_generated(effect, fields)?,
+                Instruction::Emit { effect, fields } => {
+                    let effect = self
+                        .bytecode
+                        .generated_effect(*effect)
+                        .ok_or_else(|| RuntimeError::new("invalid generated effect slot"))?;
+                    let fields = self
+                        .bytecode
+                        .emit_fields(*fields)
+                        .ok_or_else(|| RuntimeError::new("invalid emit field span"))?;
+                    self.emit_generated(effect, fields)?;
+                }
                 Instruction::Return(src) => return self.return_value(*src),
                 Instruction::ReturnColor(src) => return Ok(RuntimeValue::Color(self.color(*src)?)),
             }
@@ -1138,23 +1362,23 @@ impl<'a> Vm<'a> {
     }
 
     fn int(&self, slot: IntSlot) -> Result<i32, RuntimeError> {
-        Ok(self.scratch.registers.ints[slot.0])
+        Ok(self.scratch.registers.ints[slot.0 as usize])
     }
 
     fn float(&self, slot: FloatSlot) -> Result<f32, RuntimeError> {
-        Ok(self.scratch.registers.floats[slot.0])
+        Ok(self.scratch.registers.floats[slot.0 as usize])
     }
 
     fn bool(&self, slot: BoolSlot) -> Result<bool, RuntimeError> {
-        Ok(self.scratch.registers.bools[slot.0])
+        Ok(self.scratch.registers.bools[slot.0 as usize])
     }
 
     fn color(&self, slot: ColorSlot) -> Result<Color, RuntimeError> {
-        Ok(self.scratch.registers.colors[slot.0])
+        Ok(self.scratch.registers.colors[slot.0 as usize])
     }
 
     fn ref_value(&self, slot: RefSlot) -> Result<&RuntimeValue, RuntimeError> {
-        Ok(&self.scratch.registers.refs[slot.0])
+        Ok(&self.scratch.registers.refs[slot.0 as usize])
     }
 
     fn value(&self, slot: ValueSlot) -> Result<RuntimeValue, RuntimeError> {
@@ -1262,27 +1486,27 @@ impl<'a> Vm<'a> {
     }
 
     fn set_int(&mut self, slot: IntSlot, value: i32) -> Result<(), RuntimeError> {
-        self.scratch.registers.ints[slot.0] = value;
+        self.scratch.registers.ints[slot.0 as usize] = value;
         Ok(())
     }
 
     fn set_float(&mut self, slot: FloatSlot, value: f32) -> Result<(), RuntimeError> {
-        self.scratch.registers.floats[slot.0] = value;
+        self.scratch.registers.floats[slot.0 as usize] = value;
         Ok(())
     }
 
     fn set_bool(&mut self, slot: BoolSlot, value: bool) -> Result<(), RuntimeError> {
-        self.scratch.registers.bools[slot.0] = value;
+        self.scratch.registers.bools[slot.0 as usize] = value;
         Ok(())
     }
 
     fn set_color(&mut self, slot: ColorSlot, value: Color) -> Result<(), RuntimeError> {
-        self.scratch.registers.colors[slot.0] = value;
+        self.scratch.registers.colors[slot.0 as usize] = value;
         Ok(())
     }
 
     fn set_ref(&mut self, slot: RefSlot, value: RuntimeValue) -> Result<(), RuntimeError> {
-        self.scratch.registers.refs[slot.0] = value;
+        self.scratch.registers.refs[slot.0 as usize] = value;
         Ok(())
     }
 
@@ -1402,12 +1626,15 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn random(&self, args: &[FloatSlot]) -> f32 {
+    fn random(&self, args: &[ValueSlot]) -> Result<f32, RuntimeError> {
         let mut seed = 0.0;
         for slot in args {
-            seed = seed * 31.0 + self.scratch.registers.floats[slot.0];
+            let ValueSlot::Float(slot) = slot else {
+                return Err(RuntimeError::new("random operand is not a float"));
+            };
+            seed = seed * 31.0 + self.scratch.registers.floats[slot.0 as usize];
         }
-        crate::sampling::deterministic_random_seed(seed)
+        Ok(crate::sampling::deterministic_random_seed(seed))
     }
 
     fn generator_context_value(
@@ -1420,7 +1647,9 @@ impl<'a> Vm<'a> {
         Ok(match slot {
             GeneratorContextId::Timeline => RuntimeValue::Timeline,
             GeneratorContextId::Target => RuntimeValue::Target(Arc::clone(&context.target)),
-            GeneratorContextId::Duration => RuntimeValue::Float(context.duration),
+            GeneratorContextId::Duration => {
+                RuntimeValue::Float(sample_duration_seconds_f32(context.duration))
+            }
         })
     }
 
@@ -1429,14 +1658,15 @@ impl<'a> Vm<'a> {
             ContextRead::Progress => {
                 self.set_context_float(dst, sample_context(self.context)?.progress)
             }
-            ContextRead::Seconds => {
-                self.set_context_float(dst, sample_context(self.context)?.seconds)
-            }
+            ContextRead::Seconds => self.set_context_float(
+                dst,
+                sample_duration_seconds_f32(sample_context(self.context)?.time),
+            ),
             ContextRead::Duration => self.set_context_float(
                 dst,
                 match self.context {
-                    VmContext::Sample(context) => context.duration,
-                    VmContext::Generator(context) => context.duration,
+                    VmContext::Sample(context) => sample_duration_seconds_f32(context.duration),
+                    VmContext::Generator(context) => sample_duration_seconds_f32(context.duration),
                 },
             ),
             ContextRead::PixelIndex => {
@@ -1602,7 +1832,7 @@ impl<'a> Vm<'a> {
         let mut start_seconds = None;
         let mut duration_seconds = None;
         let mut target = None;
-        let mut params = IndexMap::with_capacity(fields.len());
+        let mut params = Vec::with_capacity(fields.len());
         for (field, slot) in fields {
             match field.as_str() {
                 "start" => start_seconds = Some(self.float_value(*slot)?),
@@ -1612,15 +1842,31 @@ impl<'a> Vm<'a> {
                 }
                 _ => {
                     let value = self.value(*slot)?;
-                    params.insert(field.clone(), runtime_to_value(value));
+                    params.push((field.clone(), runtime_to_value(value)));
                 }
             }
         }
-        self.scratch.generated.push(GeneratedEffect {
+        let start_seconds = start_seconds.ok_or_else(|| RuntimeError::new("emit missing start"))?;
+        let duration_seconds =
+            duration_seconds.ok_or_else(|| RuntimeError::new("emit missing duration"))?;
+        let context = generator_context(self.context)?;
+        let start_time = sample_time_with_seconds_offset(context.start_time, start_seconds)
+            .map_err(|_| RuntimeError::new("emitted effect start is out of range"))?;
+        let duration = sample_duration_from_seconds_f32(duration_seconds)
+            .map_err(|_| RuntimeError::new("emitted effect duration is out of range"))?;
+        if duration.ticks() == 0 {
+            return Err(RuntimeError::new(
+                "emitted effect duration must be positive",
+            ));
+        }
+        let generated = self
+            .generated
+            .as_deref_mut()
+            .ok_or_else(|| RuntimeError::new("emit is only valid in a generator"))?;
+        generated.push(GeneratedEffect {
             definition: effect.clone(),
-            start_seconds: start_seconds.ok_or_else(|| RuntimeError::new("emit missing start"))?,
-            duration_seconds: duration_seconds
-                .ok_or_else(|| RuntimeError::new("emit missing duration"))?,
+            start_time,
+            duration,
             target: target.ok_or_else(|| RuntimeError::new("emit missing target"))?,
             params,
         });
@@ -1628,11 +1874,11 @@ impl<'a> Vm<'a> {
     }
 }
 
-fn resolve_param(
-    param: &ParamDecl,
-    params: &IndexMap<Identifier, Value>,
-) -> Result<Value, RuntimeError> {
-    if let Some(value) = params.get(&param.name) {
+fn resolve_param<'a, P>(param: &ParamDecl, params: P) -> Result<Value, RuntimeError>
+where
+    P: IntoIterator<Item = (&'a Identifier, &'a Value)>,
+{
+    if let Some((_, value)) = params.into_iter().find(|(name, _)| **name == param.name) {
         return Ok(value.clone());
     }
     if let Some(default) = &param.default {
@@ -1672,20 +1918,24 @@ fn runtime_to_value(value: RuntimeValue) -> Value {
     }
 }
 
-fn member_value(target: &RuntimeValue, member: &Identifier) -> Result<RuntimeValue, RuntimeError> {
+fn member_value(
+    target: &RuntimeValue,
+    member: &super::bytecode::TargetMember,
+) -> Result<RuntimeValue, RuntimeError> {
     let RuntimeValue::TargetItem(item) = target else {
         return Err(RuntimeError::new("member access requires TargetItem"));
     };
     let Some(pixel) = item.pixels.first() else {
         return Err(RuntimeError::new("empty TargetItem has no fields"));
     };
-    Ok(match member.as_str() {
-        "element_index" => RuntimeValue::Int(pixel.element_index),
-        "element_cell_index" => RuntimeValue::Int(pixel.element_cell_index),
-        "pixel_index" => RuntimeValue::Int(pixel.pixel_index),
-        "pixel_count" => RuntimeValue::Int(pixel.pixel_count),
-        "pixel_fraction" => RuntimeValue::Float(pixel.pixel_fraction),
-        _ => return Err(RuntimeError::new("unknown TargetItem member")),
+    Ok(match member {
+        super::bytecode::TargetMember::ElementIndex => RuntimeValue::Int(pixel.element_index),
+        super::bytecode::TargetMember::ElementCellIndex => {
+            RuntimeValue::Int(pixel.element_cell_index)
+        }
+        super::bytecode::TargetMember::PixelIndex => RuntimeValue::Int(pixel.pixel_index),
+        super::bytecode::TargetMember::PixelCount => RuntimeValue::Int(pixel.pixel_count),
+        super::bytecode::TargetMember::PixelFraction => RuntimeValue::Float(pixel.pixel_fraction),
     })
 }
 
@@ -1696,9 +1946,9 @@ fn target_item_from_groups(groups: &[Arc<TargetItemValue>]) -> Arc<TargetItemVal
     let pixels = groups
         .iter()
         .flat_map(|item| item.pixels.iter().copied())
-        .collect();
+        .collect::<Vec<_>>();
     Arc::new(TargetItemValue {
-        pixels: Arc::new(pixels),
+        pixels: Arc::from(pixels),
     })
 }
 
@@ -1714,6 +1964,13 @@ fn sample_context(context: VmContext<'_>) -> Result<&RunContext, RuntimeError> {
     match context {
         VmContext::Sample(context) => Ok(context),
         VmContext::Generator(_) => Err(RuntimeError::new("sample context is unavailable")),
+    }
+}
+
+fn generator_context(context: VmContext<'_>) -> Result<&GeneratorContext, RuntimeError> {
+    match context {
+        VmContext::Generator(context) => Ok(context),
+        VmContext::Sample(_) => Err(RuntimeError::new("generator context is unavailable")),
     }
 }
 
@@ -1810,7 +2067,7 @@ fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
         .into_iter()
         .map(|pixels| {
             Arc::new(TargetItemValue {
-                pixels: Arc::new(pixels),
+                pixels: Arc::from(pixels),
             })
         })
         .collect();
@@ -1821,14 +2078,14 @@ fn pixels(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
     let mut groups = Vec::new();
     for_each_target_pixel(value, |pixel| {
         groups.push(Arc::new(TargetItemValue {
-            pixels: Arc::new(vec![pixel]),
+            pixels: Arc::from([pixel]),
         }));
     })?;
     Ok(TargetItemsValue { groups })
 }
 
 fn sections(value: &RuntimeValue, width: f32) -> Result<TargetItemsValue, RuntimeError> {
-    let width = width.max(1.0).floor() as i32;
+    let width = libm::floorf(width.max(1.0)) as i32;
     let mut raw_groups: Vec<Vec<TargetPixelValue>> = Vec::new();
     for_each_target_pixel(value, |pixel| {
         if raw_groups
@@ -1850,7 +2107,7 @@ fn sections(value: &RuntimeValue, width: f32) -> Result<TargetItemsValue, Runtim
         .into_iter()
         .map(|pixels| {
             Arc::new(TargetItemValue {
-                pixels: Arc::new(pixels),
+                pixels: Arc::from(pixels),
             })
         })
         .collect();
@@ -1888,11 +2145,17 @@ fn runtime_refs_equal(left: &RuntimeValue, right: &RuntimeValue) -> bool {
 }
 
 fn prepare_float_segments(curve: &Curve) -> Vec<CurveSegment> {
+    let mut segments = Vec::with_capacity(curve.points.len());
+    prepare_float_segments_into(curve, &mut segments);
+    segments
+}
+
+fn prepare_float_segments_into(curve: &Curve, segments: &mut Vec<CurveSegment>) {
+    segments.clear();
     let Some(first) = curve.points.first() else {
-        return Vec::new();
+        return;
     };
     let mut previous = first;
-    let mut segments = Vec::with_capacity(curve.points.len());
     for point in &curve.points {
         segments.push(CurveSegment {
             start_position: previous.position,
@@ -1902,7 +2165,6 @@ fn prepare_float_segments(curve: &Curve) -> Vec<CurveSegment> {
         });
         previous = point;
     }
-    segments
 }
 
 fn prepare_gradient_segments(gradient: &Gradient) -> Vec<GradientSegment> {
@@ -1924,15 +2186,25 @@ fn prepare_gradient_segments(gradient: &Gradient) -> Vec<GradientSegment> {
 }
 
 fn prepare_curve_crossings(segments: &[CurveSegment]) -> PreparedCurveCrossings {
-    let crossings = segments
-        .iter()
-        .map(|segment| CrossingSegment {
-            start_position: segment.start_position,
-            end_position: segment.end_position,
-            start_value: segment.start_value,
-            end_value: segment.end_value,
-        })
-        .collect::<Vec<_>>();
+    let mut crossings = PreparedCurveCrossings::Increasing(Vec::with_capacity(segments.len()));
+    prepare_curve_crossings_into(segments, &mut crossings);
+    crossings
+}
+
+fn prepare_curve_crossings_into(segments: &[CurveSegment], output: &mut PreparedCurveCrossings) {
+    let mut crossings =
+        match core::mem::replace(output, PreparedCurveCrossings::Increasing(Vec::new())) {
+            PreparedCurveCrossings::Increasing(values)
+            | PreparedCurveCrossings::Decreasing(values)
+            | PreparedCurveCrossings::Mixed(values) => values,
+        };
+    crossings.clear();
+    crossings.extend(segments.iter().map(|segment| CrossingSegment {
+        start_position: segment.start_position,
+        end_position: segment.end_position,
+        start_value: segment.start_value,
+        end_value: segment.end_value,
+    }));
     let increasing = crossings
         .windows(2)
         .all(|pair| pair[0].end_value <= pair[1].end_value);
@@ -1940,11 +2212,11 @@ fn prepare_curve_crossings(segments: &[CurveSegment]) -> PreparedCurveCrossings 
         .windows(2)
         .all(|pair| pair[0].end_value >= pair[1].end_value);
     if increasing {
-        PreparedCurveCrossings::Increasing(crossings)
+        *output = PreparedCurveCrossings::Increasing(crossings);
     } else if decreasing {
-        PreparedCurveCrossings::Decreasing(crossings)
+        *output = PreparedCurveCrossings::Decreasing(crossings);
     } else {
-        PreparedCurveCrossings::Mixed(crossings)
+        *output = PreparedCurveCrossings::Mixed(crossings);
     }
 }
 
@@ -2119,46 +2391,20 @@ fn channel_byte(value: f32) -> u8 {
     (value.clamp(0.0, 255.0) + 0.5) as u8
 }
 
-fn hsv(h: f32, s: f32, v: f32) -> Color {
-    let h = h - h.floor();
-    let sector = h * 6.0;
-    let c = v * s;
-    let x = c * (1.0 - (sector - (sector / 2.0).floor() * 2.0 - 1.0).abs());
-    let m = v - c;
-    let (r, g, b) = if sector < 1.0 {
-        (c, x, 0.0)
-    } else if sector < 2.0 {
-        (x, c, 0.0)
-    } else if sector < 3.0 {
-        (0.0, c, x)
-    } else if sector < 4.0 {
-        (0.0, x, c)
-    } else if sector < 5.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-    Color {
-        red: channel(r + m),
-        green: channel(g + m),
-        blue: channel(b + m),
-    }
-}
-
 fn mark_at_from(marks: &Marks, index: i32, fallback: f32) -> Result<f32, RuntimeError> {
     let index =
         usize::try_from(index).map_err(|_| RuntimeError::new("mark index cannot be negative"))?;
     Ok(marks
         .marks
         .get(index)
-        .map(|mark| mark.as_seconds_f32())
+        .map(|mark| sample_duration_seconds_f32(*mark))
         .unwrap_or(fallback))
 }
 
 fn prev_index(marks: &Marks, seconds: f32) -> Result<i32, RuntimeError> {
     let mut previous = -1;
     for (index, mark) in marks.marks.iter().enumerate() {
-        if mark.as_seconds_f32() <= seconds {
+        if sample_duration_seconds_f32(*mark) <= seconds {
             previous = i32::try_from(index)
                 .map_err(|_| RuntimeError::new("mark index exceeds int range"))?;
         }
@@ -2168,7 +2414,7 @@ fn prev_index(marks: &Marks, seconds: f32) -> Result<i32, RuntimeError> {
 
 fn next_index(marks: &Marks, seconds: f32) -> Result<i32, RuntimeError> {
     for (index, mark) in marks.marks.iter().enumerate() {
-        if mark.as_seconds_f32() > seconds {
+        if sample_duration_seconds_f32(*mark) > seconds {
             return i32::try_from(index)
                 .map_err(|_| RuntimeError::new("mark index exceeds int range"));
         }

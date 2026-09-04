@@ -51,7 +51,7 @@ pub struct OperatorPortDefinition {
 #[derive(Clone, Debug, PartialEq)]
 pub enum OperatorImplementation {
     Native(BuiltinOperator),
-    Dsl(CompiledOperator),
+    Dsl(Box<CompiledOperator>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,13 +183,6 @@ fn definition(
 }
 
 static BUILTIN_DEFINITIONS: LazyLock<[OperatorDefinition; 9]> = LazyLock::new(|| {
-    let delay = crate::dsl::compile_builtin_operators(
-        "operator Delay { input Signal input; param float seconds = 0.1; color sample() { return input.at(seconds() - max(seconds, 0.0)); } }",
-    )
-    .unwrap_or_else(|_| unreachable!("embedded Delay operator is valid"))
-    .into_iter()
-    .next()
-    .unwrap_or_else(|| unreachable!("embedded Delay declares one operator"));
     [
         definition(
             BuiltinOperator::Max,
@@ -269,7 +262,7 @@ static BUILTIN_DEFINITIONS: LazyLock<[OperatorDefinition; 9]> = LazyLock::new(||
             "Delay",
             &[("input", "Source")],
             vec![param("seconds", Type::Float, Value::Float(0.1))],
-            OperatorImplementation::Dsl(delay),
+            OperatorImplementation::Native(BuiltinOperator::Delay),
         ),
         definition(
             BuiltinOperator::Echo,
@@ -306,7 +299,7 @@ pub fn custom_operator_definition(
             .collect(),
         output: port("output", "Output", OperatorPortCardinality::Many),
         params: compiled.params().to_vec(),
-        implementation: OperatorImplementation::Dsl(compiled),
+        implementation: OperatorImplementation::Dsl(Box::new(compiled)),
     }
 }
 

@@ -1041,7 +1041,7 @@ impl DomainResolver<'_> {
         let path = document_id.path();
         let effect_ref = string_field(path, value, "effect")?;
         if let Some(name) = effect_ref.strip_prefix("builtins.") {
-            return BuiltinEffect::from_source_name(name)
+            return dawn_language::effect::builtin_effect_from_source_name(name)
                 .map(EffectRef::Builtin)
                 .ok_or_else(|| LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
@@ -1497,8 +1497,8 @@ use dawn_language::controller::{
 };
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
-    BuiltinEffect, CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId,
-    EffectParamValue, EffectRef, GradientSource,
+    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
+    EffectRef, GradientSource,
 };
 use dawn_language::element::{
     ColorCapability, DiscreteColorMapping, DiscreteEmitter, ElementCellAddress, ElementCellRange,

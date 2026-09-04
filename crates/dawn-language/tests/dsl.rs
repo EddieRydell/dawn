@@ -3,6 +3,7 @@ use dawn_language::dsl::{
     RuntimeError, SignalSampler, TargetValue, compile_effects, compile_operators,
 };
 use dawn_language::effect::BuiltinEffect;
+use dawn_language::values::{SampleDuration, SampleTime};
 use indexmap::IndexMap;
 use std::sync::Arc;
 
@@ -65,12 +66,11 @@ fn signal_sampling_and_color_operations_execute() {
     let params = operator.bind_params(&IndexMap::new()).unwrap();
     let context = OperatorRunContext {
         progress: 0.25,
-        seconds: 1.0,
-        duration: 4.0,
+        time: SampleDuration::from_ticks(1_000_000),
+        duration: SampleDuration::from_ticks(4_000_000),
         pixel_index: 0,
         pixel_count: 1,
         pixel_fraction: 0.0,
-        global_marks: dawn_language::dsl::Marks { marks: Vec::new() },
     };
     let mut sampler = ConstantSignal(Color {
         red: 10,
@@ -117,7 +117,8 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
         .generate_bound(
             &effect.bind_params(&IndexMap::new()).unwrap(),
             &GeneratorContext {
-                duration: 1.0,
+                start_time: SampleTime::from_ticks(2_000_000),
+                duration: SampleDuration::from_ticks(1_000_000),
                 target: Arc::new(TargetValue { groups: Vec::new() }),
             },
             &mut DslVmScratch::default(),
@@ -137,6 +138,13 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
             GeneratedEffectRef::Builtin(BuiltinEffect::MarkChase),
             GeneratedEffectRef::Local(Identifier::new("LocalChild".to_string()).unwrap()),
         ]
+    );
+    assert!(
+        generated.iter().all(|effect| {
+            effect.start_time == SampleTime::from_ticks(2_000_000)
+                && effect.duration == SampleDuration::from_ticks(1_000_000)
+        }),
+        "emitted timing should be converted once to the portable clock"
     );
 }
 
@@ -214,12 +222,11 @@ fn required_parameters_and_integer_remainder_fail_without_panicking() {
             &bound,
             &dawn_language::dsl::RunContext {
                 progress: 0.0,
-                seconds: 0.0,
-                duration: 1.0,
+                time: SampleDuration::from_ticks(0),
+                duration: SampleDuration::from_ticks(1_000_000),
                 pixel_index: 0,
                 pixel_count: 1,
                 pixel_fraction: 0.0,
-                global_marks: dawn_language::dsl::Marks { marks: Vec::new() },
             },
             &mut DslVmScratch::default(),
         )

@@ -18,18 +18,6 @@ pub(crate) fn set_cell<T: Copy>(
     *target = value;
     Ok(())
 }
-pub(crate) fn check_source_width(
-    expected: usize,
-    actual: usize,
-) -> Result<(), SequenceOutputRenderError> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(SequenceOutputRenderError::Patch(format!(
-            "source width {actual} does not match declared width {expected}"
-        )))
-    }
-}
 pub(crate) fn sample_curve(curve: &Curve, position: f32) -> f32 {
     let Some(first) = curve.points.first() else {
         return 0.0;
