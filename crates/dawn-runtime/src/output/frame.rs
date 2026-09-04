@@ -14,7 +14,7 @@ pub enum RenderedElementState {
     },
     Scalar {
         node: ElementNodeId,
-        cells: Vec<f64>,
+        cells: Vec<f32>,
     },
     Indexed {
         node: ElementNodeId,
@@ -57,10 +57,9 @@ pub struct ControllerPortFrame {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedSequenceFrame {
-    pub frame_index: u64,
+    pub frame_index: u32,
     pub frame_rate: u32,
-    pub clock_seconds: f64,
-    pub sample_seconds: f64,
+    pub sample_time: dawn_language::values::SampleTime,
     pub elements: Vec<RenderedElementState>,
     pub controller_frames: Vec<ControllerPortFrame>,
 }

@@ -81,7 +81,7 @@ pub enum FixtureEntryTag {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DimmingCurve {
     Linear,
-    Gamma(f64),
+    Gamma(f32),
     Custom(Curve),
 }
 
@@ -124,8 +124,8 @@ pub enum FixtureBehaviorRule {
     },
     Dimmer {
         function: FixtureFunctionId,
-        off: f64,
-        on: f64,
+        off: f32,
+        on: f32,
     },
     ColorWheel {
         function: FixtureFunctionId,
@@ -146,8 +146,8 @@ pub struct ColorWheelColorMapping {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FixtureControlValue {
-    Normalized(f64),
-    Indexed { entry: FixtureEntryId, range: f64 },
+    Normalized(f32),
+    Indexed { entry: FixtureEntryId, range: f32 },
     Color(Color),
 }
 

@@ -1325,8 +1325,8 @@ pub fn insert_sequence(
         });
     }
     if Identifier::new(object_key.clone()).is_err()
-        || !duration.as_seconds_f64().is_finite()
-        || duration.as_seconds_f64() <= 0.0
+        || !duration.as_seconds_f32().is_finite()
+        || duration.as_seconds_f32() <= 0.0
         || frame_rate == 0
     {
         return Err(ExportProjectError::InvalidReference {

@@ -8,6 +8,9 @@ use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
 use dawn_language::sequence::SequenceLayerId;
+use dawn_language::values::{
+    SampleDuration, SampleTime, sample_duration_seconds_f32, sample_time_seconds_f32,
+};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,13 +27,48 @@ use crate::{
     arc_key,
 };
 
+fn prepared_timing(
+    start_seconds: f32,
+    duration_seconds: f32,
+) -> Result<
+    (
+        dawn_language::values::SampleTime,
+        dawn_language::values::SampleDuration,
+    ),
+    RenderError,
+> {
+    let start_time =
+        dawn_language::values::sample_time_from_seconds_f32(start_seconds).map_err(|_| {
+            RenderError::InvalidTiming {
+                reason: "generated effect start exceeds the runtime clock range".to_string(),
+            }
+        })?;
+    let duration = dawn_language::values::DawnDuration::try_from_seconds_f32(duration_seconds)
+        .map_err(|_| RenderError::InvalidTiming {
+            reason: "generated effect duration must be positive and within the runtime clock range"
+                .to_string(),
+        })?;
+    let duration =
+        dawn_language::values::sample_duration_from_dawn_duration(&duration).map_err(|_| {
+            RenderError::InvalidTiming {
+                reason: "generated effect duration exceeds the runtime clock range".to_string(),
+            }
+        })?;
+    if duration.ticks() == 0 {
+        return Err(RenderError::InvalidTiming {
+            reason: "generated effect duration must be positive".to_string(),
+        });
+    }
+    Ok((start_time, duration))
+}
+
 const MAX_GENERATOR_DEPTH: usize = 4;
 const MAX_GENERATED_CHILDREN: usize = MAX_GENERATED_EFFECTS;
 
 #[derive(Clone, Debug)]
 pub(crate) struct GeneratorExpansion {
-    pub(crate) start_seconds: f64,
-    pub(crate) duration_seconds: f64,
+    pub(crate) start_time: SampleTime,
+    pub(crate) duration: SampleDuration,
     pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
     pub(crate) depth: usize,
     pub(crate) definition_source: SourceIdentity,
@@ -63,7 +101,7 @@ pub(crate) fn expand_generator(
     let generated = definition.generate_bound(
         params,
         &GeneratorContext {
-            duration: expansion.duration_seconds,
+            duration: sample_duration_seconds_f32(expansion.duration),
             target,
         },
         &mut scratch,
@@ -77,7 +115,7 @@ pub(crate) fn expand_generator(
         *context.generated_child_count += 1;
         prepare_generated_child(
             context,
-            expansion.start_seconds,
+            expansion.start_time,
             expansion.depth,
             &expansion.definition_source,
             child,
@@ -89,8 +127,8 @@ pub(crate) fn expand_generator(
 pub(crate) fn expand_native_generator(
     context: &mut GeneratorPrepareContext<'_>,
     definition: &BoundNativeEffect,
-    start_seconds: f64,
-    duration_seconds: f64,
+    start_time: SampleTime,
+    duration: SampleDuration,
     target: Arc<Vec<PreparedTargetPixel>>,
     depth: usize,
 ) -> Result<(), RenderError> {
@@ -100,7 +138,7 @@ pub(crate) fn expand_native_generator(
         });
     }
     let generated = definition.generate(&GeneratorContext {
-        duration: duration_seconds,
+        duration: sample_duration_seconds_f32(duration),
         target: generator_context_target(context.target_cache, &target),
     })?;
     for child in generated {
@@ -110,14 +148,14 @@ pub(crate) fn expand_native_generator(
             });
         }
         *context.generated_child_count += 1;
-        prepare_native_child(context, start_seconds, child)?;
+        prepare_native_child(context, start_time, child)?;
     }
     Ok(())
 }
 
 fn prepare_native_child(
     context: &mut GeneratorPrepareContext<'_>,
-    parent_start_seconds: f64,
+    parent_start: SampleTime,
     child: NativeGeneratedEffect,
 ) -> Result<(), RenderError> {
     if !child.duration_seconds.is_finite() || child.duration_seconds <= 0.0 {
@@ -131,10 +169,14 @@ fn prepare_native_child(
         child.target,
     )?;
     let name = child.sample.display_name().to_string();
+    let (start_time, duration) = prepared_timing(
+        sample_time_seconds_f32(parent_start) + child.start_seconds,
+        child.duration_seconds,
+    )?;
     context.effects.push(PreparedEffect {
         layer_id: context.layer_id.clone(),
-        start_seconds: parent_start_seconds + child.start_seconds,
-        duration_seconds: child.duration_seconds,
+        start_time,
+        duration,
         sample_groups: prepare_sample_context_groups_cached(context.target_cache, &target),
         target,
         name,
@@ -150,7 +192,7 @@ fn prepare_native_child(
 
 fn prepare_generated_child(
     context: &mut GeneratorPrepareContext<'_>,
-    parent_start_seconds: f64,
+    parent_start: SampleTime,
     parent_depth: usize,
     definition_source: &SourceIdentity,
     child: GeneratedEffect,
@@ -194,7 +236,8 @@ fn prepare_generated_child(
         context.elements,
         child.target,
     )?;
-    let start_seconds = parent_start_seconds + child.start_seconds;
+    let start_seconds = sample_time_seconds_f32(parent_start) + child.start_seconds;
+    let (start_time, duration) = prepared_timing(start_seconds, duration_seconds)?;
     match &definition.implementation {
         EffectImplementation::Dsl(definition_compiled) => {
             let EffectRef::Custom(effect_id) = &effect_ref else {
@@ -210,8 +253,8 @@ fn prepare_generated_child(
                 RootEffectKind::Sample => {
                     context.effects.push(PreparedEffect {
                         layer_id: context.layer_id.clone(),
-                        start_seconds,
-                        duration_seconds,
+                        start_time,
+                        duration,
                         sample_groups: prepare_sample_groups_for_effect(
                             context.target_cache,
                             &compiled,
@@ -233,8 +276,8 @@ fn prepare_generated_child(
                     &compiled,
                     &bound_params,
                     GeneratorExpansion {
-                        start_seconds,
-                        duration_seconds,
+                        start_time,
+                        duration,
                         target,
                         depth: parent_depth + 1,
                         definition_source: effect_id.0.clone(),
@@ -257,8 +300,8 @@ fn prepare_generated_child(
                     };
                     context.effects.push(PreparedEffect {
                         layer_id: context.layer_id.clone(),
-                        start_seconds,
-                        duration_seconds,
+                        start_time,
+                        duration,
                         sample_groups: prepare_sample_groups_for_implementation(
                             context.target_cache,
                             &implementation,
@@ -275,8 +318,8 @@ fn prepare_generated_child(
                 RootEffectKind::Generator => expand_native_generator(
                     context,
                     &bound,
-                    start_seconds,
-                    duration_seconds,
+                    start_time,
+                    duration,
                     target,
                     parent_depth + 1,
                 ),
@@ -369,10 +412,10 @@ fn generator_context_target(
 
 fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
     TargetPixelValue {
-        element_index: pixel.element_index as i64,
-        element_cell_index: pixel.element_cell_index as i64,
-        pixel_index: pixel.pixel_index as i64,
-        pixel_count: pixel.pixel_count as i64,
+        element_index: pixel.element_index as i32,
+        element_cell_index: pixel.element_cell_index as i32,
+        pixel_index: pixel.pixel_index as i32,
+        pixel_count: pixel.pixel_count as i32,
         pixel_fraction: pixel.pixel_fraction,
     }
 }

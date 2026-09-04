@@ -1,72 +1,64 @@
-use crate::{PreparedEffect, RenderError};
+use crate::RenderError;
 use dawn_language::sequence::Sequence;
-use dawn_language::validation::MAX_SEQUENCE_FRAME_COUNT;
+use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, MAX_SEQUENCE_FRAME_RATE};
+use dawn_language::values::{
+    DawnDuration, DawnTime, NANOS_PER_SECOND, SampleTime, sample_time_from_dawn_time,
+    sample_time_from_frame,
+};
+
+fn invalid_timing(reason: impl Into<String>) -> RenderError {
+    RenderError::InvalidTiming {
+        reason: reason.into(),
+    }
+}
 
 pub(crate) fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
     if sequence.frame_rate == 0 {
-        return Err(RenderError::InvalidTiming {
-            reason: "frame rate must be greater than zero".to_string(),
-        });
+        return Err(invalid_timing("frame rate must be greater than zero"));
     }
-    let duration_seconds = sequence.duration.as_seconds_f64();
-    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
-        return Err(RenderError::InvalidTiming {
-            reason: "duration must be positive and finite".to_string(),
-        });
+    if sequence.frame_rate > MAX_SEQUENCE_FRAME_RATE {
+        return Err(invalid_timing(format!(
+            "frame rate exceeds the limit of {MAX_SEQUENCE_FRAME_RATE} frames per second"
+        )));
     }
-    let prepared_frames = duration_seconds * f64::from(sequence.frame_rate);
-    if !prepared_frames.is_finite() || prepared_frames.ceil() > MAX_SEQUENCE_FRAME_COUNT as f64 {
-        return Err(RenderError::InvalidTiming {
-            reason: format!(
-                "sequence exceeds the prepared-frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
-            ),
-        });
+    if sequence.duration.is_zero() {
+        return Err(invalid_timing("duration must be positive"));
     }
+    if frame_count(&sequence.duration, sequence.frame_rate)? > MAX_SEQUENCE_FRAME_COUNT {
+        return Err(invalid_timing(format!(
+            "sequence exceeds the prepared-frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
+        )));
+    }
+    sample_time_from_dawn_time(&DawnTime(sequence.duration.0))
+        .map_err(|_| invalid_timing("sequence duration exceeds the runtime clock range"))?;
     Ok(())
 }
 
-pub(crate) fn frame_count(duration_seconds: f64, frame_rate: u32) -> u64 {
-    (duration_seconds * f64::from(frame_rate)).ceil() as u64
+pub(crate) fn frame_count(duration: &DawnDuration, frame_rate: u32) -> Result<u32, RenderError> {
+    if frame_rate == 0 {
+        return Err(invalid_timing("frame rate must be greater than zero"));
+    }
+    let scaled = duration.as_nanos() * u128::from(frame_rate);
+    let frames = scaled.div_ceil(u128::from(NANOS_PER_SECOND));
+    u32::try_from(frames).map_err(|_| invalid_timing("frame count exceeds the runtime range"))
 }
 
-pub(crate) fn build_effect_frame_index(
-    effects: &[PreparedEffect],
-    frame_count: u64,
+pub(crate) fn sample_time_for_frame(
+    frame_index: u32,
     frame_rate: u32,
-) -> Vec<Vec<usize>> {
-    build_effect_frame_index_for_window(effects, 0, frame_count, frame_rate)
+) -> Result<SampleTime, RenderError> {
+    sample_time_from_frame(frame_index, frame_rate)
+        .map_err(|_| invalid_timing("frame time exceeds the runtime clock range"))
 }
 
-pub(crate) fn build_effect_frame_index_for_window(
-    effects: &[PreparedEffect],
-    start_frame: u64,
-    frame_count: u64,
-    frame_rate: u32,
-) -> Vec<Vec<usize>> {
-    let end_frame_limit = start_frame.saturating_add(frame_count);
-    let effect_frame_range = |effect: &PreparedEffect| {
-        let effect_start_frame = (effect.start_seconds * f64::from(frame_rate))
-            .floor()
-            .max(0.0) as u64;
-        let effect_end_frame = ((effect.start_seconds + effect.duration_seconds)
-            * f64::from(frame_rate))
-        .ceil() as u64;
-        effect_start_frame.max(start_frame)..effect_end_frame.min(end_frame_limit)
-    };
-    let mut active_counts = vec![0usize; frame_count as usize];
-    for effect in effects {
-        for frame in effect_frame_range(effect) {
-            active_counts[frame.saturating_sub(start_frame) as usize] += 1;
-        }
-    }
-    let mut index = active_counts
-        .into_iter()
-        .map(Vec::with_capacity)
-        .collect::<Vec<_>>();
-    for (effect_index, effect) in effects.iter().enumerate() {
-        for frame in effect_frame_range(effect) {
-            index[frame.saturating_sub(start_frame) as usize].push(effect_index);
-        }
-    }
-    index
+pub(crate) fn first_frame_at_or_after(time: SampleTime, frame_rate: u32) -> u32 {
+    let whole = time.ticks() / dawn_language::values::MICROS_PER_SECOND;
+    let partial = time.ticks() % dawn_language::values::MICROS_PER_SECOND;
+    whole * frame_rate + (partial * frame_rate).div_ceil(dawn_language::values::MICROS_PER_SECOND)
+}
+
+pub(crate) fn frame_at_or_before(time: SampleTime, frame_rate: u32) -> u32 {
+    let whole = time.ticks() / dawn_language::values::MICROS_PER_SECOND;
+    let partial = time.ticks() % dawn_language::values::MICROS_PER_SECOND;
+    whole * frame_rate + partial * frame_rate / dawn_language::values::MICROS_PER_SECOND
 }

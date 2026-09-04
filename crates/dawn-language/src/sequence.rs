@@ -59,8 +59,8 @@ pub struct CompositionGraphNodeId(pub u32);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphNodePosition {
-    pub x: f64,
-    pub y: f64,
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -180,16 +180,16 @@ pub enum AutomationTarget {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AutomationMapping {
-    Float { min: f64, max: f64 },
-    Int { min: i64, max: i64 },
+    Float { min: f32, max: f32 },
+    Int { min: i32, max: i32 },
     Bool,
     Enum { values: Vec<Identifier> },
-    Curve { min: f64, max: f64 },
+    Curve { min: f32, max: f32 },
 }
 
 pub enum AutomationValue {
-    Int(i64),
-    Float(f64),
+    Int(i32),
+    Float(f32),
     Bool(bool),
     Enum(Identifier),
     Curve(Curve),
@@ -198,7 +198,7 @@ pub enum AutomationValue {
 pub fn automation_value_at(
     clip: &AutomationClip,
     binding: &AutomationBinding,
-    sample_seconds: f64,
+    sample_seconds: f32,
 ) -> Option<AutomationValue> {
     let normalized = sample_automation_clip(clip, sample_seconds);
     Some(match &binding.mapping {
@@ -206,11 +206,11 @@ pub fn automation_value_at(
             AutomationValue::Float(lerp(*min, *max, normalized))
         }
         AutomationMapping::Int { min, max } => {
-            AutomationValue::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
+            AutomationValue::Int(lerp(*min as f32, *max as f32, normalized).round() as i32)
         }
         AutomationMapping::Bool => AutomationValue::Bool(normalized >= 0.5),
         AutomationMapping::Enum { values } => {
-            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
+            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f32).floor() as usize)
                 .min(values.len().checked_sub(1)?);
             AutomationValue::Enum(values[index].clone())
         }
@@ -220,20 +220,20 @@ pub fn automation_value_at(
     })
 }
 
-fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f64) -> f64 {
-    let duration = clip.duration.as_seconds_f64();
+fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f32) -> f32 {
+    let duration = clip.duration.as_seconds_f32();
     let position = if duration <= 0.0 {
         0.0
     } else {
-        ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0)
+        ((sample_seconds - clip.start.as_seconds_f32()) / duration).clamp(0.0, 1.0)
     };
     sample_curve(&clip.curve, position).clamp(0.0, 1.0)
 }
 
-fn curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
-    let duration = clip.duration.as_seconds_f64().max(f64::EPSILON);
+fn curve_window(clip: &AutomationClip, min: f32, max: f32, sample_seconds: f32) -> Curve {
+    let duration = clip.duration.as_seconds_f32().max(f32::EPSILON);
     let sample_position =
-        ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0);
+        ((sample_seconds - clip.start.as_seconds_f32()) / duration).clamp(0.0, 1.0);
     let points = clip
         .curve
         .points
@@ -258,7 +258,7 @@ fn curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) 
     }
 }
 
-fn lerp(min: f64, max: f64, amount: f64) -> f64 {
+fn lerp(min: f32, max: f32, amount: f32) -> f32 {
     min + (max - min) * amount.clamp(0.0, 1.0)
 }
 

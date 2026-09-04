@@ -10,6 +10,7 @@ license = "MIT"
 camino.workspace = true
 dawn-package.workspace = true
 dawn-language.workspace = true
+dur.workspace = true
 indexmap.workspace = true
 marked-yaml.workspace = true
 pathdiff.workspace = true

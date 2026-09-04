@@ -128,14 +128,14 @@ impl PreparedSequenceOutput {
 
     pub fn render_seconds(
         &self,
-        seconds: f64,
+        seconds: f32,
     ) -> Result<RenderedSequenceFrame, SequenceOutputRenderError> {
         self.render_seconds_with_scratch(seconds, &mut SequenceOutputScratch::default())
     }
 
     pub fn render_seconds_with_scratch(
         &self,
-        seconds: f64,
+        seconds: f32,
         scratch: &mut SequenceOutputScratch,
     ) -> Result<RenderedSequenceFrame, SequenceOutputRenderError> {
         let rendered = self
@@ -147,7 +147,7 @@ impl PreparedSequenceOutput {
 
     pub fn render_frame(
         &self,
-        frame: u64,
+        frame: u32,
     ) -> Result<RenderedSequenceFrame, SequenceOutputRenderError> {
         let rendered = self
             .sequence
@@ -159,7 +159,7 @@ impl PreparedSequenceOutput {
     pub fn frame_rate(&self) -> u32 {
         self.sequence.frame_rate()
     }
-    pub fn frame_count(&self) -> u64 {
+    pub fn frame_count(&self) -> u32 {
         self.sequence.frame_count()
     }
 
@@ -210,7 +210,7 @@ impl PreparedSequenceOutput {
                 }
             }
         }
-        let explicit = apply_controls(&mut elements, &self.controls, rendered.sample_seconds)?;
+        let explicit = apply_controls(&mut elements, &self.controls, rendered.sample_time)?;
         apply_fixture_behavior_rules(&mut elements, &self.profiles, &explicit)?;
         let controller_frames = evaluate_patch(
             &self.tree,
@@ -222,8 +222,7 @@ impl PreparedSequenceOutput {
         Ok(RenderedSequenceFrame {
             frame_index: rendered.frame_index,
             frame_rate: rendered.frame_rate,
-            clock_seconds: rendered.clock_seconds,
-            sample_seconds: rendered.sample_seconds,
+            sample_time: rendered.sample_time,
             elements,
             controller_frames,
         })

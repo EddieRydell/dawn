@@ -214,7 +214,7 @@ fn bench_operator(c: &mut Criterion) {
         .map(|pixel_index| RunContext {
             pixel_index,
             pixel_count: 512,
-            pixel_fraction: pixel_index as f64 / 511.0,
+            pixel_fraction: pixel_index as f32 / 511.0,
             ..sample_context()
         })
         .collect::<Vec<_>>();
@@ -242,7 +242,7 @@ impl SignalSampler for ConstantSignalSampler {
     fn sample_signal(
         &mut self,
         _input: usize,
-        _seconds: f64,
+        _seconds: f32,
         _pixel_index: usize,
     ) -> Result<Color, dawn_language::dsl::RuntimeError> {
         Ok(Color {
@@ -328,7 +328,7 @@ fn generator_context() -> GeneratorContext {
     }
 }
 
-fn target_groups(group_count: i64, pixels_per_group: i64) -> Vec<Arc<TargetItemValue>> {
+fn target_groups(group_count: i32, pixels_per_group: i32) -> Vec<Arc<TargetItemValue>> {
     let pixel_count = group_count * pixels_per_group;
     (0..group_count)
         .map(|element_index| {
@@ -342,7 +342,7 @@ fn target_groups(group_count: i64, pixels_per_group: i64) -> Vec<Arc<TargetItemV
                                 element_cell_index,
                                 pixel_index,
                                 pixel_count,
-                                pixel_fraction: pixel_index as f64 / (pixel_count - 1) as f64,
+                                pixel_fraction: pixel_index as f32 / (pixel_count - 1) as f32,
                             }
                         })
                         .collect(),
@@ -549,7 +549,7 @@ fn identifier(value: &str) -> Identifier {
 fn marks() -> Marks {
     Marks {
         marks: (0..16)
-            .map(|index| DawnTime(Duration::from_secs_f64(index as f64 * 0.375)))
+            .map(|index| DawnTime(Duration::from_secs_f32(index as f32 * 0.375)))
             .collect(),
     }
 }
@@ -626,7 +626,7 @@ fn alternate_gradient() -> Arc<Gradient> {
     })
 }
 
-fn color_point(position: f64, red: u8, green: u8, blue: u8) -> GradientStop {
+fn color_point(position: f32, red: u8, green: u8, blue: u8) -> GradientStop {
     GradientStop {
         position,
         color: Color { red, green, blue },

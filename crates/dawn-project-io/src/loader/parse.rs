@@ -118,12 +118,12 @@ pub(crate) fn parse_automation_mapping(
     )?;
     Ok(match string_field(path, value, "type")? {
         "float" => AutomationMapping::Float {
-            min: f64_field(path, value, "min")?,
-            max: f64_field(path, value, "max")?,
+            min: f32_field(path, value, "min")?,
+            max: f32_field(path, value, "max")?,
         },
         "int" => AutomationMapping::Int {
-            min: i64_field(path, value, "min")?,
-            max: i64_field(path, value, "max")?,
+            min: i32_field(path, value, "min")?,
+            max: i32_field(path, value, "max")?,
         },
         "bool" => AutomationMapping::Bool,
         "enum" => AutomationMapping::Enum {
@@ -139,8 +139,8 @@ pub(crate) fn parse_automation_mapping(
                 .collect::<Result<Vec<_>, _>>()?,
         },
         "curve" => AutomationMapping::Curve {
-            min: f64_field(path, value, "min")?,
-            max: f64_field(path, value, "max")?,
+            min: f32_field(path, value, "min")?,
+            max: f32_field(path, value, "max")?,
         },
         other => {
             return Err(LoadProjectError::InvalidDocument {
@@ -549,8 +549,8 @@ pub(crate) fn parse_graph_position(
     value: &Value,
 ) -> Result<GraphNodePosition, LoadProjectError> {
     Ok(GraphNodePosition {
-        x: f64_field(path, value, "x")?,
-        y: f64_field(path, value, "y")?,
+        x: f32_field(path, value, "x")?,
+        y: f32_field(path, value, "y")?,
     })
 }
 
@@ -570,7 +570,7 @@ pub(crate) fn parse_prop_definition(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<PropDefinition, LoadProjectError> {
-    let bulb_diameter = f64_field(path, value, "bulb_diameter")?;
+    let bulb_diameter = f32_field(path, value, "bulb_diameter")?;
     let geometry_value = required_field(path, value, "geometry")?;
     let geometry = match string_field(path, geometry_value, "type")? {
         "points" => PropGeometry::Points {
@@ -588,9 +588,9 @@ pub(crate) fn parse_prop_definition(
         },
         "arc" => PropGeometry::Arc {
             center: parse_point3(required_field(path, geometry_value, "center")?)?,
-            radius: DistanceSpan::from_meters(f64_field(path, geometry_value, "radius")?),
-            start_degrees: f64_field(path, geometry_value, "startDegrees")?,
-            end_degrees: f64_field(path, geometry_value, "endDegrees")?,
+            radius: DistanceSpan::from_meters(f32_field(path, geometry_value, "radius")?),
+            start_degrees: f32_field(path, geometry_value, "startDegrees")?,
+            end_degrees: f32_field(path, geometry_value, "endDegrees")?,
             point_count: u32_field(path, geometry_value, "point_count")?,
         },
         other => {
@@ -613,8 +613,8 @@ pub(crate) fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadP
         .iter()
         .map(|point| {
             require_allowed_mapping_keys(path, point, &["position", "value"], "curve point")?;
-            let position = f64_field(path, point, "position")?;
-            let value = f64_field(path, point, "value")?;
+            let position = f32_field(path, point, "position")?;
+            let value = f32_field(path, point, "value")?;
             Ok(CurvePoint { position, value })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -635,7 +635,7 @@ pub(crate) fn parse_gradient(path: &Utf8Path, value: &Value) -> Result<Gradient,
         .iter()
         .map(|stop| {
             require_allowed_mapping_keys(path, stop, &["position", "color"], "gradient stop")?;
-            let position = f64_field(path, stop, "position")?;
+            let position = f32_field(path, stop, "position")?;
             let color = parse_color(string_field(path, stop, "color")?).map_err(|error| {
                 with_yaml_location(
                     error,
@@ -651,77 +651,58 @@ pub(crate) fn parse_gradient(path: &Utf8Path, value: &Value) -> Result<Gradient,
 
 pub(crate) fn parse_point3(value: &Value) -> Result<Point3, LoadProjectError> {
     Ok(Point3 {
-        x: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "x")?),
-        y: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "y")?),
-        z: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "z")?),
+        x: Distance::from_meters(f32_field(Utf8Path::new("<inline>"), value, "x")?),
+        y: Distance::from_meters(f32_field(Utf8Path::new("<inline>"), value, "y")?),
+        z: Distance::from_meters(f32_field(Utf8Path::new("<inline>"), value, "z")?),
     })
 }
 
 pub(crate) fn parse_rotation3(value: &Value) -> Result<Rotation3, LoadProjectError> {
     Ok(Rotation3 {
-        x: f64_field(Utf8Path::new("<inline>"), value, "x")?,
-        y: f64_field(Utf8Path::new("<inline>"), value, "y")?,
-        z: f64_field(Utf8Path::new("<inline>"), value, "z")?,
+        x: f32_field(Utf8Path::new("<inline>"), value, "x")?,
+        y: f32_field(Utf8Path::new("<inline>"), value, "y")?,
+        z: f32_field(Utf8Path::new("<inline>"), value, "z")?,
     })
 }
 
 pub(crate) fn parse_scale3(value: &Value) -> Result<Scale3, LoadProjectError> {
     Ok(Scale3 {
-        x: f64_field(Utf8Path::new("<inline>"), value, "x")?,
-        y: f64_field(Utf8Path::new("<inline>"), value, "y")?,
-        z: f64_field(Utf8Path::new("<inline>"), value, "z")?,
+        x: f32_field(Utf8Path::new("<inline>"), value, "x")?,
+        y: f32_field(Utf8Path::new("<inline>"), value, "y")?,
+        z: f32_field(Utf8Path::new("<inline>"), value, "z")?,
     })
 }
 
 pub(crate) fn parse_duration(value: &str) -> Result<DawnDuration, LoadProjectError> {
-    DawnDuration::try_from_seconds_f64(parse_seconds(value)?).map_err(|error| {
-        LoadProjectError::InvalidDocument {
-            path: Utf8PathBuf::from("<duration>"),
-            range: None,
-            message: match error {
-                dawn_language::values::SecondsError::NotFinite => {
-                    format!("duration must be finite: {value}")
-                }
-                dawn_language::values::SecondsError::Negative => {
-                    format!("duration must not be negative: {value}")
-                }
-            },
-        }
-    })
+    parse_microseconds(value).map(DawnDuration::from_micros)
 }
 
 pub(crate) fn parse_duration_as_time(value: &str) -> Result<DawnTime, LoadProjectError> {
-    DawnTime::try_from_seconds_f64(parse_seconds(value)?).map_err(|error| {
-        LoadProjectError::InvalidDocument {
-            path: Utf8PathBuf::from("<duration>"),
-            range: None,
-            message: match error {
-                dawn_language::values::SecondsError::NotFinite => {
-                    format!("duration must be finite: {value}")
-                }
-                dawn_language::values::SecondsError::Negative => {
-                    format!("duration must not be negative: {value}")
-                }
-            },
-        }
-    })
+    parse_microseconds(value).map(DawnTime::from_micros)
 }
 
-pub(crate) fn parse_seconds(value: &str) -> Result<f64, LoadProjectError> {
-    let seconds = value
-        .strip_suffix('s')
-        .ok_or_else(|| LoadProjectError::InvalidDocument {
+fn parse_microseconds(value: &str) -> Result<u64, LoadProjectError> {
+    if value.starts_with('-') {
+        return Err(LoadProjectError::InvalidDocument {
+            path: Utf8PathBuf::from("<duration>"),
+            range: None,
+            message: format!("duration must not be negative: {value}"),
+        });
+    }
+    let invalid = || LoadProjectError::InvalidDocument {
+        path: Utf8PathBuf::from("<duration>"),
+        range: None,
+        message: format!("invalid microsecond duration: {value}"),
+    };
+    if !value.ends_with('s') {
+        return Err(LoadProjectError::InvalidDocument {
             path: Utf8PathBuf::from("<duration>"),
             range: None,
             message: format!("duration must end in `s`: {value}"),
-        })?;
-    seconds
-        .parse()
-        .map_err(|_| LoadProjectError::InvalidDocument {
-            path: Utf8PathBuf::from("<duration>"),
-            range: None,
-            message: format!("invalid duration: {value}"),
-        })
+        });
+    }
+    let duration = dur::parse(value).map_err(|_| invalid())?;
+    u64::try_from((duration.as_nanos() + 500) / 1_000).map_err(|_| invalid())
 }
 
 pub(crate) fn parse_color(value: &str) -> Result<Color, LoadProjectError> {
@@ -872,13 +853,14 @@ pub(crate) fn usize_field(
         })
 }
 
-pub(crate) fn i64_field(
+pub(crate) fn i32_field(
     path: &Utf8Path,
     value: &Value,
     key: &str,
-) -> Result<i64, LoadProjectError> {
+) -> Result<i32, LoadProjectError> {
     required_field(path, value, key)?
         .as_i64()
+        .and_then(|value| i32::try_from(value).ok())
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
             range: source_range_for_field_value(path, value, key),
@@ -886,13 +868,14 @@ pub(crate) fn i64_field(
         })
 }
 
-pub(crate) fn f64_field(
+pub(crate) fn f32_field(
     path: &Utf8Path,
     value: &Value,
     key: &str,
-) -> Result<f64, LoadProjectError> {
+) -> Result<f32, LoadProjectError> {
     required_field(path, value, key)?
         .as_f64()
+        .map(|value| value as f32)
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
             range: source_range_for_field_value(path, value, key),

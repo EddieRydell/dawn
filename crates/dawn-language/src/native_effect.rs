@@ -34,7 +34,7 @@ pub enum NativeSample {
     Chase(Chase),
     Spin {
         chase: Chase,
-        revolutions: i64,
+        revolutions: i32,
     },
     MarkPulseChild(MarkPulseChild),
     MarkChaseChild(MarkChaseChild),
@@ -42,8 +42,8 @@ pub enum NativeSample {
 
 #[derive(Clone, Debug)]
 pub struct NativeGeneratedEffect {
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
+    pub start_seconds: f32,
+    pub duration_seconds: f32,
     pub target: Arc<TargetItemValue>,
     pub sample: NativeSample,
 }
@@ -52,8 +52,8 @@ pub struct NativeGeneratedEffect {
 pub struct Chase {
     gradient: Arc<Gradient>,
     gradient_mode: GradientMode,
-    pulse_overlap: f64,
-    section_width_pixels: i64,
+    pulse_overlap: f32,
+    section_width_pixels: i32,
     chase_position: Arc<Curve>,
     reverse: bool,
     extend_to_start: bool,
@@ -67,13 +67,13 @@ pub struct MarkPulse {
     base: Color,
     accent: Arc<Gradient>,
     hue: Arc<Curve>,
-    hue_mix: f64,
-    offset_seconds: f64,
-    decay_seconds: f64,
-    section_width_pixels: i64,
-    section_edge_fade_pixels: f64,
-    sections_per_mark: i64,
-    seed: f64,
+    hue_mix: f32,
+    offset_seconds: f32,
+    decay_seconds: f32,
+    section_width_pixels: i32,
+    section_edge_fade_pixels: f32,
+    sections_per_mark: i32,
+    seed: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -81,11 +81,11 @@ pub struct MarkPulseChild {
     base: Color,
     accent: Arc<Gradient>,
     hue: Arc<Curve>,
-    hue_mix: f64,
-    section_width_pixels: i64,
-    section_edge_fade_pixels: f64,
-    parent_duration: f64,
-    child_start: f64,
+    hue_mix: f32,
+    section_width_pixels: i32,
+    section_edge_fade_pixels: f32,
+    parent_duration: f32,
+    child_start: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -95,11 +95,11 @@ pub struct MarkChase {
     gradient_mode: GradientMode,
     gradients: Vec<Arc<Gradient>>,
     hue: Arc<Curve>,
-    hue_mix: f64,
-    offset_seconds: f64,
-    chase_seconds: f64,
-    pulse_overlap: f64,
-    section_width_pixels: i64,
+    hue_mix: f32,
+    offset_seconds: f32,
+    chase_seconds: f32,
+    pulse_overlap: f32,
+    section_width_pixels: i32,
     chase_positions: Vec<Arc<Curve>>,
     pulse_shape: Arc<Curve>,
 }
@@ -110,13 +110,13 @@ pub struct MarkChaseChild {
     gradient_mode: GradientMode,
     gradient: Arc<Gradient>,
     hue: Arc<Curve>,
-    hue_mix: f64,
-    pulse_overlap: f64,
-    section_width_pixels: i64,
+    hue_mix: f32,
+    pulse_overlap: f32,
+    section_width_pixels: i32,
     chase_position: Arc<Curve>,
     pulse_shape: Arc<Curve>,
-    parent_duration: f64,
-    child_start: f64,
+    parent_duration: f32,
+    child_start: f32,
 }
 
 pub fn bind(
@@ -237,11 +237,11 @@ impl NativeSample {
 
 impl Chase {
     fn sample(&self, context: &RunContext) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f64).max(1.0);
-        let count = ((context.pixel_count as f64 + width - 1.0) / width)
+        let width = (self.section_width_pixels as f32).max(1.0);
+        let count = ((context.pixel_count as f32 + width - 1.0) / width)
             .floor()
             .max(1.0);
-        let position = (context.pixel_index as f64 / width).floor() / (count - 1.0).max(1.0);
+        let position = (context.pixel_index as f32 / width).floor() / (count - 1.0).max(1.0);
         let chase_value = if self.reverse {
             1.0 - position
         } else {
@@ -270,14 +270,14 @@ impl Chase {
         };
         gradient_scaled(&self.gradient, gradient_position.clamp(0.0, 1.0), level)
     }
-    fn sample_spin(&self, context: &RunContext, revolutions: i64) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f64).max(1.0);
-        let count = ((context.pixel_count as f64 + width - 1.0) / width)
+    fn sample_spin(&self, context: &RunContext, revolutions: i32) -> Result<Color, RuntimeError> {
+        let width = (self.section_width_pixels as f32).max(1.0);
+        let count = ((context.pixel_count as f32 + width - 1.0) / width)
             .floor()
             .max(1.0);
-        let position = (context.pixel_index as f64 / width).floor() / (count - 1.0).max(1.0);
+        let position = (context.pixel_index as f32 / width).floor() / (count - 1.0).max(1.0);
         let revolutions = revolutions.max(1);
-        let virtual_count = count * revolutions as f64;
+        let virtual_count = count * revolutions as f32;
         let duration = (self.pulse_overlap.max(1.0) / virtual_count).max(1e-9);
         let start = if self.extend_to_start { -duration } else { 0.0 };
         let end = if self.extend_to_end {
@@ -288,7 +288,7 @@ impl Chase {
         let mut level = 0.0;
         let mut gradient_position = 0.0;
         for revolution in 0..revolutions {
-            let mut virtual_position = (revolution as f64 + position) / revolutions as f64;
+            let mut virtual_position = (revolution as f32 + position) / revolutions as f32;
             if self.reverse {
                 virtual_position = 1.0 - virtual_position;
             }
@@ -356,11 +356,11 @@ impl MarkPulse {
         }
         let mut generated = Vec::new();
         for mark in &self.beats.marks {
-            let hit = mark.as_seconds_f64();
+            let hit = mark.as_seconds_f32();
             for index in 0..self.sections_per_mark {
                 let choice =
-                    (deterministic_random([self.seed + hit * 1000.0, index as f64].into_iter())
-                        * sections.len() as f64)
+                    (deterministic_random([self.seed + hit * 1000.0, index as f32].into_iter())
+                        * sections.len() as f32)
                         .floor() as usize;
                 generated.push(NativeGeneratedEffect {
                     start_seconds: hit + self.offset_seconds,
@@ -415,7 +415,7 @@ impl MarkChase {
             .iter()
             .enumerate()
             .map(|(index, mark)| {
-                let hit = mark.as_seconds_f64();
+                let hit = mark.as_seconds_f32();
                 NativeGeneratedEffect {
                     start_seconds: hit + self.offset_seconds,
                     duration_seconds: self.chase_seconds.max(1e-9),
@@ -443,13 +443,13 @@ impl MarkChase {
 
 impl MarkPulseChild {
     fn sample(&self, c: &RunContext) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f64).max(1.0);
-        let pixel = c.pixel_index as f64;
+        let width = (self.section_width_pixels as f32).max(1.0);
+        let pixel = c.pixel_index as f32;
         let choice = (pixel / width).floor();
         let fade = self.section_edge_fade_pixels.max(0.0);
         let active = if fade > 0.0 {
             let start = choice * width;
-            let end = (start + width - 1.0).min(c.pixel_count as f64 - 1.0);
+            let end = (start + width - 1.0).min(c.pixel_count as f32 - 1.0);
             ((pixel - start).min(end - pixel) / fade).clamp(0.0, 1.0)
         } else {
             1.0
@@ -469,16 +469,16 @@ impl MarkPulseChild {
 }
 impl MarkChaseChild {
     fn sample(&self, c: &RunContext) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f64).max(1.0);
-        let pixel = c.pixel_index as f64;
+        let width = (self.section_width_pixels as f32).max(1.0);
+        let pixel = c.pixel_index as f32;
         let section = (pixel - (pixel / width).floor() * width) / width;
-        let travel_start = -self.pulse_overlap / (c.pixel_count as f64).max(1.0);
-        let travel_end = 1.0 + self.pulse_overlap / (c.pixel_count as f64).max(1.0);
+        let travel_start = -self.pulse_overlap / (c.pixel_count as f32).max(1.0);
+        let travel_end = 1.0 + self.pulse_overlap / (c.pixel_count as f32).max(1.0);
         let chase = travel_start
             + (travel_end - travel_start)
                 * sample_curve(&self.chase_position, c.progress).clamp(0.0, 1.0);
         let pulse_progress = (c.pixel_fraction - chase).abs()
-            / (self.pulse_overlap / (c.pixel_count as f64).max(1.0)).max(1e-9);
+            / (self.pulse_overlap / (c.pixel_count as f32).max(1.0)).max(1e-9);
         let level = sample_curve(&self.pulse_shape, pulse_progress.clamp(0.0, 1.0));
         let gp = match self.gradient_mode {
             GradientMode::ThroughEffect => c.progress,
@@ -497,7 +497,7 @@ impl MarkChaseChild {
     }
 }
 
-fn gradient_scaled(g: &Gradient, p: f64, level: f64) -> Result<Color, RuntimeError> {
+fn gradient_scaled(g: &Gradient, p: f32, level: f32) -> Result<Color, RuntimeError> {
     sample_gradient(g, p)
         .map(|c| scale_color(c, level))
         .ok_or_else(|| error("cannot sample empty gradient"))
@@ -507,14 +507,14 @@ fn get<'a>(p: &'a IndexMap<Identifier, Value>, n: &str) -> Result<&'a Value, Run
         .find_map(|(k, v)| (k.as_str() == n).then_some(v))
         .ok_or_else(|| error(format!("missing native parameter `{n}`")))
 }
-fn float(p: &IndexMap<Identifier, Value>, n: &str) -> Result<f64, RuntimeError> {
+fn float(p: &IndexMap<Identifier, Value>, n: &str) -> Result<f32, RuntimeError> {
     match get(p, n)? {
         Value::Float(v) => Ok(*v),
-        Value::Int(v) => Ok(*v as f64),
+        Value::Int(v) => Ok(*v as f32),
         _ => Err(error(format!("native parameter `{n}` has wrong type"))),
     }
 }
-fn int(p: &IndexMap<Identifier, Value>, n: &str) -> Result<i64, RuntimeError> {
+fn int(p: &IndexMap<Identifier, Value>, n: &str) -> Result<i32, RuntimeError> {
     match get(p, n)? {
         Value::Int(v) => Ok(*v),
         _ => Err(error(format!("native parameter `{n}` has wrong type"))),

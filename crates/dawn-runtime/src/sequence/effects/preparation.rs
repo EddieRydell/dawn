@@ -20,12 +20,21 @@ pub(crate) fn prepare_effect_inst(
     context: PrepareEffectContext<'_>,
     effect: &dawn_language::effect::EffectInst,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
-    let effect_duration_seconds = effect.duration.as_seconds_f64();
-    if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
+    if effect.duration.is_zero() {
         return Err(RenderError::InvalidTiming {
-            reason: "effect duration must be positive and finite".to_string(),
+            reason: "effect duration must be positive".to_string(),
         });
     }
+    let start_time =
+        dawn_language::values::sample_time_from_dawn_time(&effect.start).map_err(|_| {
+            RenderError::InvalidTiming {
+                reason: "effect start exceeds the runtime clock range".to_string(),
+            }
+        })?;
+    let duration = dawn_language::values::sample_duration_from_dawn_duration(&effect.duration)
+        .map_err(|_| RenderError::InvalidTiming {
+            reason: "effect duration exceeds the runtime clock range".to_string(),
+        })?;
     let definition = context
         .project
         .definitions
@@ -41,10 +50,10 @@ pub(crate) fn prepare_effect_inst(
         context.elements,
         &effect.scope,
     )?;
-    let start_seconds = effect.start.as_seconds_f64();
+    let start_seconds = effect.start.as_seconds_f32();
     let param_timing = EffectParamTiming {
-        start_seconds,
-        duration_seconds: effect_duration_seconds,
+        start: start_time,
+        duration,
     };
     let automation = automation_for_effect(context.sequence, &effect.id);
     let params = prepare_params(
@@ -86,8 +95,8 @@ pub(crate) fn prepare_effect_inst(
             };
             context.effects.push(PreparedEffect {
                 layer_id: context.layer_id.clone(),
-                start_seconds,
-                duration_seconds: effect_duration_seconds,
+                start_time,
+                duration,
                 target: Arc::clone(&target),
                 sample_groups: prepare_sample_groups_for_implementation(
                     context.target_cache,
@@ -130,8 +139,8 @@ pub(crate) fn prepare_effect_inst(
                             &compiled,
                             &bound,
                             GeneratorExpansion {
-                                start_seconds,
-                                duration_seconds: effect_duration_seconds,
+                                start_time,
+                                duration,
                                 target: expansion_target,
                                 depth: 0,
                                 definition_source: id.0.clone(),
@@ -143,8 +152,8 @@ pub(crate) fn prepare_effect_inst(
                         expand_native_generator(
                             &mut generator_context,
                             &bound,
-                            start_seconds,
-                            effect_duration_seconds,
+                            start_time,
+                            duration,
                             expansion_target,
                             0,
                         )?;
@@ -195,7 +204,7 @@ pub(crate) fn prepare_automation(
 pub(crate) fn apply_automation_params(
     mut params: IndexMap<Identifier, Value>,
     automation: &[PreparedAutomation],
-    sample_seconds: f64,
+    sample_seconds: f32,
 ) -> Result<IndexMap<Identifier, Value>, RenderError> {
     for automation in automation {
         let value = automation_value_at(&automation.clip, &automation.binding, sample_seconds)

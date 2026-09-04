@@ -47,7 +47,7 @@ pub(crate) fn audio_rewind_to_zero(app: AppHandle, state: State<'_, DesktopState
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn audio_seek(
-    position_seconds: f64,
+    position_seconds: f32,
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {

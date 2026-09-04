@@ -33,12 +33,24 @@ export type AutomationClipVisualState = {
   activePointIndex: number | null;
 };
 
+export type SequenceRowLayout = {
+  laneIndex: number;
+  rowIndex: number;
+  top: number;
+  height: number;
+  bottom: number;
+};
+
 export function automationLaneRowHeight(laneHeight: number): number {
   return clamp(
     laneHeight * THEME_METRICS.automationRowHeightRatio,
     THEME_METRICS.automationRowMinHeight,
     THEME_METRICS.automationRowMaxHeight
   );
+}
+
+export function rowHeightAt(rowHeights: number[][], laneIndex: number, rowIndex: number, defaultHeight: number): number {
+  return rowHeights[laneIndex]?.[rowIndex] ?? defaultHeight;
 }
 
 export function automationRowCounts(clips: SequenceAutomationClip[], laneCount: number): number[] {
@@ -50,12 +62,22 @@ export function automationRowCounts(clips: SequenceAutomationClip[], laneCount: 
   return rows;
 }
 
-export function expandedLaneTop(laneIndex: number, rowsByLane: number[], laneHeight: number, automationRowHeight: number): number {
+export function sequenceRowLayout(rowsByLane: number[], rowHeights: number[][], defaultMainRowHeight: number, defaultAutomationRowHeight: number): SequenceRowLayout[] {
+  const rows: SequenceRowLayout[] = [];
   let top = 0;
-  for (let index = 0; index < laneIndex; index += 1) {
-    top += laneHeight + (rowsByLane[index] ?? 0) * automationRowHeight;
+  for (let laneIndex = 0; laneIndex < rowsByLane.length; laneIndex += 1) {
+    const rowCount = rowsByLane[laneIndex] ?? 0;
+    for (let rowIndex = 0; rowIndex <= rowCount; rowIndex += 1) {
+      const height = rowHeightAt(rowHeights, laneIndex, rowIndex, rowIndex === 0 ? defaultMainRowHeight : defaultAutomationRowHeight);
+      rows.push({ laneIndex, rowIndex, top, height, bottom: top + height });
+      top += height;
+    }
   }
-  return top;
+  return rows;
+}
+
+export function expandedLaneTop(laneIndex: number, rowsByLane: number[], rowHeights: number[][], defaultMainRowHeight: number, defaultAutomationRowHeight: number): number {
+  return sequenceRowLayout(rowsByLane, rowHeights, defaultMainRowHeight, defaultAutomationRowHeight).find((row) => row.laneIndex === laneIndex && row.rowIndex === 0)?.top ?? 0;
 }
 
 export function expandedLaneRowIndex(laneIndex: number, rowsByLane: number[]): number {
@@ -64,34 +86,33 @@ export function expandedLaneRowIndex(laneIndex: number, rowsByLane: number[]): n
   return rowIndex;
 }
 
-export function expandedTimelineHeight(laneCount: number, rowsByLane: number[], laneHeight: number, automationRowHeight: number): number {
-  return expandedLaneTop(laneCount, rowsByLane, laneHeight, automationRowHeight);
+export function expandedTimelineHeight(laneCount: number, rowsByLane: number[], rowHeights: number[][], defaultMainRowHeight: number, defaultAutomationRowHeight: number): number {
+  const rows = sequenceRowLayout(rowsByLane.slice(0, laneCount), rowHeights, defaultMainRowHeight, defaultAutomationRowHeight);
+  return rows[rows.length - 1]?.bottom ?? 0;
 }
 
-export function laneIndexFromCanvasY(y: number, top: number, scrollY: number, laneCount: number, rowsByLane: number[], laneHeight: number, automationRowHeight: number): number {
+export function rowFromCanvasY(y: number, top: number, scrollY: number, rowsByLane: number[], rowHeights: number[][], defaultMainRowHeight: number, defaultAutomationRowHeight: number): SequenceRowLayout | null {
   const contentY = Math.max(0, y - top + scrollY);
-  let cursor = 0;
-  for (let index = 0; index < laneCount; index += 1) {
-    const blockHeight = laneHeight + (rowsByLane[index] ?? 0) * automationRowHeight;
-    if (contentY < cursor + blockHeight) return index;
-    cursor += blockHeight;
-  }
-  return Math.max(0, laneCount - 1);
+  return sequenceRowLayout(rowsByLane, rowHeights, defaultMainRowHeight, defaultAutomationRowHeight).find((row) => contentY < row.bottom) ?? null;
 }
 
-export function remapEffectClipLayout(clip: SequenceClipLayout, rowsByLane: number[], automationRowHeight: number, viewport: SequenceViewport, top: number): SequenceClipLayout {
-  const originalLaneTop = top + clip.laneIndex * viewport.laneHeight - viewport.scrollY;
+export function laneIndexFromCanvasY(y: number, top: number, scrollY: number, laneCount: number, rowsByLane: number[], rowHeights: number[][], defaultMainRowHeight: number, defaultAutomationRowHeight: number): number {
+  return rowFromCanvasY(y, top, scrollY, rowsByLane.slice(0, laneCount), rowHeights, defaultMainRowHeight, defaultAutomationRowHeight)?.laneIndex ?? Math.max(0, laneCount - 1);
+}
+
+export function remapEffectClipLayout(clip: SequenceClipLayout, rowsByLane: number[], defaultMainRowHeight: number, defaultAutomationRowHeight: number, viewport: SequenceViewport, top: number): SequenceClipLayout {
+  const originalLaneTop = top + rowHeightTop(viewport.rowHeights, clip.laneIndex, rowsByLane, defaultMainRowHeight, defaultAutomationRowHeight) - viewport.scrollY;
   const laneLocalY = clip.rect.y - originalLaneTop;
   return {
     ...clip,
     rect: {
       ...clip.rect,
-      y: top + expandedLaneTop(clip.laneIndex, rowsByLane, viewport.laneHeight, automationRowHeight) - viewport.scrollY + laneLocalY
+      y: top + rowHeightTop(viewport.rowHeights, clip.laneIndex, rowsByLane, defaultMainRowHeight, defaultAutomationRowHeight) - viewport.scrollY + laneLocalY
     }
   };
 }
 
-export function buildAutomationClipLayout(clips: SequenceAutomationClip[], rowsByLane: number[], rowHeight: number, viewport: SequenceViewport, left: number, top: number, bounds: { width: number; height: number }): AutomationClipLayout[] {
+export function buildAutomationClipLayout(clips: SequenceAutomationClip[], rowsByLane: number[], defaultRowHeight: number, viewport: SequenceViewport, left: number, top: number, bounds: { width: number; height: number }): AutomationClipLayout[] {
   const visibleStartSeconds = viewport.scrollXSeconds;
   const visibleEndSeconds = viewport.scrollXSeconds + Math.max(1, bounds.width - left) / viewport.pxPerSecond;
   const byAutomationLane = new Map<string, SequenceAutomationClip[]>();
@@ -108,15 +129,16 @@ export function buildAutomationClipLayout(clips: SequenceAutomationClip[], rowsB
     for (const group of groupOverlappingAutomationClips(laneClips)) {
       const assigned = assignAutomationOverlapSlots(group);
       const slotCount = Math.max(1, Math.max(...assigned.map((clip) => clip.slot)) + 1);
-      const slotHeight = rowHeight / slotCount;
       for (const clip of assigned) {
         const laneIndex = clip.anchorLaneIndex;
+        const rowHeight = rowHeightAt(viewport.rowHeights, laneIndex, clip.laneIndex + 1, defaultRowHeight);
+        const slotHeight = rowHeight / slotCount;
         const x = left + (clip.startSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
         layouts.push({
           clip,
           rect: {
             x,
-            y: top + expandedLaneTop(laneIndex, rowsByLane, viewport.laneHeight, rowHeight) - viewport.scrollY + viewport.laneHeight + clip.laneIndex * rowHeight + clip.slot * slotHeight + THEME_METRICS.sequenceClipSlotOffset,
+            y: top + rowHeightTop(viewport.rowHeights, laneIndex, rowsByLane, defaultRowHeight, defaultRowHeight) - viewport.scrollY + rowHeightAt(viewport.rowHeights, laneIndex, 0, defaultRowHeight) + automationRowsBefore(viewport.rowHeights, laneIndex, clip.laneIndex, rowsByLane, defaultRowHeight) + clip.slot * slotHeight + THEME_METRICS.sequenceClipSlotOffset,
             width: Math.max(THEME_METRICS.sequenceClipMinWidth, clip.durationSeconds * viewport.pxPerSecond),
             height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
           }
@@ -125,6 +147,18 @@ export function buildAutomationClipLayout(clips: SequenceAutomationClip[], rowsB
     }
   }
   return layouts;
+}
+
+function automationRowsBefore(rowHeights: number[][], laneIndex: number, rowIndex: number, rowsByLane: number[], defaultHeight: number): number {
+  let top = 0;
+  for (let row = 0; row < Math.min(rowIndex, rowsByLane[laneIndex] ?? 0); row += 1) {
+    top += rowHeightAt(rowHeights, laneIndex, row + 1, defaultHeight);
+  }
+  return top;
+}
+
+function rowHeightTop(rowHeights: number[][], laneIndex: number, rowsByLane: number[], defaultMainRowHeight: number, defaultAutomationRowHeight: number): number {
+  return expandedLaneTop(laneIndex, rowsByLane, rowHeights, defaultMainRowHeight, defaultAutomationRowHeight);
 }
 
 export function automationClipsWithDrafts(clips: SequenceAutomationClip[], draft: AutomationDraft | null, curveDraft: AutomationCurveDraft | null): SequenceAutomationClip[] {
@@ -224,8 +258,20 @@ export function automationCurvePointFromCanvas(rect: { x: number; y: number; wid
   return { time: roundToNanosecond(clamp((x - graph.x) / graph.width, 0, 1)), value: Math.round(clamp(1 - (y - graph.y) / graph.height, 0, 1) * 1000) / 1000 };
 }
 
-export function replaceAutomationCurvePoint(curve: Array<{ time: number; value: number }>, index: number, point: { time: number; value: number }) {
-  return curve.map((candidate, candidateIndex) => (candidateIndex === index ? point : candidate)).filter((candidate) => Number.isFinite(candidate.time) && Number.isFinite(candidate.value)).sort((left, right) => left.time - right.time);
+export function replaceAutomationCurvePointByIdentity(
+  curve: Array<{ time: number; value: number }>,
+  identity: { pointTime: number; pointValue: number; pointOccurrence: number },
+  point: { time: number; value: number }
+) {
+  let occurrence = 0;
+  return curve
+    .map((candidate) => {
+      const matches = candidate.time === identity.pointTime && candidate.value === identity.pointValue;
+      const isTarget = matches && occurrence++ === identity.pointOccurrence;
+      return isTarget ? point : candidate;
+    })
+    .filter((candidate) => Number.isFinite(candidate.time) && Number.isFinite(candidate.value))
+    .sort((left, right) => left.time - right.time);
 }
 
 export function removeAutomationCurvePoint(curve: Array<{ time: number; value: number }>, index: number) {

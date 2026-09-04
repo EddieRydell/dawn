@@ -117,7 +117,7 @@ pub(super) fn edit_sequence(
                 .ok_or_else(|| {
                     GuiMutationError::Invalid("Control clip was not found.".to_string())
                 })?;
-            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            clip.start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
             match &mut clip.target {
                 dawn_language::control::ControlTarget::Scalar(target)
                 | dawn_language::control::ControlTarget::Indexed(target) => *target = selection,
@@ -141,8 +141,8 @@ pub(super) fn edit_sequence(
                 .ok_or_else(|| {
                     GuiMutationError::Invalid("Control clip was not found.".to_string())
                 })?;
-            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
-            clip.duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
+            clip.start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
+            clip.duration = DawnDuration::from_seconds_f32(duration_seconds.max(0.000000001));
         }
         SequenceGuiEdit::DeleteControlClip { id } => {
             sequence_mut(session, &sequence_id)?
@@ -156,7 +156,7 @@ pub(super) fn edit_sequence(
                 ));
             }
             sequence_mut(session, &sequence_id)?.duration =
-                DawnDuration::from_seconds_f64(duration_seconds);
+                DawnDuration::from_seconds_f32(duration_seconds);
         }
         SequenceGuiEdit::SetAudio { import_path } => {
             let audio = match import_path {
@@ -182,7 +182,7 @@ pub(super) fn edit_sequence(
                 .transpose()?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let effect = effect_mut(sequence, id)?;
-            effect.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            effect.start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
             if let Some(target) = parsed_target {
                 effect.target = target;
             }
@@ -193,8 +193,8 @@ pub(super) fn edit_sequence(
             duration_seconds,
         } => {
             let sequence = sequence_mut(session, &sequence_id)?;
-            let start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
-            let duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
+            let start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
+            let duration = DawnDuration::from_seconds_f32(duration_seconds.max(0.000000001));
             let effect = effect_mut(sequence, id)?;
             effect.start = start;
             effect.duration = duration;
@@ -229,7 +229,7 @@ pub(super) fn edit_sequence(
                 .marks
                 .get_mut(index as usize)
                 .ok_or_else(|| GuiMutationError::Invalid("Mark was not found.".to_string()))?;
-            *mark = DawnTime::from_seconds_f64(time_seconds.max(0.0));
+            *mark = DawnTime::from_seconds_f32(time_seconds.max(0.0));
             collection.marks.sort_by_key(|time| time.0);
         }
         SequenceGuiEdit::ReassignMarkCollection {
@@ -259,7 +259,7 @@ pub(super) fn edit_sequence(
                 mark_collection_mut(sequence_mut(session, &sequence_id)?, &collection_key)?;
             collection
                 .marks
-                .push(DawnTime::from_seconds_f64(time_seconds.max(0.0)));
+                .push(DawnTime::from_seconds_f32(time_seconds.max(0.0)));
             collection.marks.sort_by_key(|time| time.0);
         }
         SequenceGuiEdit::DeleteMark {
@@ -384,8 +384,8 @@ pub(super) fn edit_sequence(
             sequence.effects.push(EffectInst {
                 id: EffectInstId(next_id),
                 layer_id,
-                start: DawnTime::from_seconds_f64(start_seconds.max(0.0)),
-                duration: DawnDuration::from_seconds_f64(1.0),
+                start: DawnTime::from_seconds_f32(start_seconds.max(0.0)),
+                duration: DawnDuration::from_seconds_f32(1.0),
                 target: layout_target_to_effect_target(&element_tree, target)?,
                 scope: effect_scope(scope),
                 definition,
@@ -835,8 +835,8 @@ pub(super) fn edit_sequence(
                 + 1;
             sequence.automation_clips.push(AutomationClip {
                 id: AutomationClipId(next_id),
-                start: DawnTime::from_seconds_f64(start_seconds.max(0.0)),
-                duration: DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001)),
+                start: DawnTime::from_seconds_f32(start_seconds.max(0.0)),
+                duration: DawnDuration::from_seconds_f32(duration_seconds.max(0.000000001)),
                 anchor_lane_index,
                 lane_index,
                 curve: default_automation_curve(),
@@ -880,7 +880,7 @@ pub(super) fn edit_sequence(
             lane_index,
         } => {
             let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
-            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            clip.start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
             clip.anchor_lane_index = anchor_lane_index;
             clip.lane_index = lane_index;
         }
@@ -890,8 +890,8 @@ pub(super) fn edit_sequence(
             duration_seconds,
         } => {
             let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
-            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
-            clip.duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
+            clip.start = DawnTime::from_seconds_f32(start_seconds.max(0.0));
+            clip.duration = DawnDuration::from_seconds_f32(duration_seconds.max(0.000000001));
         }
         SequenceGuiEdit::UpdateAutomationCurve { id, curve } => {
             automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?.curve =
@@ -954,11 +954,11 @@ pub(super) fn edit_sequence(
                     .effects
                     .iter()
                     .find(|effect| &effect.id == effect_id)
-                    .map(|effect| effect.start.as_seconds_f64())
+                    .map(|effect| effect.start.as_seconds_f32())
                     .ok_or_else(|| {
                         GuiMutationError::Invalid("Effect was not found.".to_string())
                     })?,
-                AutomationTarget::CompositionNodeParam { .. } => clip.start.as_seconds_f64(),
+                AutomationTarget::CompositionNodeParam { .. } => clip.start.as_seconds_f32(),
             };
             let value = automation_binding_value_at(&clip, &binding, sample_seconds)?;
             match &target {
@@ -1077,7 +1077,7 @@ fn automation_target_timing(
                 ));
             }
             Ok((
-                DawnTime::from_seconds_f64(0.0),
+                DawnTime::from_seconds_f32(0.0),
                 sequence.duration.clone(),
                 0,
             ))

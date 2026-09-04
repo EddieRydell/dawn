@@ -187,7 +187,7 @@ pub(super) fn create_sequence_layer(
     sequence_id: &SequenceId,
     name: String,
     color: String,
-    position: Option<(f64, f64)>,
+    position: Option<(f32, f32)>,
     connect_to_output: bool,
 ) -> Result<(), GuiMutationError> {
     let sequence = sequence_mut(session, sequence_id)?;
@@ -216,7 +216,7 @@ pub(super) fn create_sequence_layer(
             color: parse_color(&color)?,
             enabled: true,
         });
-    let (x, y) = position.unwrap_or((80.0, 120.0 + f64::from(next_layer_id) * 80.0));
+    let (x, y) = position.unwrap_or((80.0, 120.0 + next_layer_id as f32 * 80.0));
     sequence.composition_graph.nodes.push(CompositionGraphNode {
         id: layer_node_id.clone(),
         position: GraphNodePosition { x, y },
@@ -334,7 +334,7 @@ pub(crate) fn effect_param_value_from_gui(
     value: SequenceEffectParamValue,
 ) -> Result<EffectParamValue, GuiMutationError> {
     Ok(match value {
-        SequenceEffectParamValue::Int { value } => EffectParamValue::Int(value as i64),
+        SequenceEffectParamValue::Int { value } => EffectParamValue::Int(value as i32),
         SequenceEffectParamValue::Float { value } => EffectParamValue::Float(value),
         SequenceEffectParamValue::Bool { value } => EffectParamValue::Bool(value),
         SequenceEffectParamValue::Color { value } => EffectParamValue::Color(parse_color(&value)?),
@@ -351,7 +351,7 @@ pub(crate) fn effect_param_value_from_gui(
         SequenceEffectParamValue::IntArray { values } => EffectParamValue::Array(
             values
                 .into_iter()
-                .map(|value| EffectParamValue::Int(value as i64))
+                .map(|value| EffectParamValue::Int(value as i32))
                 .collect(),
         ),
         SequenceEffectParamValue::FloatArray { values } => {
@@ -390,8 +390,8 @@ pub(super) fn automation_mapping_from_gui(
     Ok(match mapping {
         SequenceAutomationMapping::Float { min, max } => AutomationMapping::Float { min, max },
         SequenceAutomationMapping::Int { min, max } => AutomationMapping::Int {
-            min: min.round() as i64,
-            max: max.round() as i64,
+            min: min.round() as i32,
+            max: max.round() as i32,
         },
         SequenceAutomationMapping::Bool => AutomationMapping::Bool,
         SequenceAutomationMapping::Enum { values } => AutomationMapping::Enum {
@@ -407,7 +407,7 @@ pub(super) fn automation_mapping_from_gui(
 pub(super) fn automation_binding_value_at(
     clip: &AutomationClip,
     binding: &AutomationBinding,
-    seconds: f64,
+    seconds: f32,
 ) -> Result<EffectParamValue, GuiMutationError> {
     automation_value_at(clip, binding, seconds)
         .map(|value| match value {

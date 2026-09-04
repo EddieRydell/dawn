@@ -102,14 +102,14 @@ pub(crate) fn write_new_project_files(
     result
 }
 
-fn sequence_boilerplate(object_key: &str, duration_seconds: f64, frame_rate: u32) -> String {
+fn sequence_boilerplate(object_key: &str, duration_seconds: f32, frame_rate: u32) -> String {
     format!(
         "{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n  control_clips: []\n",
         seconds_literal(duration_seconds)
     )
 }
 
-fn seconds_literal(seconds: f64) -> String {
+fn seconds_literal(seconds: f32) -> String {
     if seconds.fract() == 0.0 {
         format!("{seconds:.0}")
     } else {

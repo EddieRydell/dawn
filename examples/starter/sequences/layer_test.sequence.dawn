@@ -956,8 +956,8 @@ layer_test:
       points:
       - position: 0.0
         value: 0.505
-      - position: 0.236141781
-        value: 0.484
+      - position: 0.2364331
+        value: 0.496
       - position: 0.239764138
         value: 0.491
       - position: 0.240208315
@@ -968,14 +968,24 @@ layer_test:
         value: 0.372
       - position: 0.241084551
         value: 0.197
-      - position: 0.241392031
+      - position: 0.241393219
         value: 0.0
-      - position: 0.241398748
-        value: 0.0
+      - position: 0.241995204
+        value: 0.302
       - position: 0.242473437
         value: 0.0
       - position: 0.243450186
         value: 0.479
+      - position: 0.243859416
+        value: 0.56
+      - position: 0.24430605
+        value: 0.56
+      - position: 0.244519658
+        value: 0.012
+      - position: 0.244733266
+        value: 0.625
+      - position: 0.247549003
+        value: 0.609
       - position: 0.257535598
         value: 0.484
       - position: 0.260943084

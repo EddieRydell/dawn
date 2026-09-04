@@ -7,7 +7,7 @@ mod parser;
 mod typecheck;
 mod vm;
 
-use bytecode::{RegisterFunction, register_function_reads_only_written_slots};
+use bytecode::{BytecodeProgram, bytecode_reads_only_written_slots};
 use compiler::{compile_checked_effects, compile_checked_operators};
 pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
@@ -108,7 +108,7 @@ pub struct CompiledEffect {
     name: Identifier,
     params: Vec<ParamDecl>,
     kind: EffectKind,
-    function: RegisterFunction,
+    bytecode: BytecodeProgram,
 }
 
 #[derive(Clone, Debug)]
@@ -116,7 +116,7 @@ pub struct CompiledOperator {
     pub(crate) name: Identifier,
     pub(crate) inputs: Vec<OperatorInputDecl>,
     pub(crate) params: Vec<ParamDecl>,
-    pub(crate) function: RegisterFunction,
+    pub(crate) bytecode: BytecodeProgram,
 }
 
 impl PartialEq for CompiledOperator {
@@ -124,7 +124,7 @@ impl PartialEq for CompiledOperator {
         self.name == other.name
             && self.inputs == other.inputs
             && self.params == other.params
-            && self.function == other.function
+            && self.bytecode == other.bytecode
     }
 }
 
@@ -177,7 +177,7 @@ pub fn hash_compiled_effect<H: Hasher>(effect: &CompiledEffect, state: &mut H) {
     effect.name.hash(state);
     hash_param_decls(&effect.params, state);
     effect.kind.hash(state);
-    hash_register_function(&effect.function, state);
+    hash_bytecode(&effect.bytecode, state);
 }
 
 impl PartialEq for CompiledEffect {
@@ -185,7 +185,7 @@ impl PartialEq for CompiledEffect {
         self.name == other.name
             && self.params == other.params
             && self.kind == other.kind
-            && self.function == other.function
+            && self.bytecode == other.bytecode
     }
 }
 
@@ -203,7 +203,7 @@ impl CompiledEffect {
     }
 
     pub fn sample_reads_only_written_slots(&self) -> bool {
-        register_function_reads_only_written_slots(&self.function)
+        bytecode_reads_only_written_slots(&self.bytecode)
     }
 
     pub fn sample(
@@ -259,11 +259,10 @@ impl Hash for EffectKind {
     }
 }
 
-fn hash_register_function<H: Hasher>(function: &RegisterFunction, state: &mut H) {
-    function.instructions.hash(state);
-    hash_values(&function.constants, state);
-    function.layout.hash(state);
-    function.layout_id.hash(state);
+fn hash_bytecode<H: Hasher>(bytecode: &BytecodeProgram, state: &mut H) {
+    bytecode.instructions.hash(state);
+    hash_values(&bytecode.constants, state);
+    bytecode.layout.hash(state);
 }
 
 fn hash_param_decls<H: Hasher>(params: &[ParamDecl], state: &mut H) {

@@ -58,7 +58,7 @@ impl DesktopState {
         })
     }
 
-    pub fn audio_seek(&self, position_seconds: f64) -> AppSnapshot {
+    pub fn audio_seek(&self, position_seconds: f32) -> AppSnapshot {
         let audio_transport = lock_unpoisoned(&self.audio).seek(position_seconds);
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;

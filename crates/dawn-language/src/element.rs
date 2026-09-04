@@ -83,7 +83,7 @@ pub struct DiscreteEmitter {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscreteColorMapping {
     pub color: Color,
-    pub levels: IndexMap<EmitterId, f64>,
+    pub levels: IndexMap<EmitterId, f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

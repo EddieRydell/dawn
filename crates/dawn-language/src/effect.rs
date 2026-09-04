@@ -48,8 +48,8 @@ pub enum EffectScope {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum EffectParamValue {
-    Int(i64),
-    Float(f64),
+    Int(i32),
+    Float(f32),
     Bool(bool),
     Color(crate::values::Color),
     Enum(Identifier),

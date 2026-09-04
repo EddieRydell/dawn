@@ -17,7 +17,7 @@ export const commands = {
 	searchProject: (request: ProjectSearchRequest) => typedError<ProjectSearchResponse, string>(__TAURI_INVOKE("search_project", { request })),
 	planWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<WorkspacePathChangePlan, string>(__TAURI_INVOKE("plan_workspace_path_change", { request })),
 	applyWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<AppSnapshot, string>(__TAURI_INVOKE("apply_workspace_path_change", { request })),
-	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,v]))}) as typeof v)),
+	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,({...v,rowHeights:Object.fromEntries(Object.entries(v.rowHeights).map(([k,v])=>[k,v]))})]))}) as typeof v)),
 	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
 	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
 	chooseNewProjectParentDirectory: () => __TAURI_INVOKE<string | null>("choose_new_project_parent_directory"),
@@ -30,7 +30,7 @@ export const commands = {
 	autosaveActiveText: (path: string, text: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("autosave_active_text", { path, text })),
 	setEditorViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_editor_view_mode", { mode }),
 	saveEditorViewState: (update: PersistedEditorViewStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_editor_view_state", { update }),
-	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update }),
+	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update: ({...update,state:({...update.state,rowHeights:Object.fromEntries(Object.entries(update.state.rowHeights).map(([k,v])=>[k,v]))})}) }),
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
 	redoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("redo_active_edit"),
 	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocument>("get_gui_document", { request }),
@@ -434,7 +434,7 @@ export type PersistedEditorViewStateUpdate = {
 
 export type PersistedSequenceViewportState = {
 	pxPerSecond: number,
-	laneHeight: number,
+	rowHeights: { [key in string]: number },
 	scrollXSeconds: number,
 	scrollY: number,
 	activeMarkCollectionKey: string | null,

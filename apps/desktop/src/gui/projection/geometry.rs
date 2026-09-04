@@ -27,7 +27,7 @@ pub(crate) fn geometry(geometry: &DomainGeometry) -> Geometry {
             point_count,
         } => Geometry::Arc {
             center: point3_meters(*center),
-            radius_meters: radius.as_meters_f64(),
+            radius_meters: radius.as_meters_f32(),
             start_degrees: *start_degrees,
             end_degrees: *end_degrees,
             pixels: *point_count,
@@ -46,7 +46,7 @@ pub(crate) fn render_plan(
         emitters,
         guides,
         bounds,
-        bulb_radius_meters: bulb_radius.as_meters_f64(),
+        bulb_radius_meters: bulb_radius.as_meters_f32(),
     }
 }
 
@@ -69,7 +69,7 @@ fn guides(geometry: &DomainGeometry) -> Vec<GeometryRenderGuide> {
             end_degrees,
             ..
         } => {
-            let radius_meters = radius.as_meters_f64();
+            let radius_meters = radius.as_meters_f32();
             vec![GeometryRenderGuide::Arc {
                 start: arc_point(*center, radius_meters, *start_degrees),
                 end: arc_point(*center, radius_meters, *end_degrees),
@@ -85,7 +85,7 @@ fn guides(geometry: &DomainGeometry) -> Vec<GeometryRenderGuide> {
 }
 
 fn bounds_for_points(points: impl Iterator<Item = GeometryRenderPoint>) -> GeometryRenderBounds {
-    let mut bounds: Option<(f64, f64, f64, f64)> = None;
+    let mut bounds: Option<(f32, f32, f32, f32)> = None;
     for point in points {
         bounds = Some(match bounds {
             None => (

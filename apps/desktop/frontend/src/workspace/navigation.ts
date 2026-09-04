@@ -10,8 +10,11 @@ export type TextNavigation = {
 };
 
 export async function navigateToText(path: string, range: TextRange | null): Promise<void> {
-  await runSnapshotCommand(() => commands.setEditorViewMode("text"));
-  await runSnapshotCommand(() => commands.openFile(path));
+  const snapshot = await runSnapshotCommand(() => commands.openFile(path));
+  const hasGuiView = snapshot.activeDocumentDescriptor?.availableViews.some((view) => view !== "text") ?? false;
+  if (hasGuiView) {
+    await runSnapshotCommand(() => commands.setEditorViewMode("text"));
+  }
   window.requestAnimationFrame(() => {
     window.dispatchEvent(
       new CustomEvent<TextNavigation>(NAVIGATE_TO_TEXT_EVENT, {

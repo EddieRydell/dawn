@@ -562,7 +562,7 @@ impl DesktopState {
             return self.snapshot();
         };
         let sequence_path = Utf8PathBuf::from(&request.file_path);
-        let Ok(duration) = Duration::try_from_secs_f64(request.duration_seconds) else {
+        let Ok(duration) = Duration::try_from_secs_f32(request.duration_seconds) else {
             return self.snapshot_with_error(
                 "sequence.create",
                 &request.file_path,

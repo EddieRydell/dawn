@@ -43,14 +43,14 @@ pub(crate) enum SequenceClipboard {
 #[derive(Clone)]
 pub(crate) struct ClipboardEffect {
     pub(crate) effect: EffectInst,
-    pub(crate) start_seconds: f64,
+    pub(crate) start_seconds: f32,
     pub(crate) lane_index: usize,
 }
 
 #[derive(Clone)]
 pub(crate) struct ClipboardMark {
     pub(crate) collection_key: String,
-    pub(crate) time_seconds: f64,
+    pub(crate) time_seconds: f32,
 }
 
 pub(crate) struct SequenceSelectionMutation {

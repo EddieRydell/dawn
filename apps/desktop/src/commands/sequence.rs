@@ -110,15 +110,28 @@ pub(crate) fn choose_sequence_audio(
             document: state.get_gui_document(request),
         };
     };
-    let Some(import_path) = audio_import_path(&state.snapshot(), &request, &path) else {
+    let snapshot = state.snapshot();
+    let import_path = match super::import_external_audio(&snapshot, &path) {
+        Ok(path) => path,
+        Err(message) => {
+            let snapshot = state.update_snapshot(|snapshot| {
+                snapshot.status = message;
+            });
+            return GuiEditResult {
+                snapshot,
+                document: state.get_gui_document(request),
+            };
+        }
+    };
+    if !matches!(request.view, DocumentViewId::Sequence) {
         let snapshot = state.update_snapshot(|snapshot| {
-            snapshot.status = "Selected audio path is not valid UTF-8".to_string();
+            snapshot.status = "Audio can only be associated with a sequence.".to_string();
         });
         return GuiEditResult {
             snapshot,
             document: state.get_gui_document(request),
         };
-    };
+    }
     state.apply_gui_edit(
         request,
         GuiEditCommand::Sequence {

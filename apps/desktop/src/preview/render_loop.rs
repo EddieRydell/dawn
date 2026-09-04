@@ -100,9 +100,9 @@ struct PreviewClockKey {
     audio_generation: u32,
     audio_state: AudioTransportState,
     frame_rate: u32,
-    frame_count: u64,
-    frame_index: u64,
-    paused_position_bits: Option<u64>,
+    frame_count: u32,
+    frame_index: u32,
+    paused_position_bits: Option<u32>,
 }
 
 impl PreviewClockKey {
@@ -131,10 +131,9 @@ fn preview_sleep_duration(clock: Option<&AudioClockRenderIdentity>) -> Option<Du
     if !matches!(clock.audio_state, AudioTransportState::Playing) || clock.frame_rate == 0 {
         return None;
     }
-    let next_frame_seconds =
-        (clock.frame_index.saturating_add(1)) as f64 / f64::from(clock.frame_rate);
+    let next_frame_seconds = (clock.frame_index.saturating_add(1)) as f32 / clock.frame_rate as f32;
     let delay_seconds = (next_frame_seconds - clock.position_seconds).max(0.0);
-    let delay = Duration::from_secs_f64(delay_seconds);
+    let delay = Duration::from_secs_f32(delay_seconds);
     Some(delay.clamp(MIN_PLAYING_SLEEP, MAX_PLAYING_SLEEP))
 }
 
@@ -151,13 +150,13 @@ impl PreviewFrameStats {
         }
     }
 
-    fn record_frame(&mut self) -> Option<f64> {
+    fn record_frame(&mut self) -> Option<f32> {
         self.frame_count = self.frame_count.saturating_add(1);
         let elapsed = self.window_started.elapsed();
         if elapsed < Duration::from_secs(1) {
             return None;
         }
-        let fps = f64::from(self.frame_count) / elapsed.as_secs_f64();
+        let fps = self.frame_count as f32 / elapsed.as_secs_f32();
         self.window_started = Instant::now();
         self.frame_count = 0;
         Some(fps)

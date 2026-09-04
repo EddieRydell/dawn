@@ -75,7 +75,7 @@ pub enum BufferExternalState {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceGradientStop {
-    pub time: f64,
+    pub time: f32,
     pub value: String,
 }
 

@@ -31,10 +31,10 @@ pub struct AudioClockRenderIdentity {
     pub session_generation: u64,
     pub audio_generation: u32,
     pub audio_state: AudioTransportState,
-    pub position_seconds: f64,
+    pub position_seconds: f32,
     pub frame_rate: u32,
-    pub frame_count: u64,
-    pub frame_index: u64,
+    pub frame_count: u32,
+    pub frame_index: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -205,14 +205,14 @@ pub fn prepare_sequence_output(
     })
 }
 
-fn frame_index_for_audio_seconds(audio_seconds: f64, frame_rate: u32, frame_count: u64) -> u64 {
+fn frame_index_for_audio_seconds(audio_seconds: f32, frame_rate: u32, frame_count: u32) -> u32 {
     let max_frame = frame_count.saturating_sub(1);
-    let frame_index = (audio_seconds * f64::from(frame_rate)).floor();
+    let frame_index = (audio_seconds * frame_rate as f32).floor();
     if frame_index < 0.0 {
         0
-    } else if frame_index > max_frame as f64 {
+    } else if frame_index > max_frame as f32 {
         max_frame
     } else {
-        frame_index as u64
+        frame_index as u32
     }
 }

@@ -36,8 +36,8 @@ pub struct SequenceGuiDocument {
     pub path: String,
     pub source_ref: GuiObjectRef,
     pub object_key: String,
-    pub duration_seconds: f64,
-    pub frame_rate: f64,
+    pub duration_seconds: f32,
+    pub frame_rate: f32,
     pub audio: Option<SequenceAudio>,
     pub mark_collections: Vec<SequenceMarkCollection>,
     pub lanes: Vec<SequenceLane>,
@@ -86,13 +86,13 @@ pub enum InvalidSequencePlaceholderKind {
 )]
 pub enum InvalidSequencePlacement {
     Timeline {
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
         lane: InvalidSequenceLane,
     },
     Graph {
-        x: f64,
-        y: f64,
+        x: f32,
+        y: f32,
     },
 }
 
@@ -121,8 +121,8 @@ pub struct SequenceLayer {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceAutomationClip {
     pub id: u32,
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
+    pub start_seconds: f32,
+    pub duration_seconds: f32,
     pub anchor_lane_index: u32,
     pub lane_index: u32,
     pub curve: Vec<SequenceCurvePoint>,
@@ -171,11 +171,11 @@ pub enum SequenceAutomationTarget {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceAutomationMapping {
-    Float { min: f64, max: f64 },
-    Int { min: f64, max: f64 },
+    Float { min: f32, max: f32 },
+    Int { min: f32, max: f32 },
     Bool,
     Enum { values: Vec<String> },
-    Curve { min: f64, max: f64 },
+    Curve { min: f32, max: f32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -222,8 +222,8 @@ pub struct SequenceClipRaster {
     pub signature: String,
     pub columns: u32,
     pub rows: u32,
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
+    pub start_seconds: f32,
+    pub duration_seconds: f32,
     pub pixels_rgba_token: String,
 }
 
@@ -250,8 +250,8 @@ pub struct SequenceEffect {
     pub index: u32,
     pub id: u32,
     pub layer_id: u32,
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
+    pub start_seconds: f32,
+    pub duration_seconds: f32,
     pub target: ElementTarget,
     pub target_label: String,
     pub scope: SequenceEffectScope,
@@ -271,8 +271,8 @@ pub enum SequenceTimelineClipKind {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceControlClip {
     pub id: u32,
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
+    pub start_seconds: f32,
+    pub duration_seconds: f32,
     pub anchor_lane_index: u32,
     pub lane_index: u32,
     pub target: ElementTarget,
@@ -294,8 +294,8 @@ pub struct SequenceCompositionGraph {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceGraphNode {
     pub id: String,
-    pub x: f64,
-    pub y: f64,
+    pub x: f32,
+    pub y: f32,
     pub inputs: Vec<SequenceGraphPortDefinition>,
     pub outputs: Vec<SequenceGraphPortDefinition>,
     pub kind: SequenceGraphNodeKind,
@@ -449,10 +449,10 @@ pub struct SequenceParamAutomation {
 )]
 pub enum SequenceEffectParamValue {
     Int {
-        value: f64,
+        value: f32,
     },
     Float {
-        value: f64,
+        value: f32,
     },
     Bool {
         value: bool,
@@ -470,10 +470,10 @@ pub enum SequenceEffectParamValue {
         stops: Vec<SequenceGradientStop>,
     },
     IntArray {
-        values: Vec<f64>,
+        values: Vec<f32>,
     },
     FloatArray {
-        values: Vec<f64>,
+        values: Vec<f32>,
     },
     BoolArray {
         values: Vec<bool>,
@@ -518,7 +518,7 @@ pub struct SequenceEffectDefinitionParam {
 )]
 pub enum SequenceGuiEdit {
     SetDuration {
-        duration_seconds: f64,
+        duration_seconds: f32,
     },
     SetAudio {
         #[serde(rename = "import")]
@@ -526,14 +526,14 @@ pub enum SequenceGuiEdit {
     },
     MoveControlClip {
         id: u32,
-        start_seconds: f64,
+        start_seconds: f32,
         anchor_lane_index: u32,
         lane_index: u32,
     },
     ResizeControlClip {
         id: u32,
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
     },
     DeleteControlClip {
         id: u32,
@@ -542,7 +542,7 @@ pub enum SequenceGuiEdit {
         effect: SequenceEffectReference,
         target: ElementTarget,
         scope: SequenceEffectScope,
-        start_seconds: f64,
+        start_seconds: f32,
         mark_collection_key: Option<String>,
     },
     CreateLayer {
@@ -552,8 +552,8 @@ pub enum SequenceGuiEdit {
     CreateLayerAt {
         name: String,
         color: String,
-        x: f64,
-        y: f64,
+        x: f32,
+        y: f32,
     },
     RenameLayer {
         id: u32,
@@ -577,13 +577,13 @@ pub enum SequenceGuiEdit {
     },
     MoveEffect {
         id: u32,
-        start_seconds: f64,
+        start_seconds: f32,
         target: Option<ElementTarget>,
     },
     ResizeEffect {
         id: u32,
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
     },
     ChangeEffectDefinition {
         id: u32,
@@ -629,13 +629,13 @@ pub enum SequenceGuiEdit {
     },
     AddGraphOperatorNode {
         operator: SequenceGraphOperator,
-        x: f64,
-        y: f64,
+        x: f32,
+        y: f32,
     },
     MoveGraphNode {
         node_id: String,
-        x: f64,
-        y: f64,
+        x: f32,
+        y: f32,
     },
     DeleteGraphNode {
         node_id: String,
@@ -680,8 +680,8 @@ pub enum SequenceGuiEdit {
         name: String,
     },
     AddAutomationClip {
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
         anchor_lane_index: u32,
         lane_index: u32,
     },
@@ -691,14 +691,14 @@ pub enum SequenceGuiEdit {
     },
     MoveAutomationClip {
         id: u32,
-        start_seconds: f64,
+        start_seconds: f32,
         anchor_lane_index: u32,
         lane_index: u32,
     },
     ResizeAutomationClip {
         id: u32,
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
     },
     UpdateAutomationCurve {
         id: u32,
@@ -749,12 +749,12 @@ pub enum SequenceGuiEdit {
     },
     AddMark {
         collection_key: String,
-        time_seconds: f64,
+        time_seconds: f32,
     },
     MoveMark {
         collection_key: String,
         index: u32,
-        time_seconds: f64,
+        time_seconds: f32,
     },
     ReassignMarkCollection {
         collection_key: String,
@@ -780,7 +780,7 @@ pub struct SequenceMarkCollection {
     pub key: String,
     pub name: String,
     pub color: String,
-    pub marks_seconds: Vec<f64>,
+    pub marks_seconds: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -794,7 +794,7 @@ pub struct SequenceMarkRef {
 #[serde(rename_all = "camelCase")]
 pub struct SequencePasteAnchor {
     pub lane_index: u32,
-    pub time_seconds: f64,
+    pub time_seconds: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -829,17 +829,17 @@ pub enum SequenceSelectionEdit {
     },
     MoveEffects {
         ids: Vec<u32>,
-        time_delta_seconds: f64,
+        time_delta_seconds: f32,
         lane_delta: i32,
     },
     ResizeEffects {
         ids: Vec<u32>,
         edge: SequenceResizeEdge,
-        time_delta_seconds: f64,
+        time_delta_seconds: f32,
     },
     MoveMarks {
         marks: Vec<SequenceMarkRef>,
-        time_delta_seconds: f64,
+        time_delta_seconds: f32,
     },
 }
 

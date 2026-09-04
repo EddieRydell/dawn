@@ -6,6 +6,7 @@ import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
 import { THEME_METRICS } from "../../../theme";
+import { sequenceRowLayout } from "./sequenceAutomationLayout";
 
 export type SequenceDraft = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
 
@@ -37,7 +38,7 @@ const SEQUENCE_HIT_RADII = {
 
 export type SequenceViewport = {
   pxPerSecond: number;
-  laneHeight: number;
+  rowHeights: number[][];
   scrollXSeconds: number;
   scrollY: number;
 };
@@ -116,7 +117,8 @@ export function buildSequenceClipLayout(
     for (const group of groups) {
       const assigned = assignOverlapSlots(group);
       const slotCount = Math.max(1, Math.max(...assigned.map((clip) => clip.slot)) + 1);
-      const slotHeight = viewport.laneHeight / slotCount;
+      const laneHeight = viewport.rowHeights[laneIndex]?.[0] ?? 0;
+      const slotHeight = laneHeight / slotCount;
       for (const clip of assigned) {
         const startSeconds = clip.effect.startSeconds;
         const endSeconds = startSeconds + clip.effect.durationSeconds;
@@ -127,7 +129,7 @@ export function buildSequenceClipLayout(
           laneIndex,
           rect: {
             x,
-            y: top + laneIndex * viewport.laneHeight - viewport.scrollY + clip.slot * slotHeight + 2,
+            y: top + (sequenceRowLayout(viewport.rowHeights.map((rows) => rows.length - 1), viewport.rowHeights, 0, 0).find((row) => row.laneIndex === laneIndex && row.rowIndex === 0)?.top ?? 0) - viewport.scrollY + clip.slot * slotHeight + 2,
             width,
         height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
           }

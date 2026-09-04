@@ -1,7 +1,5 @@
 use super::GeneratedEffectRef;
 use super::types::{Identifier, Type, Value};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
 pub(crate) type ConstantId = usize;
 pub(crate) type LocalId = ValueSlot;
@@ -9,11 +7,10 @@ pub(crate) type ParamId = usize;
 pub(crate) type Target = usize;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct RegisterFunction {
+pub(crate) struct BytecodeProgram {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
     pub layout: SlotLayout,
-    pub layout_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -25,14 +22,8 @@ pub(crate) struct SlotLayout {
     pub refs: usize,
 }
 
-pub(crate) fn slot_layout_id(layout: SlotLayout) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    layout.hash(&mut hasher);
-    hasher.finish()
-}
-
-pub(crate) fn register_function_reads_only_written_slots(function: &RegisterFunction) -> bool {
-    if function.instructions.iter().any(|instruction| {
+pub(crate) fn bytecode_reads_only_written_slots(bytecode: &BytecodeProgram) -> bool {
+    if bytecode.instructions.iter().any(|instruction| {
         matches!(
             instruction,
             Instruction::StoreParam { .. } | Instruction::Rand { .. }
@@ -41,12 +32,12 @@ pub(crate) fn register_function_reads_only_written_slots(function: &RegisterFunc
         return false;
     }
 
-    let slot_count = function.layout.ints
-        + function.layout.floats
-        + function.layout.bools
-        + function.layout.colors
-        + function.layout.refs;
-    let mut in_states = vec![None::<Vec<bool>>; function.instructions.len()];
+    let slot_count = bytecode.layout.ints
+        + bytecode.layout.floats
+        + bytecode.layout.bools
+        + bytecode.layout.colors
+        + bytecode.layout.refs;
+    let mut in_states = vec![None::<Vec<bool>>; bytecode.instructions.len()];
     if in_states.is_empty() {
         return true;
     }
@@ -57,10 +48,10 @@ pub(crate) fn register_function_reads_only_written_slots(function: &RegisterFunc
         let Some(mut state) = in_states[index].clone() else {
             continue;
         };
-        let instruction = &function.instructions[index];
+        let instruction = &bytecode.instructions[index];
         let mut valid = true;
         instruction_read_slots(instruction, |slot| {
-            if !state[slot_index(function.layout, slot)] {
+            if !state[slot_index(bytecode.layout, slot)] {
                 valid = false;
             }
         });
@@ -68,9 +59,9 @@ pub(crate) fn register_function_reads_only_written_slots(function: &RegisterFunc
             return false;
         }
         instruction_write_slots(instruction, |slot| {
-            state[slot_index(function.layout, slot)] = true;
+            state[slot_index(bytecode.layout, slot)] = true;
         });
-        for successor in instruction_successors(instruction, index, function.instructions.len()) {
+        for successor in instruction_successors(instruction, index, bytecode.instructions.len()) {
             let changed = match &mut in_states[successor] {
                 Some(existing) => {
                     let mut changed = false;
@@ -543,7 +534,7 @@ pub(crate) enum Instruction {
         dst: FloatSlot,
         op: ArithmeticOp,
         value: FloatSlot,
-        constant_bits: u64,
+        constant_bits: u32,
         constant_left: bool,
     },
     IntArithmetic {
@@ -562,7 +553,7 @@ pub(crate) enum Instruction {
         dst: BoolSlot,
         op: CompareOp,
         value: FloatSlot,
-        constant_bits: u64,
+        constant_bits: u32,
         constant_left: bool,
     },
     ValueEqual {
@@ -609,7 +600,7 @@ pub(crate) enum Instruction {
         dst: FloatSlot,
         op: FloatBinary,
         value: FloatSlot,
-        constant_bits: u64,
+        constant_bits: u32,
     },
     Clamp {
         dst: FloatSlot,
@@ -620,8 +611,8 @@ pub(crate) enum Instruction {
     ClampConst {
         dst: FloatSlot,
         value: FloatSlot,
-        min_bits: u64,
-        max_bits: u64,
+        min_bits: u32,
+        max_bits: u32,
     },
     Smoothstep {
         dst: FloatSlot,

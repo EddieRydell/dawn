@@ -7,7 +7,7 @@ pub struct PropDefinition {
     pub object_key: String,
     pub name: String,
     pub color_model: String,
-    pub bulb_diameter_meters: f64,
+    pub bulb_diameter_meters: f32,
     pub geometry: Geometry,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlan,
@@ -31,7 +31,7 @@ pub struct PropGuiDocument {
 pub enum PropGuiEdit {
     UpdateBulbDiameter {
         object_key: String,
-        bulb_diameter_meters: f64,
+        bulb_diameter_meters: f32,
     },
     MovePoint {
         object_key: String,
@@ -43,8 +43,8 @@ pub enum PropGuiEdit {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceCurvePoint {
-    pub time: f64,
-    pub value: f64,
+    pub time: f32,
+    pub value: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -63,9 +63,9 @@ pub enum Geometry {
     },
     Arc {
         center: Point3Meters,
-        radius_meters: f64,
-        start_degrees: f64,
-        end_degrees: f64,
+        radius_meters: f32,
+        start_degrees: f32,
+        end_degrees: f32,
         pixels: u32,
     },
 }
@@ -73,10 +73,10 @@ pub enum Geometry {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderBounds {
-    pub min_x_meters: f64,
-    pub min_y_meters: f64,
-    pub max_x_meters: f64,
-    pub max_y_meters: f64,
+    pub min_x_meters: f32,
+    pub min_y_meters: f32,
+    pub max_x_meters: f32,
+    pub max_y_meters: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -93,9 +93,9 @@ pub enum GeometryRenderGuide {
     Arc {
         start: GeometryRenderPoint,
         end: GeometryRenderPoint,
-        radius_x_meters: f64,
-        radius_y_meters: f64,
-        rotation: f64,
+        radius_x_meters: f32,
+        radius_y_meters: f32,
+        rotation: f32,
         large_arc: bool,
         sweep_positive: bool,
     },
@@ -107,15 +107,15 @@ pub struct GeometryRenderPlan {
     pub emitters: Vec<GeometryRenderPoint>,
     pub guides: Vec<GeometryRenderGuide>,
     pub bounds: GeometryRenderBounds,
-    pub bulb_radius_meters: f64,
+    pub bulb_radius_meters: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderPoint {
-    pub x_meters: f64,
-    pub y_meters: f64,
-    pub z_meters: f64,
+    pub x_meters: f32,
+    pub y_meters: f32,
+    pub z_meters: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

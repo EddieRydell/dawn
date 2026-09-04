@@ -30,7 +30,7 @@ pub(crate) fn check_source_width(
         )))
     }
 }
-pub(crate) fn sample_curve(curve: &Curve, position: f64) -> f64 {
+pub(crate) fn sample_curve(curve: &Curve, position: f32) -> f32 {
     let Some(first) = curve.points.first() else {
         return 0.0;
     };
@@ -50,7 +50,7 @@ pub(crate) fn sample_curve(curve: &Curve, position: f64) -> f64 {
     }
     curve.points.last().map_or(0.0, |point| point.value)
 }
-pub(crate) fn sample_gradient(gradient: &Gradient, position: f64) -> Option<Color> {
+pub(crate) fn sample_gradient(gradient: &Gradient, position: f32) -> Option<Color> {
     let first = gradient.stops.first()?;
     if position <= first.position {
         return Some(first.color);
@@ -72,8 +72,8 @@ pub(crate) fn sample_gradient(gradient: &Gradient, position: f64) -> Option<Colo
     }
     gradient.stops.last().map(|stop| stop.color)
 }
-fn lerp_u8(left: u8, right: u8, amount: f64) -> u8 {
-    (f64::from(left) + (f64::from(right) - f64::from(left)) * amount.clamp(0.0, 1.0)).round() as u8
+fn lerp_u8(left: u8, right: u8, amount: f32) -> u8 {
+    (f32::from(left) + (f32::from(right) - f32::from(left)) * amount.clamp(0.0, 1.0)).round() as u8
 }
 pub(crate) fn black() -> Color {
     Color {
@@ -82,7 +82,7 @@ pub(crate) fn black() -> Color {
         blue: 0,
     }
 }
-pub(crate) fn grayscale(value: f64) -> Color {
+pub(crate) fn grayscale(value: f32) -> Color {
     let channel = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color {
         red: channel,

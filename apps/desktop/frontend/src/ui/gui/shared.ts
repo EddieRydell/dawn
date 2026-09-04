@@ -56,7 +56,7 @@ export const GUI_CANVAS = {
 
 const GUI_COLORS = {
   canvasBackground: THEME_COLORS.canvasBackground,
-  canvasGrid: THEME_COLORS.hover,
+  canvasGrid: THEME_COLORS.canvasGrid,
   guide: THEME_COLORS.canvasGuide,
   axis: THEME_COLORS.canvasAxis,
   majorGrid: THEME_COLORS.canvasMajorGrid,

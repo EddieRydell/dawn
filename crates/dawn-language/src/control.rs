@@ -35,7 +35,7 @@ impl ControlTarget {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ControlValue {
-    ConstantNormalized(f64),
+    ConstantNormalized(f32),
     NormalizedCurve(Curve),
     Indexed {
         option: IndexedOptionId,

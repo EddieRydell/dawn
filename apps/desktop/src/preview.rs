@@ -88,9 +88,12 @@ impl PreviewWindowService {
                     return;
                 }
                 let state = close_app.state::<crate::desktop_state::DesktopState>();
-                let geometry = close_app
-                    .get_window(PREVIEW_LABEL)
-                    .and_then(|window| crate::persistence::read_window_state(&window));
+                let geometry = close_app.get_window(PREVIEW_LABEL).and_then(|window| {
+                    crate::persistence::read_window_state_or(
+                        &window,
+                        state.persistence().preview_window().geometry,
+                    )
+                });
                 let _ = state.persistence().record_preview_window(
                     crate::persistence::PersistedPreviewWindowState {
                         open: false,
@@ -108,9 +111,12 @@ impl PreviewWindowService {
             }
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
                 let state = close_app.state::<crate::desktop_state::DesktopState>();
-                let geometry = close_app
-                    .get_window(PREVIEW_LABEL)
-                    .and_then(|window| crate::persistence::read_window_state(&window));
+                let geometry = close_app.get_window(PREVIEW_LABEL).and_then(|window| {
+                    crate::persistence::read_window_state_or(
+                        &window,
+                        state.persistence().preview_window().geometry,
+                    )
+                });
                 let _ = state.persistence().record_preview_window(
                     crate::persistence::PersistedPreviewWindowState {
                         open: true,
@@ -144,7 +150,10 @@ impl PreviewWindowService {
             })?;
             return Ok(());
         };
-        let geometry = crate::persistence::read_window_state(&window);
+        let geometry = crate::persistence::read_window_state_or(
+            &window,
+            persistence.preview_window().geometry,
+        );
         persistence.record_preview_window(crate::persistence::PersistedPreviewWindowState {
             open: false,
             geometry,
@@ -160,7 +169,10 @@ impl PreviewWindowService {
         let Some(window) = app.get_window(PREVIEW_LABEL) else {
             return Ok(());
         };
-        let geometry = crate::persistence::read_window_state(&window);
+        let geometry = crate::persistence::read_window_state_or(
+            &window,
+            persistence.preview_window().geometry,
+        );
         persistence.record_preview_window(crate::persistence::PersistedPreviewWindowState {
             open: true,
             geometry,

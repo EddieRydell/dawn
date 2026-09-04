@@ -3,7 +3,9 @@ use dawn_language::effect::{CurveSource, EffectParamValue, GradientSource};
 use dawn_language::model::DawnProject;
 use dawn_language::operator::OperatorDefinition;
 use dawn_language::sequence::Sequence;
-use dawn_language::values::{DawnTime, Marks};
+use dawn_language::values::{
+    DawnTime, Marks, SampleDuration, SampleTime, sample_time_from_dawn_time,
+};
 use indexmap::IndexMap;
 use std::sync::Arc;
 
@@ -11,8 +13,8 @@ use crate::RenderError;
 
 #[derive(Clone, Copy)]
 pub(crate) struct EffectParamTiming {
-    pub(crate) start_seconds: f64,
-    pub(crate) duration_seconds: f64,
+    pub(crate) start: SampleTime,
+    pub(crate) duration: SampleDuration,
 }
 
 pub(crate) fn prepare_params(
@@ -73,15 +75,22 @@ fn prepare_param_value(
                 .iter()
                 .find(|collection| collection.key == *key)
                 .ok_or_else(|| RenderError::MissingMarkCollection { key: key.clone() })?;
-            let end_seconds = timing.start_seconds + timing.duration_seconds;
+            let end = timing
+                .start
+                .checked_add_duration(timing.duration)
+                .ok_or_else(|| RenderError::InvalidTiming {
+                    reason: "effect parameter window exceeds the runtime clock range".to_string(),
+                })?;
             Ok(Value::Marks(Arc::new(Marks {
                 marks: collection
                     .marks
                     .iter()
                     .filter_map(|mark| {
-                        let seconds = mark.as_seconds_f64();
-                        (seconds >= timing.start_seconds && seconds < end_seconds)
-                            .then(|| DawnTime::from_seconds_f64(seconds - timing.start_seconds))
+                        let mark = sample_time_from_dawn_time(mark).ok()?;
+                        (mark >= timing.start && mark < end).then(|| {
+                            let elapsed = mark.checked_duration_since(timing.start)?;
+                            Some(DawnTime::from_micros(u64::from(elapsed.ticks())))
+                        })?
                     })
                     .collect(),
             })))

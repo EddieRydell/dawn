@@ -12,28 +12,32 @@ use dawn_language::sequence::{
 use dawn_language::setup::SetupId;
 use dawn_language::validation::validate_sequence;
 use dawn_language::values::Color;
+use dawn_language::values::{
+    SampleDuration, SampleTime, sample_duration_from_dawn_duration, sample_duration_seconds_f32,
+    sample_time_from_seconds_f32,
+};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::composition::{
-    PrepareGraphContext, PreparedCompositionGraph, layer_cache_history_micros,
-    prepare_composition_graph,
+    PrepareGraphContext, PreparedSignalGraph, layer_cache_history, prepare_signal_graph,
 };
-use super::composition::{render_composition_graph, render_effect, take_black_color_buffer};
+use super::composition::{sample_effect_into, sample_signal_graph, take_black_color_buffer};
 use super::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
 use super::effects::sampling::{PreparedSampleContextGroup, PreparedSampleGroupCacheEntry};
 use super::elements::{PreparedElement, element_cell_offsets, prepare_elements};
 use super::targets::{PreparedTargetCache, PreparedTargetPixel};
-use super::timeline::{build_effect_frame_index, frame_count, prepare_timing};
+use super::timeline::{frame_at_or_before, frame_count, prepare_timing, sample_time_for_frame};
 
-static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_RENDER_CACHE_ID: AtomicU32 = AtomicU32::new(1);
 
 pub const MAX_GENERATED_EFFECTS: usize = 100_000;
 pub const MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER: usize = 4_096;
 
-fn next_render_cache_id() -> u64 {
+fn next_render_cache_id() -> u32 {
     NEXT_RENDER_CACHE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -45,19 +49,18 @@ pub struct RenderedTargetPixelAddress {
 
 #[derive(Clone, Debug)]
 pub struct PreparedSequenceRenderer {
-    pub(crate) render_cache_id: u64,
+    pub(crate) render_cache_id: u32,
     pub(crate) frame_rate: u32,
-    pub(crate) frame_count: u64,
-    pub(crate) duration_seconds: f64,
+    pub(crate) frame_count: u32,
+    pub(crate) duration: SampleDuration,
     pub(crate) elements: Vec<PreparedElement>,
     pub(crate) element_cell_offsets: Vec<usize>,
     pub(crate) pixel_count: usize,
     pub(crate) effects: Vec<PreparedEffect>,
-    pub(crate) effect_layer_indexes: Vec<usize>,
+    pub(crate) effects_by_layer: Vec<Vec<usize>>,
     pub(crate) layers: Vec<PreparedLayer>,
-    pub(crate) composition_graph: PreparedCompositionGraph,
-    pub(crate) effects_by_frame: Vec<Vec<usize>>,
-    pub(crate) layer_cache_history_micros: i64,
+    pub(crate) signal_graph: PreparedSignalGraph,
+    pub(crate) layer_cache_history: SampleDuration,
 }
 
 #[derive(Debug, Default)]
@@ -65,19 +68,18 @@ pub struct SequenceRenderScratch {
     pub(crate) effect_vm: Vec<DslVmScratch>,
     pub(crate) operator_vm: Vec<DslVmScratch>,
     pub(crate) bind_cache: DslBindCache,
-    pub(crate) graph_cache: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
-    pub(crate) graph_cache_frame_key: Option<i64>,
-    pub(crate) layer_cache: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
-    pub(crate) render_cache_id: Option<u64>,
+    pub(crate) signal_cache: HashMap<SignalCacheKey, Vec<Color>>,
+    pub(crate) signal_cache_time: Option<SampleTime>,
+    pub(crate) layer_cache: HashMap<SignalCacheKey, Vec<Color>>,
+    pub(crate) render_cache_id: Option<u32>,
     pub(crate) color_buffers: Vec<Vec<Color>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderedFrame {
-    pub frame_index: u64,
+    pub frame_index: u32,
     pub frame_rate: u32,
-    pub clock_seconds: f64,
-    pub sample_seconds: f64,
+    pub sample_time: SampleTime,
     pub elements: Vec<RenderedElement>,
 }
 
@@ -103,6 +105,7 @@ pub enum RenderError {
     BadGraph { message: String },
     EffectVm { message: String },
     GeneratorPrepare { message: String },
+    OutputSize { expected: usize, actual: usize },
 }
 
 impl From<RuntimeError> for RenderError {
@@ -192,30 +195,35 @@ impl PreparedSequenceRenderer {
                 enabled: layer.enabled,
             })
             .collect::<Vec<_>>();
-        let effect_layer_indexes = effects
-            .iter()
-            .map(|effect| {
-                layers
-                    .iter()
-                    .position(|layer| layer.id == effect.layer_id)
-                    .ok_or_else(|| RenderError::BadGraph {
-                        message: format!(
-                            "prepared effect references missing layer {}",
-                            effect.layer_id.0
-                        ),
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let frame_rate = sequence.frame_rate;
-        let duration_seconds = sequence.duration.as_seconds_f64();
-        let frame_count = frame_count(duration_seconds, frame_rate);
-        let mut effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
-        for active_effects in &mut effects_by_frame {
-            active_effects.sort_unstable_by_key(|effect_index| {
-                (effect_layer_indexes[*effect_index], *effect_index)
+        let mut effects_by_layer = vec![Vec::new(); layers.len()];
+        for (effect_index, effect) in effects.iter().enumerate() {
+            let layer_index = layers
+                .iter()
+                .position(|layer| layer.id == effect.layer_id)
+                .ok_or_else(|| RenderError::BadGraph {
+                    message: format!(
+                        "prepared effect references missing layer {}",
+                        effect.layer_id.0
+                    ),
+                })?;
+            effects_by_layer[layer_index].push(effect_index);
+        }
+        for layer_effects in &mut effects_by_layer {
+            layer_effects.sort_unstable_by(|left, right| {
+                effects[*left]
+                    .start_time
+                    .cmp(&effects[*right].start_time)
+                    .then(left.cmp(right))
             });
         }
-        let composition_graph = prepare_composition_graph(
+        let frame_rate = sequence.frame_rate;
+        let duration = sample_duration_from_dawn_duration(&sequence.duration).map_err(|_| {
+            RenderError::InvalidTiming {
+                reason: "sequence duration exceeds the runtime clock range".to_string(),
+            }
+        })?;
+        let frame_count = frame_count(&sequence.duration, frame_rate)?;
+        let signal_graph = prepare_signal_graph(
             PrepareGraphContext {
                 project,
                 sequence,
@@ -224,31 +232,30 @@ impl PreparedSequenceRenderer {
             },
             &sequence.composition_graph,
         )?;
-        let layer_cache_history_micros = layer_cache_history_micros(&composition_graph)?;
+        let layer_cache_history = layer_cache_history(&signal_graph)?;
         Ok(Self {
             render_cache_id: next_render_cache_id(),
             frame_rate,
             frame_count,
-            duration_seconds,
+            duration,
             elements,
             element_cell_offsets,
             pixel_count,
             effects,
-            effect_layer_indexes,
+            effects_by_layer,
             layers,
-            composition_graph,
-            effects_by_frame,
-            layer_cache_history_micros,
+            signal_graph,
+            layer_cache_history,
         })
     }
 
-    pub fn render_seconds(&self, audio_seconds: f64) -> Result<RenderedFrame, RenderError> {
+    pub fn render_seconds(&self, audio_seconds: f32) -> Result<RenderedFrame, RenderError> {
         self.render_seconds_with_scratch(audio_seconds, &mut SequenceRenderScratch::default())
     }
 
     pub fn render_seconds_with_scratch(
         &self,
-        audio_seconds: f64,
+        audio_seconds: f32,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<RenderedFrame, RenderError> {
         if !audio_seconds.is_finite() {
@@ -257,35 +264,29 @@ impl PreparedSequenceRenderer {
             });
         }
         let max_frame = self.frame_count.saturating_sub(1);
-        let frame_index = (audio_seconds * f64::from(self.frame_rate)).floor();
-        let frame_index = if frame_index < 0.0 {
-            0
-        } else if frame_index > max_frame as f64 {
-            max_frame
-        } else {
-            frame_index as u64
-        };
-        self.render_at(frame_index, audio_seconds, scratch)
+        let sample_time = sample_time_from_seconds_f32(audio_seconds).map_err(|_| {
+            RenderError::InvalidTiming {
+                reason: "audio seconds exceed the runtime clock range".to_string(),
+            }
+        })?;
+        let frame_index = frame_at_or_before(sample_time, self.frame_rate).min(max_frame);
+        self.render_at(frame_index, scratch)
     }
 
-    pub fn render_frame(&self, frame_index: u64) -> Result<RenderedFrame, RenderError> {
+    pub fn render_frame(&self, frame_index: u32) -> Result<RenderedFrame, RenderError> {
         self.render_frame_with_scratch(frame_index, &mut SequenceRenderScratch::default())
     }
 
     pub fn render_frame_with_scratch(
         &self,
-        frame_index: u64,
+        frame_index: u32,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<RenderedFrame, RenderError> {
         let frame_index = frame_index.min(self.frame_count.saturating_sub(1));
-        self.render_at(
-            frame_index,
-            frame_index as f64 / f64::from(self.frame_rate),
-            scratch,
-        )
+        self.render_at(frame_index, scratch)
     }
 
-    pub fn frame_count(&self) -> u64 {
+    pub fn frame_count(&self) -> u32 {
         self.frame_count
     }
 
@@ -293,28 +294,61 @@ impl PreparedSequenceRenderer {
         self.frame_rate
     }
 
-    pub fn active_effect_names(&self, frame_index: u64) -> Vec<&str> {
-        let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) else {
-            return Vec::new();
-        };
-        let mut active_effects = active_effects.clone();
-        active_effects.sort_unstable();
-        active_effects
-            .into_iter()
-            .filter_map(|effect_index| self.effects.get(effect_index))
-            .map(|effect| effect.name.as_str())
-            .collect()
+    /// Samples the prepared show signal at an exact microsecond clock value.
+    /// This is the controller-facing path: it performs no floating-point time
+    /// conversion and reuses all caller-owned VM/render scratch memory.
+    pub fn sample_at(
+        &self,
+        sample_time: SampleTime,
+        scratch: &mut SequenceRenderScratch,
+    ) -> Result<Vec<RenderedElement>, RenderError> {
+        let mut colors = take_black_color_buffer(scratch, self.pixel_count);
+        self.sample_colors_into(sample_time, &mut colors, scratch)?;
+        let mut offset = 0;
+        let rendered = self
+            .elements
+            .iter()
+            .map(|element| {
+                let end = offset + element.pixel_count;
+                let pixels = colors[offset..end].to_vec();
+                offset = end;
+                RenderedElement {
+                    element_id: element.id,
+                    pixels,
+                }
+            })
+            .collect();
+        colors.clear();
+        scratch.color_buffers.push(colors);
+        Ok(rendered)
     }
 
-    fn render_at(
+    /// Samples the show into a caller-owned, full-rig RGB buffer. After the
+    /// scratch buffers have warmed up, callers do not allocate the final frame.
+    pub fn sample_into(
         &self,
-        frame_index: u64,
-        clock_seconds: f64,
+        sample_time: SampleTime,
+        output: &mut [Color],
         scratch: &mut SequenceRenderScratch,
-    ) -> Result<RenderedFrame, RenderError> {
+    ) -> Result<(), RenderError> {
+        if output.len() != self.pixel_count {
+            return Err(RenderError::OutputSize {
+                expected: self.pixel_count,
+                actual: output.len(),
+            });
+        }
+        self.sample_colors_into(sample_time, output, scratch)
+    }
+
+    fn sample_colors_into(
+        &self,
+        sample_time: SampleTime,
+        output: &mut [Color],
+        scratch: &mut SequenceRenderScratch,
+    ) -> Result<(), RenderError> {
         if scratch.render_cache_id != Some(self.render_cache_id) {
-            scratch.graph_cache.clear();
-            scratch.graph_cache_frame_key = None;
+            scratch.signal_cache.clear();
+            scratch.signal_cache_time = None;
             scratch.layer_cache.clear();
             scratch.render_cache_id = Some(self.render_cache_id);
         }
@@ -323,59 +357,87 @@ impl PreparedSequenceRenderer {
             .resize_with(self.effects.len(), DslVmScratch::default);
         scratch
             .operator_vm
-            .resize_with(self.composition_graph.nodes.len(), DslVmScratch::default);
-        let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
-        let rendered = render_composition_graph(self, sample_seconds, scratch)?;
+            .resize_with(self.signal_graph.nodes.len(), DslVmScratch::default);
+        if sample_time.ticks() >= self.duration.ticks() {
+            output.fill(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            });
+            return Ok(());
+        }
+        sample_signal_graph(self, sample_time, output, scratch)
+    }
+
+    pub fn duration(&self) -> SampleDuration {
+        self.duration
+    }
+
+    pub fn active_effect_names(&self, frame_index: u32) -> Vec<&str> {
+        let Ok(sample_time) = sample_time_for_frame(frame_index, self.frame_rate) else {
+            return Vec::new();
+        };
+        self.effects
+            .iter()
+            .filter(|effect| effect.is_active(sample_time))
+            .map(|effect| effect.name.as_str())
+            .collect()
+    }
+
+    fn render_at(
+        &self,
+        frame_index: u32,
+        scratch: &mut SequenceRenderScratch,
+    ) -> Result<RenderedFrame, RenderError> {
+        let sample_time = sample_time_for_frame(frame_index, self.frame_rate)?;
+        let rendered = self.sample_at(sample_time, scratch)?;
 
         Ok(RenderedFrame {
             frame_index,
             frame_rate: self.frame_rate,
-            clock_seconds,
-            sample_seconds,
+            sample_time,
             elements: rendered,
         })
     }
 
-    pub(crate) fn render_layer_at(
+    pub(crate) fn sample_layer(
         &self,
         layer_index: usize,
-        sample_seconds: f64,
+        sample_time: dawn_language::values::SampleTime,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<Vec<Color>, RenderError> {
         let layer = &self.layers[layer_index];
         let mut rendered = take_black_color_buffer(scratch, self.pixel_count);
-        if !layer.enabled || !sample_seconds.is_finite() || sample_seconds < 0.0 {
+        if !layer.enabled {
             return Ok(rendered);
         }
 
-        let frame_index = (sample_seconds * f64::from(self.frame_rate)).floor() as usize;
-        if let Some(active_effects) = self.effects_by_frame.get(frame_index) {
-            let first = active_effects.partition_point(|effect_index| {
-                self.effect_layer_indexes[*effect_index] < layer_index
-            });
-            let last = active_effects.partition_point(|effect_index| {
-                self.effect_layer_indexes[*effect_index] <= layer_index
-            });
-            for effect_index in &active_effects[first..last] {
+        if let Some(layer_effects) = self.effects_by_layer.get(layer_index) {
+            for effect_index in layer_effects {
                 let Some(effect) = self.effects.get(*effect_index) else {
                     continue;
                 };
-                if sample_seconds < effect.start_seconds
-                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
-                {
+                if effect.start_time > sample_time {
+                    break;
+                }
+                if !effect.is_active(sample_time) {
                     continue;
                 }
-                render_effect(
+                sample_effect_into(
                     effect,
                     &self.element_cell_offsets,
                     &mut rendered,
-                    sample_seconds,
+                    sample_time,
                     &mut scratch.effect_vm[*effect_index],
                     &mut scratch.bind_cache,
                 )?;
             }
         }
         Ok(rendered)
+    }
+
+    pub(crate) fn duration_seconds(&self) -> f32 {
+        sample_duration_seconds_f32(self.duration)
     }
 }
 
@@ -386,14 +448,43 @@ pub(crate) fn arc_key<T>(value: &Arc<T>) -> usize {
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedEffect {
     pub(crate) layer_id: SequenceLayerId,
-    pub(crate) start_seconds: f64,
-    pub(crate) duration_seconds: f64,
+    pub(crate) start_time: dawn_language::values::SampleTime,
+    pub(crate) duration: SampleDuration,
     pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
     pub(crate) sample_groups: Option<Arc<Vec<PreparedSampleContextGroup>>>,
     pub(crate) name: String,
     pub(crate) implementation: PreparedEffectImplementation,
     pub(crate) params: IndexMap<Identifier, Value>,
     pub(crate) automation: Vec<PreparedAutomation>,
+}
+
+impl PreparedEffect {
+    pub(crate) fn is_active(&self, sample_time: dawn_language::values::SampleTime) -> bool {
+        sample_time >= self.start_time
+            && self
+                .start_time
+                .checked_add_duration(self.duration)
+                .is_some_and(|end| sample_time < end)
+    }
+
+    pub(crate) fn duration_seconds(&self) -> f32 {
+        sample_duration_seconds_f32(self.duration)
+    }
+
+    pub(crate) fn local_seconds(&self, sample_time: dawn_language::values::SampleTime) -> f32 {
+        sample_duration_seconds_f32(
+            sample_time
+                .checked_duration_since(self.start_time)
+                .unwrap_or(SampleDuration::from_ticks(0)),
+        )
+    }
+
+    pub(crate) fn progress(&self, sample_time: dawn_language::values::SampleTime) -> f32 {
+        let elapsed = sample_time
+            .checked_duration_since(self.start_time)
+            .map_or(0, |duration| duration.ticks());
+        (elapsed as f32 / self.duration.ticks() as f32).clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -414,10 +505,17 @@ pub(crate) struct PreparedLayer {
     pub(crate) enabled: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct GraphRenderCacheKey {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SignalCacheKey {
     pub(crate) node_index: usize,
-    pub(crate) frame_key: i64,
+    pub(crate) sample_time: SampleTime,
+}
+
+impl Hash for SignalCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node_index.hash(state);
+        self.sample_time.ticks().hash(state);
+    }
 }
 
 #[derive(Clone, Debug)]

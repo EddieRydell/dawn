@@ -5,15 +5,15 @@ use super::*;
 pub struct NewSequenceRequest {
     pub file_path: String,
     pub object_key: String,
-    pub duration_seconds: f64,
+    pub duration_seconds: f32,
     pub frame_rate: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLayoutState {
-    pub sidebar_width_px: f64,
-    pub inspector_width_px: f64,
+    pub sidebar_width_px: f32,
+    pub inspector_width_px: f32,
     pub sidebar_collapsed: bool,
     pub inspector_collapsed: bool,
     pub active_sidebar_view: SidebarView,
@@ -27,9 +27,9 @@ impl<'de> Deserialize<'de> for WorkspaceLayoutState {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct StoredLayout {
-            sidebar_width_px: Option<f64>,
-            project_tree_width_px: Option<f64>,
-            inspector_width_px: f64,
+            sidebar_width_px: Option<f32>,
+            project_tree_width_px: Option<f32>,
+            inspector_width_px: f32,
             sidebar_collapsed: Option<bool>,
             project_tree_collapsed: Option<bool>,
             inspector_collapsed: bool,
@@ -91,8 +91,8 @@ pub struct AppSettings {
     pub reopen_preview_window: bool,
     pub autosave_text_edits: bool,
     pub sequence_initial_zoom_mode: SequenceInitialZoomMode,
-    pub sequence_initial_px_per_second: f64,
-    pub sequence_initial_lane_height_px: f64,
+    pub sequence_initial_px_per_second: f32,
+    pub sequence_initial_lane_height_px: f32,
     pub effect_raster: EffectRasterSettings,
 }
 
@@ -125,7 +125,7 @@ pub enum SequenceInitialZoomMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectRasterSettings {
-    pub render_scale: f64,
+    pub render_scale: f32,
     pub max_columns: u32,
     pub max_rows: u32,
     pub min_frame_stride: u32,

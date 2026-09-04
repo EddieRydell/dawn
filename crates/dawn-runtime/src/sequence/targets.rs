@@ -10,11 +10,11 @@ use std::sync::Arc;
 use crate::sequence::elements::{PreparedElement, prepare_elements};
 use crate::{RenderError, RenderedTargetPixelAddress};
 
-fn pixel_fraction(index: usize, count: usize) -> f64 {
+fn pixel_fraction(index: usize, count: usize) -> f32 {
     if count <= 1 {
         0.0
     } else {
-        index as f64 / (count - 1) as f64
+        index as f32 / (count - 1) as f32
     }
 }
 
@@ -62,7 +62,7 @@ pub(crate) struct PreparedTargetPixel {
     pub(crate) element_cell_index: usize,
     pub(crate) pixel_index: usize,
     pub(crate) pixel_count: usize,
-    pub(crate) pixel_fraction: f64,
+    pub(crate) pixel_fraction: f32,
 }
 
 #[derive(Default)]
@@ -101,7 +101,7 @@ pub(crate) fn full_rig_target_pixels(
             let pixel_fraction = if element.pixel_count <= 1 {
                 0.0
             } else {
-                element_cell_index as f64 / (element.pixel_count - 1) as f64
+                element_cell_index as f32 / (element.pixel_count - 1) as f32
             };
             pixels.push(PreparedTargetPixel {
                 element_index,

@@ -40,7 +40,7 @@ pub enum LiveOutputControllerState {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Point3Meters {
-    pub x_meters: f64,
-    pub y_meters: f64,
-    pub z_meters: f64,
+    pub x_meters: f32,
+    pub y_meters: f32,
+    pub z_meters: f32,
 }

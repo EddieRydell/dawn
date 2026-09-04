@@ -40,8 +40,8 @@ pub(super) fn project_sequence(
             index: index as u32,
             id: effect.id.0,
             layer_id: effect.layer_id.0,
-            start_seconds: effect.start.as_seconds_f64(),
-            duration_seconds: effect.duration.as_seconds_f64(),
+            start_seconds: effect.start.as_seconds_f32(),
+            duration_seconds: effect.duration.as_seconds_f32(),
             target: effect_target(&effect.target),
             target_label: effect_target_label(session, &effect.target),
             scope: match effect.scope {
@@ -111,8 +111,8 @@ pub(super) fn project_sequence(
                 .ok_or(clip.id.0)? as u32;
             Ok(SequenceControlClip {
                 id: clip.id.0,
-                start_seconds: clip.start.as_seconds_f64(),
-                duration_seconds: clip.duration.as_seconds_f64(),
+                start_seconds: clip.start.as_seconds_f32(),
+                duration_seconds: clip.duration.as_seconds_f32(),
                 anchor_lane_index: lane_index,
                 lane_index,
                 target: effect_target(clip.target.selection()),
@@ -147,8 +147,8 @@ pub(super) fn project_sequence(
             path: resolved.identity.document().to_string(),
             source_ref: resolved.source_ref(),
             object_key: resolved.identity.object().to_string(),
-            duration_seconds: sequence.duration.as_seconds_f64(),
-            frame_rate: sequence.frame_rate as f64,
+            duration_seconds: sequence.duration.as_seconds_f32(),
+            frame_rate: sequence.frame_rate as f32,
             audio: sequence_audio(session, resolved.identity.document_id(), &sequence.audio),
             mark_collections: sequence
                 .mark_collections
@@ -160,7 +160,7 @@ pub(super) fn project_sequence(
                     marks_seconds: collection
                         .marks
                         .iter()
-                        .map(|mark| mark.as_seconds_f64())
+                        .map(|mark| mark.as_seconds_f32())
                         .collect(),
                 })
                 .collect(),
@@ -195,8 +195,8 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
         .iter()
         .map(|clip| SequenceAutomationClip {
             id: clip.id.0,
-            start_seconds: clip.start.as_seconds_f64(),
-            duration_seconds: clip.duration.as_seconds_f64(),
+            start_seconds: clip.start.as_seconds_f32(),
+            duration_seconds: clip.duration.as_seconds_f32(),
             anchor_lane_index: clip.anchor_lane_index,
             lane_index: clip.lane_index,
             curve: clip
@@ -281,7 +281,7 @@ pub(super) fn project_layout(
                 .map(|definition| ResolvedPreviewProp {
                     name: fixture.definition.0.object().to_string(),
                     color_model: "rgb".to_string(),
-                    bulb_diameter_meters: definition.bulb_radius.as_meters_f64() * 2.0,
+                    bulb_diameter_meters: definition.bulb_radius.as_meters_f32() * 2.0,
                     geometry_summary: geometry_summary(&definition.geometry),
                     render_plan: render_plan(&definition.geometry, definition.bulb_radius),
                     source_path: definition_ref
@@ -365,7 +365,7 @@ pub(super) fn project_fixture(
                 object_key: object.id().to_string(),
                 name: object.id().to_string(),
                 color_model: "rgb".to_string(),
-                bulb_diameter_meters: definition.bulb_radius.as_meters_f64() * 2.0,
+                bulb_diameter_meters: definition.bulb_radius.as_meters_f32() * 2.0,
                 geometry: geometry(&definition.geometry),
                 geometry_summary: geometry_summary(&definition.geometry),
                 render_plan: render_plan(&definition.geometry, definition.bulb_radius),

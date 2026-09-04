@@ -62,7 +62,7 @@ fn target() -> Arc<TargetValue> {
                         element_cell_index: pixel,
                         pixel_index: pixel,
                         pixel_count: 24,
-                        pixel_fraction: pixel as f64 / 23.0,
+                        pixel_fraction: pixel as f32 / 23.0,
                     })
                     .collect(),
             ),
@@ -74,8 +74,8 @@ fn target() -> Arc<TargetValue> {
 fn mark_pulse_matches_reference_schedule_and_samples() {
     let marks = Arc::new(Marks {
         marks: vec![
-            DawnTime(Duration::from_secs_f64(0.5)),
-            DawnTime(Duration::from_secs_f64(1.25)),
+            DawnTime(Duration::from_secs_f32(0.5)),
+            DawnTime(Duration::from_secs_f32(1.25)),
         ],
     });
     let params = IndexMap::from([

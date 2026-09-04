@@ -11,9 +11,9 @@ use std::hint::black_box;
 
 const BENCHMARK_SEQUENCE_DOCUMENT: &str = "sequences/layer_test.sequence.dawn";
 const BENCHMARK_SEQUENCE_OBJECT: &str = "layer_test";
-const OPERATOR_FRAME: u64 = 8494;
-const PLAYBACK_START_FRAME: u64 = 8420;
-const PLAYBACK_FRAME_COUNT: u64 = 60;
+const OPERATOR_FRAME: u32 = 8494;
+const PLAYBACK_START_FRAME: u32 = 8420;
+const PLAYBACK_FRAME_COUNT: u32 = 60;
 
 const SCENARIOS: [RenderScenario; 7] = [
     RenderScenario {
@@ -72,7 +72,7 @@ const RASTER_SCENARIOS: [RasterScenario; 2] = [
 
 #[derive(Clone, Copy)]
 struct RenderScenario {
-    frame: u64,
+    frame: u32,
     checksum: u64,
     active_effect_count: usize,
 }
@@ -293,7 +293,7 @@ fn project_path() -> Utf8PathBuf {
 
 fn checksum_frame(frame: &RenderedFrame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = checksum_u64(hash, frame.frame_index);
+    hash = checksum_u64(hash, u64::from(frame.frame_index));
     for element in &frame.elements {
         hash = checksum_u32(hash, element.element_id.0);
         hash = checksum_colors_with_seed(hash, &element.pixels);

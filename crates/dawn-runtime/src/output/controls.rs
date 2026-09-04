@@ -6,6 +6,9 @@ use dawn_language::fixture_profile::{
     FixtureBehaviorRule, FixtureControlValue, FixtureFunctionId, FixtureFunctionKind,
     FixtureProfileStore,
 };
+use dawn_language::values::{
+    SampleDuration, SampleTime, sample_duration_from_dawn_duration, sample_time_from_dawn_time,
+};
 
 use super::errors::{SequenceOutputPrepareError, SequenceOutputRenderError};
 use super::frame::RenderedElementState;
@@ -14,6 +17,8 @@ use super::values::{black, sample_curve, sample_gradient, set_cell};
 #[derive(Clone)]
 pub(crate) struct PreparedControl {
     clip: ControlClip,
+    start: SampleTime,
+    duration: SampleDuration,
     addresses: Vec<ElementCellAddress>,
 }
 
@@ -24,6 +29,18 @@ pub(crate) fn prepare_controls(
 ) -> Result<Vec<PreparedControl>, SequenceOutputPrepareError> {
     let mut prepared = Vec::new();
     for clip in clips {
+        let start = sample_time_from_dawn_time(&clip.start).map_err(|_| {
+            SequenceOutputPrepareError::InvalidControl {
+                clip: clip.id.0,
+                reason: "control start exceeds the runtime clock range".to_string(),
+            }
+        })?;
+        let duration = sample_duration_from_dawn_duration(&clip.duration).map_err(|_| {
+            SequenceOutputPrepareError::InvalidControl {
+                clip: clip.id.0,
+                reason: "control duration exceeds the runtime clock range".to_string(),
+            }
+        })?;
         let addresses = tree
             .flatten_selection(clip.target.selection())
             .map_err(|error| SequenceOutputPrepareError::InvalidControl {
@@ -65,6 +82,8 @@ pub(crate) fn prepare_controls(
         }
         prepared.push(PreparedControl {
             clip: clip.clone(),
+            start,
+            duration,
             addresses,
         });
     }
@@ -108,19 +127,20 @@ fn control_function(target: &ControlTarget) -> Option<FixtureFunctionId> {
 pub(crate) fn apply_controls(
     elements: &mut [RenderedElementState],
     controls: &[PreparedControl],
-    seconds: f64,
+    sample_time: SampleTime,
 ) -> Result<HashSet<(ElementNodeId, FixtureFunctionId)>, SequenceOutputRenderError> {
     let mut explicit = HashSet::new();
     for prepared in controls {
-        let start = prepared.clip.start.as_seconds_f64();
-        let duration = prepared.clip.duration.as_seconds_f64();
-        if seconds < start || seconds >= start + duration {
+        let Some(elapsed) = sample_time.checked_duration_since(prepared.start) else {
+            continue;
+        };
+        if elapsed >= prepared.duration {
             continue;
         }
-        let position = if duration <= 0.0 {
+        let position = if prepared.duration.ticks() == 0 {
             0.0
         } else {
-            ((seconds - start) / duration).clamp(0.0, 1.0)
+            elapsed.ticks() as f32 / prepared.duration.ticks() as f32
         };
         for address in &prepared.addresses {
             let state = elements
@@ -177,7 +197,7 @@ pub(crate) fn apply_controls(
     Ok(explicit)
 }
 
-fn fixture_control_value(value: &ControlValue, position: f64) -> Option<FixtureControlValue> {
+fn fixture_control_value(value: &ControlValue, position: f32) -> Option<FixtureControlValue> {
     match value {
         ControlValue::ConstantNormalized(value) => Some(FixtureControlValue::Normalized(*value)),
         ControlValue::NormalizedCurve(curve) => Some(FixtureControlValue::Normalized(

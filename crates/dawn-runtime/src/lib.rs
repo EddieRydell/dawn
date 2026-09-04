@@ -12,15 +12,16 @@
 
 mod output;
 mod sequence;
+pub use dawn_language::values::{SampleDuration, SampleTime};
 pub use output::*;
 pub use sequence::raster::{
     EffectRasterPrepareBatch, EffectRasterRenderScratch, PreparedEffectRasterRenderer,
     PreparedEffectRasterSample,
 };
 pub(crate) use sequence::renderer::{
-    GeneratedTargetCacheEntry, GeneratorContextTargetCacheEntry, GraphRenderCacheKey,
-    MAX_GENERATED_EFFECTS, MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER, PrepareTargetCache,
-    PreparedAutomation, PreparedEffect, PreparedEffectImplementation, PreparedLayer, arc_key,
+    GeneratedTargetCacheEntry, GeneratorContextTargetCacheEntry, MAX_GENERATED_EFFECTS,
+    MAX_SIGNAL_SAMPLES_PER_OPERATOR_RENDER, PrepareTargetCache, PreparedAutomation, PreparedEffect,
+    PreparedEffectImplementation, PreparedLayer, SignalCacheKey, arc_key,
 };
 pub use sequence::renderer::{
     PreparedSequenceRenderer, RenderError, RenderedElement, RenderedFrame,
@@ -60,9 +61,7 @@ pub(crate) use sequence::elements::{PreparedElement, prepare_elements};
 pub(crate) use sequence::targets::{
     PreparedTargetPixel, generator_expansion_targets, prepare_target, prepare_target_pixels_cached,
 };
-pub(crate) use sequence::timeline::{
-    build_effect_frame_index_for_window, frame_count, prepare_timing,
-};
+pub(crate) use sequence::timeline::{frame_count, prepare_timing};
 pub(crate) use std::collections::HashMap;
 pub(crate) use std::sync::Arc;
 

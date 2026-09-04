@@ -569,7 +569,7 @@ impl<'source> Parser<'source> {
             },
             TokenKind::FloatLiteral => Expr {
                 span: token.span,
-                kind: ExprKind::Literal(Value::Float(match self.text(token.span).parse::<f64>() {
+                kind: ExprKind::Literal(Value::Float(match self.text(token.span).parse::<f32>() {
                     Ok(value) if value.is_finite() => value,
                     _ => {
                         self.error(token.span, "float literal must be finite");

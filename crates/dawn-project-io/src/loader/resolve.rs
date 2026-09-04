@@ -544,7 +544,7 @@ impl DomainResolver<'_> {
                         for level in sequence_values(path, mapping, "levels")? {
                             levels.insert(
                                 EmitterId(u32_field(path, level, "emitter")?),
-                                f64_field(path, level, "level")?,
+                                f32_field(path, level, "level")?,
                             );
                         }
                         Ok(DiscreteColorMapping {
@@ -579,7 +579,7 @@ impl DomainResolver<'_> {
                 width: usize_field(path, value, "width")?,
             },
             "scale_invert" => FilterDefinition::ScaleInvert {
-                scale: f64_field(path, value, "scale")?,
+                scale: f32_field(path, value, "scale")?,
                 invert: bool_field(path, value, "invert")?,
                 width: usize_field(path, value, "width")?,
             },
@@ -606,7 +606,7 @@ impl DomainResolver<'_> {
                 for entry in sequence_values(path, value, "entries")? {
                     entries.insert(
                         u32_field(path, entry, "id")?,
-                        f64_field(path, entry, "value")?,
+                        f32_field(path, entry, "value")?,
                     );
                 }
                 FilterDefinition::IndexedValueMapping {
@@ -739,8 +739,8 @@ impl DomainResolver<'_> {
                     },
                     "dimmer" => FixtureBehaviorRule::Dimmer {
                         function: FixtureFunctionId(u32_field(path, rule, "function")?),
-                        off: f64_field(path, rule, "off")?,
-                        on: f64_field(path, rule, "on")?,
+                        off: f32_field(path, rule, "off")?,
+                        on: f32_field(path, rule, "on")?,
                     },
                     "color_wheel" => FixtureBehaviorRule::ColorWheel {
                         function: FixtureFunctionId(u32_field(path, rule, "function")?),
@@ -1151,8 +1151,8 @@ impl DomainResolver<'_> {
     ) -> Result<EffectParamValue, LoadProjectError> {
         let path = document_id.path();
         match string_field(path, value, "type")? {
-            "integer" => Ok(EffectParamValue::Int(i64_field(path, value, "value")?)),
-            "float" => Ok(EffectParamValue::Float(f64_field(path, value, "value")?)),
+            "integer" => Ok(EffectParamValue::Int(i32_field(path, value, "value")?)),
+            "float" => Ok(EffectParamValue::Float(f32_field(path, value, "value")?)),
             "bool" => Ok(EffectParamValue::Bool(bool_field(path, value, "value")?)),
             "color" => Ok(EffectParamValue::Color(
                 parse_color(string_field(path, value, "value")?).map_err(|error| {
@@ -1371,7 +1371,7 @@ impl DomainResolver<'_> {
         let control = required_field(path, value, "value")?;
         let value_kind = match string_field(path, control, "type")? {
             "constant_normalized" => {
-                ControlValue::ConstantNormalized(f64_field(path, control, "value")?)
+                ControlValue::ConstantNormalized(f32_field(path, control, "value")?)
             }
             "normalized_curve" => ControlValue::NormalizedCurve(parse_curve(
                 path,
@@ -1419,7 +1419,7 @@ fn invalid(path: &Utf8Path, message: &str) -> LoadProjectError {
 fn parse_dimming_curve(path: &Utf8Path, value: &Value) -> Result<DimmingCurve, LoadProjectError> {
     Ok(match string_field(path, value, "type")? {
         "linear" => DimmingCurve::Linear,
-        "gamma" => DimmingCurve::Gamma(f64_field(path, value, "value")?),
+        "gamma" => DimmingCurve::Gamma(f32_field(path, value, "value")?),
         "custom" => DimmingCurve::Custom(parse_curve(path, required_field(path, value, "curve")?)?),
         other => return Err(invalid(path, &format!("invalid dimming curve `{other}`"))),
     })
@@ -1531,7 +1531,7 @@ use yaml_serde::Value;
 
 use super::Loader;
 use super::parse::{
-    ResolvedObject, bool_field, f64_field, i64_field, optional_field, optional_mapping,
+    ResolvedObject, bool_field, f32_field, i32_field, optional_field, optional_mapping,
     optional_sequence, optional_string_field, parse_automation_binding, parse_automation_curve,
     parse_color, parse_curve, parse_detached_automation_binding, parse_duration,
     parse_duration_as_time, parse_effect_scope, parse_gradient, parse_graph_edge,

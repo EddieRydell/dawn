@@ -1,6 +1,6 @@
 use dawn_language::dsl::{CompiledEffect, DslBindCache, DslVmScratch, RunContext, RuntimeError};
 use dawn_language::native_effect::{self, BoundNativeEffect};
-use dawn_language::values::{Color, Marks};
+use dawn_language::values::{Color, Marks, sample_time_seconds_f32};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,14 +15,14 @@ use crate::{
 pub(crate) struct PreparedSampleContext {
     pub(crate) pixel_index: usize,
     pub(crate) pixel_count: usize,
-    pub(crate) pixel_fraction: f64,
+    pub(crate) pixel_fraction: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct PreparedSampleContextKey {
     pixel_index: usize,
     pixel_count: usize,
-    pixel_fraction_bits: u64,
+    pixel_fraction_bits: u32,
 }
 
 impl From<PreparedSampleContext> for PreparedSampleContextKey {
@@ -75,13 +75,14 @@ pub(crate) fn render_sampled_effect_target_colors(
     effect: &PreparedEffect,
     effect_pixels: &PreparedSampledEffectPixels,
     rendered: &mut [Color],
-    sample_seconds: f64,
+    sample_time: dawn_language::values::SampleTime,
     scratch: &mut DslVmScratch,
     bind_cache: &mut DslBindCache,
 ) -> Result<(), RenderError> {
-    let local_seconds = sample_seconds - effect.start_seconds;
-    let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let automated = effect_implementation_at(effect, sample_seconds, bind_cache)?;
+    let local_seconds = effect.local_seconds(sample_time);
+    let progress = effect.progress(sample_time);
+    let automated =
+        effect_implementation_at(effect, sample_time_seconds_f32(sample_time), bind_cache)?;
     let implementation = automated.as_ref().unwrap_or(&effect.implementation);
     match implementation {
         PreparedEffectImplementation::Dsl {
@@ -144,15 +145,15 @@ fn render_sampled_effect_pixels(
 fn run_context(
     effect: &PreparedEffect,
     sample_context: PreparedSampleContext,
-    progress: f64,
-    local_seconds: f64,
+    progress: f32,
+    local_seconds: f32,
 ) -> RunContext {
     RunContext {
         progress,
         seconds: local_seconds,
-        duration: effect.duration_seconds,
-        pixel_index: sample_context.pixel_index as i64,
-        pixel_count: sample_context.pixel_count as i64,
+        duration: effect.duration_seconds(),
+        pixel_index: sample_context.pixel_index as i32,
+        pixel_count: sample_context.pixel_count as i32,
         pixel_fraction: sample_context.pixel_fraction,
         global_marks: Marks { marks: Vec::new() },
     }
@@ -163,8 +164,8 @@ pub(crate) fn sample_effect_pixel(
     effect: &PreparedEffect,
     implementation: &PreparedEffectImplementation,
     pixel: &PreparedTargetPixel,
-    progress: f64,
-    local_seconds: f64,
+    progress: f32,
+    local_seconds: f32,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     sample_effect_group(
@@ -186,8 +187,8 @@ pub(crate) fn sample_effect_group(
     effect: &PreparedEffect,
     implementation: &PreparedEffectImplementation,
     sample_context: PreparedSampleContext,
-    progress: f64,
-    local_seconds: f64,
+    progress: f32,
+    local_seconds: f32,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     let context = run_context(effect, sample_context, progress, local_seconds);
@@ -202,7 +203,7 @@ pub(crate) fn sample_effect_group(
 
 pub(crate) fn effect_implementation_at(
     effect: &PreparedEffect,
-    sample_seconds: f64,
+    sample_seconds: f32,
     bind_cache: &mut DslBindCache,
 ) -> Result<Option<PreparedEffectImplementation>, RenderError> {
     if effect.automation.is_empty() {

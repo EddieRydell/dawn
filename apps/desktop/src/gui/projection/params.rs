@@ -278,8 +278,8 @@ pub(in crate::gui) fn automation_mapping_to_gui(
             max: *max,
         },
         AutomationMapping::Int { min, max } => SequenceAutomationMapping::Int {
-            min: *min as f64,
-            max: *max as f64,
+            min: *min as f32,
+            max: *max as f32,
         },
         AutomationMapping::Bool => SequenceAutomationMapping::Bool,
         AutomationMapping::Enum { values } => SequenceAutomationMapping::Enum {
@@ -387,7 +387,7 @@ pub(in crate::gui) fn effect_param_value(
 ) -> SequenceEffectParamValue {
     match value {
         EffectParamValue::Int(value) => SequenceEffectParamValue::Int {
-            value: *value as f64,
+            value: *value as f32,
         },
         EffectParamValue::Float(value) => SequenceEffectParamValue::Float { value: *value },
         EffectParamValue::Bool(value) => SequenceEffectParamValue::Bool { value: *value },
@@ -435,7 +435,7 @@ pub(in crate::gui) fn effect_param_value(
 pub(in crate::gui) fn default_param_value(value: &EffectValue) -> Option<SequenceEffectParamValue> {
     Some(match value {
         EffectValue::Int(value) => SequenceEffectParamValue::Int {
-            value: *value as f64,
+            value: *value as f32,
         },
         EffectValue::Float(value) => SequenceEffectParamValue::Float { value: *value },
         EffectValue::Bool(value) => SequenceEffectParamValue::Bool { value: *value },

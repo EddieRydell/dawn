@@ -6,7 +6,7 @@ pub(super) fn sequence_value(
     let mut value = typed_object("sequence");
     value.insert(
         string_value("duration"),
-        Value::String(seconds_string(sequence.duration.as_seconds_f64())),
+        Value::String(microseconds_string(sequence.duration.as_micros_rounded())),
     );
     value.insert(
         string_value("frame_rate"),
@@ -109,11 +109,11 @@ pub(super) fn sequence_effect_value(
     value.insert(string_value("layer_id"), number_value(effect.layer_id.0)?);
     value.insert(
         string_value("start"),
-        Value::String(seconds_string(effect.start.as_seconds_f64())),
+        Value::String(microseconds_string(effect.start.as_micros_rounded())),
     );
     value.insert(
         string_value("duration"),
-        Value::String(seconds_string(effect.duration.as_seconds_f64())),
+        Value::String(microseconds_string(effect.duration.as_micros_rounded())),
     );
     value.insert(
         string_value("target"),
@@ -238,7 +238,7 @@ pub(super) fn mark_collection_value(
             collection
                 .marks
                 .iter()
-                .map(|time| Value::String(seconds_string(time.as_seconds_f64())))
+                .map(|time| Value::String(microseconds_string(time.as_micros_rounded())))
                 .collect(),
         ),
     );
@@ -326,11 +326,11 @@ pub(super) fn automation_clip_value(clip: &AutomationClip) -> Result<Value, Expo
     value.insert(string_value("id"), number_value(clip.id.0)?);
     value.insert(
         string_value("start"),
-        Value::String(seconds_string(clip.start.as_seconds_f64())),
+        Value::String(microseconds_string(clip.start.as_micros_rounded())),
     );
     value.insert(
         string_value("duration"),
-        Value::String(seconds_string(clip.duration.as_seconds_f64())),
+        Value::String(microseconds_string(clip.duration.as_micros_rounded())),
     );
     value.insert(
         string_value("anchor_lane_index"),
@@ -499,11 +499,11 @@ pub(super) fn control_clip_value(
     value.insert(string_value("id"), number_value(clip.id.0)?);
     value.insert(
         string_value("start"),
-        Value::String(seconds_string(clip.start.as_seconds_f64())),
+        Value::String(microseconds_string(clip.start.as_micros_rounded())),
     );
     value.insert(
         string_value("duration"),
-        Value::String(seconds_string(clip.duration.as_seconds_f64())),
+        Value::String(microseconds_string(clip.duration.as_micros_rounded())),
     );
     let (target_type, selection) = match &clip.target {
         ControlTarget::Scalar(selection) => ("scalar", selection),
@@ -716,7 +716,7 @@ use yaml_serde::{Mapping, Value};
 
 use super::ProjectSession;
 use super::values::{
-    curve_value, element_selection_value, gradient_value, number_value, seconds_string,
+    curve_value, element_selection_value, gradient_value, microseconds_string, number_value,
     string_value, typed_object, write_source_reference,
 };
 use crate::ExportProjectError;

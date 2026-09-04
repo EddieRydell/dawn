@@ -25,7 +25,7 @@ pub struct RelatedDiagnosticLocation {
 pub struct ResolvedPreviewProp {
     pub name: String,
     pub color_model: String,
-    pub bulb_diameter_meters: f64,
+    pub bulb_diameter_meters: f32,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlan,
     pub source_path: String,
@@ -35,15 +35,15 @@ pub struct ResolvedPreviewProp {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Rotation3Degrees {
-    pub x_degrees: f64,
-    pub y_degrees: f64,
-    pub z_degrees: f64,
+    pub x_degrees: f32,
+    pub y_degrees: f32,
+    pub z_degrees: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Scale3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }

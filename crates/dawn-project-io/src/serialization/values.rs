@@ -80,7 +80,7 @@ pub(super) fn geometry_value(geometry: &PropGeometry) -> Result<Value, ExportPro
             value.insert(string_value("center"), point_value(center)?);
             value.insert(
                 string_value("radius"),
-                number_value(radius.as_meters_f64())?,
+                number_value(radius.as_meters_f32())?,
             );
             value.insert(string_value("startDegrees"), number_value(*start_degrees)?);
             value.insert(string_value("endDegrees"), number_value(*end_degrees)?);
@@ -100,9 +100,9 @@ pub(super) fn transform_value(prop: &PropInstance) -> Result<Value, ExportProjec
 
 pub(super) fn point_value(point: &Point3) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    value.insert(string_value("x"), number_value(point.x.as_meters_f64())?);
-    value.insert(string_value("y"), number_value(point.y.as_meters_f64())?);
-    value.insert(string_value("z"), number_value(point.z.as_meters_f64())?);
+    value.insert(string_value("x"), number_value(point.x.as_meters_f32())?);
+    value.insert(string_value("y"), number_value(point.y.as_meters_f32())?);
+    value.insert(string_value("z"), number_value(point.z.as_meters_f32())?);
     Ok(Value::Mapping(value))
 }
 
@@ -196,8 +196,11 @@ pub(super) fn number_value<T: serde::Serialize>(value: T) -> Result<Value, Expor
     })
 }
 
-pub(super) fn seconds_string(seconds: f64) -> String {
-    format!("{seconds}s")
+pub(super) fn microseconds_string(microseconds: u128) -> String {
+    format!(
+        "{}s",
+        dur::Duration::from_micros(microseconds).as_secs_dec()
+    )
 }
 
 use camino::{Utf8Path, Utf8PathBuf};

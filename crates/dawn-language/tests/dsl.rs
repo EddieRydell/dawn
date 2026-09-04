@@ -237,7 +237,7 @@ impl SignalSampler for ConstantSignal {
     fn sample_signal(
         &mut self,
         _input: usize,
-        _seconds: f64,
+        _seconds: f32,
         _pixel_index: usize,
     ) -> Result<Color, RuntimeError> {
         Ok(self.0)

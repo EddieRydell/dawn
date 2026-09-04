@@ -102,7 +102,7 @@ pub enum FilterDefinition {
         width: usize,
     },
     ScaleInvert {
-        scale: f64,
+        scale: f32,
         invert: bool,
         width: usize,
     },
@@ -116,7 +116,7 @@ pub enum FilterDefinition {
         cell_count: usize,
     },
     IndexedValueMapping {
-        entries: IndexMap<u32, f64>,
+        entries: IndexMap<u32, f32>,
         width: usize,
     },
     Quantize8 {
@@ -142,10 +142,10 @@ pub enum ByteOrder {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatchValue {
     Colors(Vec<crate::values::Color>),
-    Scalars(Vec<f64>),
+    Scalars(Vec<f32>),
     Indexed(Vec<u32>),
     FixtureStates(Vec<FixtureState>),
-    Components(Vec<f64>),
+    Components(Vec<f32>),
     Slots(Vec<u8>),
 }
 
@@ -179,9 +179,9 @@ pub fn evaluate_filter(
                 Vec::with_capacity(*cell_count * color_component_count(capability));
             for color in colors {
                 let rgb = [
-                    f64::from(color.red) / 255.0,
-                    f64::from(color.green) / 255.0,
-                    f64::from(color.blue) / 255.0,
+                    f32::from(color.red) / 255.0,
+                    f32::from(color.green) / 255.0,
+                    f32::from(color.blue) / 255.0,
                 ];
                 match capability {
                     ColorCapability::Rgb => components.extend(rgb),
@@ -310,7 +310,7 @@ pub fn evaluate_filter(
     Ok(vec![output])
 }
 
-pub fn apply_dimming_curve(curve: &DimmingCurve, value: f64) -> f64 {
+pub fn apply_dimming_curve(curve: &DimmingCurve, value: f32) -> f32 {
     let value = value.clamp(0.0, 1.0);
     match curve {
         DimmingCurve::Linear => value,
@@ -339,10 +339,10 @@ pub fn apply_dimming_curve(curve: &DimmingCurve, value: f64) -> f64 {
     .clamp(0.0, 1.0)
 }
 
-pub fn quantize8(value: f64) -> u8 {
+pub fn quantize8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
-pub fn quantize16(value: f64) -> u16 {
+pub fn quantize16(value: f32) -> u16 {
     (value.clamp(0.0, 1.0) * 65_535.0).round() as u16
 }
 
@@ -388,9 +388,9 @@ fn encode_fixture_states(
                         return Err(FilterEvaluationError::TypeMismatch);
                     };
                     let rgb = [
-                        f64::from(color.red) / 255.0,
-                        f64::from(color.green) / 255.0,
-                        f64::from(color.blue) / 255.0,
+                        f32::from(color.red) / 255.0,
+                        f32::from(color.green) / 255.0,
+                        f32::from(color.blue) / 255.0,
                     ];
                     let white = rgb[0].min(rgb[1]).min(rgb[2]);
                     let value = match component {
@@ -428,8 +428,8 @@ fn encode_fixture_states(
                                 .iter()
                                 .find(|candidate| candidate.id == *entry)
                                 .ok_or(FilterEvaluationError::MissingFixtureEntry)?;
-                            let dmx = f64::from(entry.dmx_min)
-                                + f64::from(entry.dmx_max - entry.dmx_min) * range.clamp(0.0, 1.0);
+                            let dmx = f32::from(entry.dmx_min)
+                                + f32::from(entry.dmx_max - entry.dmx_min) * range.clamp(0.0, 1.0);
                             dmx / if fine_functions.contains(&function) {
                                 65_535.0
                             } else {
@@ -788,7 +788,7 @@ pub fn color_component_count(capability: &ColorCapability) -> usize {
 pub fn discrete_mapping(
     mappings: &[DiscreteColorMapping],
     color: crate::values::Color,
-) -> Option<&IndexMap<EmitterId, f64>> {
+) -> Option<&IndexMap<EmitterId, f32>> {
     mappings
         .iter()
         .find(|mapping| mapping.color == color)

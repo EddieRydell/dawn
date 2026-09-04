@@ -42,7 +42,7 @@ pub(super) fn invert_color(color: Color) -> Color {
     }
 }
 
-pub(super) fn scale_color(color: Color, amount: f64) -> Color {
+pub(super) fn scale_color(color: Color, amount: f32) -> Color {
     Color {
         red: scale_channel(color.red, amount),
         green: scale_channel(color.green, amount),
@@ -50,12 +50,12 @@ pub(super) fn scale_color(color: Color, amount: f64) -> Color {
     }
 }
 
-fn scale_channel(value: u8, amount: f64) -> u8 {
-    (f64::from(value) * amount.clamp(0.0, 1.0)).round() as u8
+fn scale_channel(value: u8, amount: f32) -> u8 {
+    (f32::from(value) * amount.clamp(0.0, 1.0)).round() as u8
 }
 
-pub(super) fn intensity(color: Color) -> f64 {
-    f64::from(color.red.max(color.green).max(color.blue)) / 255.0
+pub(super) fn intensity(color: Color) -> f32 {
+    f32::from(color.red.max(color.green).max(color.blue)) / 255.0
 }
 
 pub(super) fn color_param(

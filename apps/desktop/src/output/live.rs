@@ -216,7 +216,7 @@ fn worker(
         match rendered {
             Ok(rendered) => {
                 tick_interval = if matches!(audio.state, AudioTransportState::Playing) {
-                    Duration::from_secs_f64(1.0 / f64::from(rendered.frame.frame_rate.max(1)))
+                    Duration::from_secs_f32(1.0 / rendered.frame.frame_rate.max(1) as f32)
                 } else {
                     HOLDING_REFRESH_INTERVAL
                 };

@@ -573,7 +573,7 @@ function GraphFlowCanvas({
         }}
         onSelectionChange={handleSelectionChange}
       >
-        <Background color={THEME_COLORS.hover} gap={THEME_METRICS.graphGridGap} />
+        <Background color={THEME_COLORS.graphGrid} gap={THEME_METRICS.graphGridGap} />
         <MiniMap className="graph-flow-minimap" nodeStrokeWidth={THEME_METRICS.graphNodeStrokeWidth} pannable zoomable />
         <Controls className="graph-flow-controls" showInteractive={false} />
       </ReactFlow>

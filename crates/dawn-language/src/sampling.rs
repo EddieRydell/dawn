@@ -1,13 +1,13 @@
 use crate::values::{Color, Curve, Gradient};
 
 #[inline]
-pub fn sample_curve(curve: &Curve, position: f64) -> f64 {
+pub fn sample_curve(curve: &Curve, position: f32) -> f32 {
     let Some(first) = curve.points.first() else {
         return 0.0;
     };
     let mut previous = first;
-    for point in &curve.points {
-        if point.position >= position {
+    for point in curve.points.iter().skip(1) {
+        if point.position > position {
             let span = (point.position - previous.position).max(1e-9);
             let t = ((position - previous.position) / span).clamp(0.0, 1.0);
             return previous.value + (point.value - previous.value) * t;
@@ -18,7 +18,7 @@ pub fn sample_curve(curve: &Curve, position: f64) -> f64 {
 }
 
 #[inline]
-pub fn curve_crossing(curve: &Curve, value: f64, fallback: f64) -> f64 {
+pub fn curve_crossing(curve: &Curve, value: f32, fallback: f32) -> f32 {
     let Some(first) = curve.points.first() else {
         return fallback;
     };
@@ -40,7 +40,7 @@ pub fn curve_crossing(curve: &Curve, value: f64, fallback: f64) -> f64 {
 }
 
 #[inline]
-pub fn sample_gradient(gradient: &Gradient, position: f64) -> Option<Color> {
+pub fn sample_gradient(gradient: &Gradient, position: f32) -> Option<Color> {
     let first = gradient.stops.first()?;
     let mut previous = first;
     for stop in &gradient.stops {
@@ -58,9 +58,9 @@ pub fn sample_gradient(gradient: &Gradient, position: f64) -> Option<Color> {
 }
 
 #[inline(always)]
-pub fn mix_colors(left: Color, right: Color, t: f64) -> Color {
+pub fn mix_colors(left: Color, right: Color, t: f32) -> Color {
     let channel = |left: u8, right: u8| {
-        ((left as f64 + (right as f64 - left as f64) * t).clamp(0.0, 255.0) + 0.5) as u8
+        ((left as f32 + (right as f32 - left as f32) * t).clamp(0.0, 255.0) + 0.5) as u8
     };
     Color {
         red: channel(left.red, right.red),
@@ -70,8 +70,8 @@ pub fn mix_colors(left: Color, right: Color, t: f64) -> Color {
 }
 
 #[inline(always)]
-pub fn scale_color(color: Color, scale: f64) -> Color {
-    let channel = |value: u8| ((value as f64 * scale).clamp(0.0, 255.0) + 0.5) as u8;
+pub fn scale_color(color: Color, scale: f32) -> Color {
+    let channel = |value: u8| ((value as f32 * scale).clamp(0.0, 255.0) + 0.5) as u8;
     Color {
         red: channel(color.red),
         green: channel(color.green),
@@ -80,7 +80,7 @@ pub fn scale_color(color: Color, scale: f64) -> Color {
 }
 
 #[inline]
-pub fn hsv(h: f64, s: f64, v: f64) -> Color {
+pub fn hsv(h: f32, s: f32, v: f32) -> Color {
     let h = h - h.floor();
     let sector = h * 6.0;
     let c = v * s;
@@ -99,7 +99,7 @@ pub fn hsv(h: f64, s: f64, v: f64) -> Color {
     } else {
         (c, 0.0, x)
     };
-    let channel = |value: f64| ((value * 255.0).clamp(0.0, 255.0) + 0.5) as u8;
+    let channel = |value: f32| ((value * 255.0).clamp(0.0, 255.0) + 0.5) as u8;
     Color {
         red: channel(r + m),
         green: channel(g + m),
@@ -108,12 +108,12 @@ pub fn hsv(h: f64, s: f64, v: f64) -> Color {
 }
 
 #[inline(always)]
-pub fn deterministic_random(values: impl Iterator<Item = f64>) -> f64 {
+pub fn deterministic_random(values: impl Iterator<Item = f32>) -> f32 {
     let seed = values.fold(0.0, |seed, value| seed * 31.0 + value);
     deterministic_random_seed(seed)
 }
 
 #[inline(always)]
-pub fn deterministic_random_seed(seed: f64) -> f64 {
-    (seed.sin() * 43_758.545_312_3).fract().abs()
+pub fn deterministic_random_seed(seed: f32) -> f32 {
+    (seed.sin() * 43_758.547).fract().abs()
 }

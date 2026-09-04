@@ -5,18 +5,20 @@
 //! decoding; those belong to the desktop adapter and frontend respectively.
 
 use crate::sequence::color::black;
+use crate::sequence::timeline::{
+    first_frame_at_or_after, frame_at_or_before, sample_time_for_frame,
+};
 use crate::*;
 
 #[derive(Clone, Debug)]
 pub struct PreparedEffectRasterRenderer {
     frame_rate: u32,
-    frame_count: u64,
-    index_start_frame: u64,
-    start_seconds: f64,
-    duration_seconds: f64,
+    frame_count: u32,
+    index_start_frame: u32,
+    start_time: SampleTime,
+    duration: SampleDuration,
     target: Arc<Vec<PreparedTargetPixel>>,
     effects: Vec<PreparedEffect>,
-    effects_by_frame: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,7 +40,7 @@ pub struct EffectRasterPrepareBatch<'a> {
     element_ids: IndexSet<ElementNodeId>,
     groups: IndexMap<ElementNodeId, Vec<ElementNodeId>>,
     frame_rate: u32,
-    frame_count: u64,
+    frame_count: u32,
     bind_cache: DslBindCache,
     compiled_effects: HashMap<EffectDefinitionId, Arc<CompiledEffect>>,
     target_cache: PrepareTargetCache,
@@ -55,12 +57,12 @@ impl PreparedEffectRasterRenderer {
         batch.prepare_effect(effect_id)
     }
 
-    pub fn start_seconds(&self) -> f64 {
-        self.start_seconds
+    pub fn start_seconds(&self) -> f32 {
+        dawn_language::values::sample_time_seconds_f32(self.start_time)
     }
 
-    pub fn duration_seconds(&self) -> f64 {
-        self.duration_seconds
+    pub fn duration_seconds(&self) -> f32 {
+        dawn_language::values::sample_duration_seconds_f32(self.duration)
     }
 
     pub fn frame_rate(&self) -> u32 {
@@ -75,21 +77,27 @@ impl PreparedEffectRasterRenderer {
         &self,
         column_index: usize,
         column_count: usize,
-    ) -> Result<f64, RenderError> {
+    ) -> Result<f32, RenderError> {
         if column_count == 0 || column_index >= column_count {
             return Err(RenderError::InvalidTiming {
                 reason: "raster column index must be within a non-empty raster".to_string(),
             });
         }
-        let end_frame = ((self.start_seconds + self.duration_seconds) * f64::from(self.frame_rate))
-            .ceil()
-            .max(self.index_start_frame as f64) as u64;
+        let end_time = self
+            .start_time
+            .checked_add_duration(self.duration)
+            .ok_or_else(|| RenderError::InvalidTiming {
+                reason: "effect end exceeds the runtime clock range".to_string(),
+            })?;
+        let end_frame = first_frame_at_or_after(end_time, self.frame_rate);
         let active_frame_count = end_frame.saturating_sub(self.index_start_frame).max(1);
-        let sample_offset = (((column_index as f64 + 0.5) * active_frame_count as f64
-            / column_count as f64)
-            .floor() as u64)
+        let sample_offset = (((column_index as f32 + 0.5) * active_frame_count as f32
+            / column_count as f32)
+            .floor() as u32)
             .min(active_frame_count.saturating_sub(1));
-        Ok((self.index_start_frame + sample_offset) as f64 / f64::from(self.frame_rate))
+        let sample_time =
+            sample_time_for_frame(self.index_start_frame + sample_offset, self.frame_rate)?;
+        Ok(dawn_language::values::sample_time_seconds_f32(sample_time))
     }
 
     pub fn prepare_sampled_raster(&self, row_count: usize) -> PreparedEffectRasterSample {
@@ -139,7 +147,7 @@ impl PreparedEffectRasterRenderer {
     pub fn render_sampled_raster_column_with_scratch(
         &self,
         sample: &PreparedEffectRasterSample,
-        audio_seconds: f64,
+        audio_seconds: f32,
         scratch: &mut EffectRasterRenderScratch,
     ) -> Result<Vec<Color>, RenderError> {
         if !audio_seconds.is_finite() {
@@ -148,52 +156,41 @@ impl PreparedEffectRasterRenderer {
             });
         }
         let max_frame = self.frame_count.saturating_sub(1);
-        let frame_index = (audio_seconds * f64::from(self.frame_rate)).floor();
-        let frame_index = if frame_index < 0.0 {
-            0
-        } else if frame_index > max_frame as f64 {
-            max_frame
-        } else {
-            frame_index as u64
-        };
+        let sample_time = dawn_language::values::sample_time_from_seconds_f32(audio_seconds)
+            .map_err(|_| RenderError::InvalidTiming {
+                reason: "audio seconds exceed the runtime clock range".to_string(),
+            })?;
+        let frame_index = frame_at_or_before(sample_time, self.frame_rate).min(max_frame);
         self.render_sampled_raster_column_at_with_scratch(sample, frame_index, scratch)
     }
 
     fn render_sampled_raster_column_at_with_scratch(
         &self,
         sample: &PreparedEffectRasterSample,
-        frame_index: u64,
+        frame_index: u32,
         scratch: &mut EffectRasterRenderScratch,
     ) -> Result<Vec<Color>, RenderError> {
         scratch
             .effect_vm
             .resize_with(self.effects.len(), DslVmScratch::default);
-        let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
+        let sample_time = sample_time_for_frame(frame_index, self.frame_rate)?;
         let mut rendered = vec![black(); sample.row_count];
 
-        let local_frame_index = frame_index.saturating_sub(self.index_start_frame);
-        if let Some(active_effects) = self.effects_by_frame.get(local_frame_index as usize) {
-            for effect_index in active_effects {
-                let Some(effect) = self.effects.get(*effect_index) else {
-                    continue;
-                };
-                if sample_seconds < effect.start_seconds
-                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
-                {
-                    continue;
-                }
-                let Some(effect_pixels) = sample.effect_pixels.get(*effect_index) else {
-                    continue;
-                };
-                render_sampled_effect_target_colors(
-                    effect,
-                    effect_pixels,
-                    &mut rendered,
-                    sample_seconds,
-                    &mut scratch.effect_vm[*effect_index],
-                    &mut scratch.bind_cache,
-                )?;
+        for (effect_index, effect) in self.effects.iter().enumerate() {
+            if !effect.is_active(sample_time) {
+                continue;
             }
+            let Some(effect_pixels) = sample.effect_pixels.get(effect_index) else {
+                continue;
+            };
+            render_sampled_effect_target_colors(
+                effect,
+                effect_pixels,
+                &mut rendered,
+                sample_time,
+                &mut scratch.effect_vm[effect_index],
+                &mut scratch.bind_cache,
+            )?;
         }
 
         Ok(rendered)
@@ -234,8 +231,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             .map(|element| element.id)
             .collect::<IndexSet<_>>();
         let frame_rate = sequence.frame_rate;
-        let duration_seconds = sequence.duration.as_seconds_f64();
-        let frame_count = frame_count(duration_seconds, frame_rate);
+        let frame_count = frame_count(&sequence.duration, frame_rate)?;
 
         Ok(Self {
             project,
@@ -282,28 +278,25 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             effect,
         )?;
 
-        let start_seconds = effect.start.as_seconds_f64();
-        let duration_seconds = effect.duration.as_seconds_f64();
-        let index_start_frame = (start_seconds * f64::from(self.frame_rate)).ceil().max(0.0) as u64;
-        let index_end_frame = ((start_seconds + duration_seconds) * f64::from(self.frame_rate))
-            .ceil()
-            .max(index_start_frame as f64) as u64;
-        let index_frame_count = index_end_frame.saturating_sub(index_start_frame).max(1);
-        let effects_by_frame = build_effect_frame_index_for_window(
-            &effects,
-            index_start_frame,
-            index_frame_count,
-            self.frame_rate,
-        );
+        let start_time =
+            dawn_language::values::sample_time_from_dawn_time(&effect.start).map_err(|_| {
+                RenderError::InvalidTiming {
+                    reason: "effect start exceeds the runtime clock range".to_string(),
+                }
+            })?;
+        let duration = dawn_language::values::sample_duration_from_dawn_duration(&effect.duration)
+            .map_err(|_| RenderError::InvalidTiming {
+                reason: "effect duration exceeds the runtime clock range".to_string(),
+            })?;
+        let index_start_frame = first_frame_at_or_after(start_time, self.frame_rate);
         Ok(PreparedEffectRasterRenderer {
             frame_rate: self.frame_rate,
             frame_count: self.frame_count,
             index_start_frame,
-            start_seconds,
-            duration_seconds,
+            start_time,
+            duration,
             target,
             effects,
-            effects_by_frame,
         })
     }
 }

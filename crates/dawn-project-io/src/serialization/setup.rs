@@ -299,7 +299,7 @@ pub(super) fn prop_definition_value(
     let mut value = typed_object("prop");
     value.insert(
         string_value("bulb_diameter"),
-        number_value(definition.bulb_radius.as_meters_f64() * 2.0)?,
+        number_value(definition.bulb_radius.as_meters_f32() * 2.0)?,
     );
     value.insert(
         string_value("geometry"),

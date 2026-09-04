@@ -159,7 +159,7 @@ fn logical_state_covers_every_element_leaf_in_tree_order() {
 
 fn checksum_frame(frame: &crate::RenderedFrame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    hash = checksum_u64(hash, frame.frame_index);
+    hash = checksum_u64(hash, u64::from(frame.frame_index));
     for element in &frame.elements {
         hash = checksum_u32(hash, element.element_id.0);
         for color in &element.pixels {

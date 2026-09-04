@@ -38,8 +38,8 @@ pub enum PropGeometry {
     Arc {
         center: Point3,
         radius: DistanceSpan,
-        start_degrees: f64,
-        end_degrees: f64,
+        start_degrees: f32,
+        end_degrees: f32,
         point_count: u32,
     },
 }

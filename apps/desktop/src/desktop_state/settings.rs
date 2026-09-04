@@ -2,15 +2,15 @@ use crate::dto::{AppSettings, WorkspaceLayoutState};
 
 pub(crate) fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {
     WorkspaceLayoutState {
-        sidebar_width_px: clamp_f64(state.sidebar_width_px, 220.0, 520.0),
-        inspector_width_px: clamp_f64(state.inspector_width_px, 240.0, 560.0),
+        sidebar_width_px: clamp_f32(state.sidebar_width_px, 220.0, 520.0),
+        inspector_width_px: clamp_f32(state.inspector_width_px, 240.0, 560.0),
         sidebar_collapsed: state.sidebar_collapsed,
         inspector_collapsed: state.inspector_collapsed,
         active_sidebar_view: state.active_sidebar_view,
     }
 }
 
-fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
+fn clamp_f32(value: f32, min: f32, max: f32) -> f32 {
     if !value.is_finite() {
         return min;
     }

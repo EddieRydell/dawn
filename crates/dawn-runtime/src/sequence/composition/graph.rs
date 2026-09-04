@@ -43,7 +43,7 @@ pub(crate) fn automation_for_composition_node(
 pub(crate) fn float_param(
     params: &IndexMap<Identifier, Value>,
     name: &str,
-) -> Result<f64, RenderError> {
+) -> Result<f32, RenderError> {
     let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
         message: format!("invalid operator parameter name `{name}`"),
     })?;
@@ -61,7 +61,7 @@ pub(crate) fn float_param(
 pub(crate) fn int_param(
     params: &IndexMap<Identifier, Value>,
     name: &str,
-) -> Result<i64, RenderError> {
+) -> Result<i32, RenderError> {
     let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
         message: format!("invalid operator parameter name `{name}`"),
     })?;
@@ -76,12 +76,12 @@ pub(crate) fn int_param(
         })
 }
 
-pub(crate) fn layer_cache_history_micros(
-    graph: &PreparedCompositionGraph,
-) -> Result<i64, RenderError> {
-    let mut history_seconds = 0.0_f64;
+pub(crate) fn layer_cache_history(
+    graph: &PreparedSignalGraph,
+) -> Result<dawn_language::values::SampleDuration, RenderError> {
+    let mut history_seconds = 0.0_f32;
     for node in &graph.nodes {
-        let PreparedGraphNodeKind::Operator {
+        let PreparedSignalKind::Operator {
             definition,
             params,
             automation,
@@ -112,12 +112,24 @@ pub(crate) fn layer_cache_history_micros(
                 _ => {}
             }
         }
-        history_seconds = history_seconds.max(delay * repeats as f64);
+        history_seconds = history_seconds.max(delay * repeats as f32);
     }
-    Ok(if !history_seconds.is_finite() || history_seconds <= 0.0 {
-        0
-    } else {
-        (history_seconds * 1_000_000.0).ceil() as i64
+    if !history_seconds.is_finite() {
+        return Err(RenderError::InvalidTiming {
+            reason: "operator history exceeds the runtime clock range".to_string(),
+        });
+    }
+    if history_seconds <= 0.0 {
+        return Ok(dawn_language::values::SampleDuration::from_ticks(0));
+    }
+    let history = dawn_language::values::DawnDuration::try_from_seconds_f32(history_seconds)
+        .map_err(|_| RenderError::InvalidTiming {
+            reason: "operator history exceeds the runtime clock range".to_string(),
+        })?;
+    dawn_language::values::sample_duration_from_dawn_duration(&history).map_err(|_| {
+        RenderError::InvalidTiming {
+            reason: "operator history exceeds the runtime clock range".to_string(),
+        }
     })
 }
 
@@ -129,19 +141,19 @@ pub(crate) struct PrepareGraphContext<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PreparedCompositionGraph {
+pub(crate) struct PreparedSignalGraph {
     pub(crate) output_index: usize,
-    pub(crate) nodes: Vec<PreparedGraphNode>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PreparedGraphNode {
     pub(crate) target: Arc<Vec<PreparedTargetPixel>>,
-    pub(crate) kind: PreparedGraphNodeKind,
+    pub(crate) nodes: Vec<PreparedSignalNode>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum PreparedGraphNodeKind {
+pub(crate) struct PreparedSignalNode {
+    pub(crate) kind: PreparedSignalKind,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PreparedSignalKind {
     Layer {
         layer_index: usize,
     },
@@ -157,10 +169,10 @@ pub(crate) enum PreparedGraphNodeKind {
     },
 }
 
-pub(crate) fn prepare_composition_graph(
+pub(crate) fn prepare_signal_graph(
     context: PrepareGraphContext<'_>,
     graph: &SequenceCompositionGraph,
-) -> Result<PreparedCompositionGraph, RenderError> {
+) -> Result<PreparedSignalGraph, RenderError> {
     let full_target = Arc::new(full_rig_target_pixels(context.elements)?);
     validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
         RenderError::BadGraph {
@@ -183,7 +195,7 @@ pub(crate) fn prepare_composition_graph(
         incoming[to].push((edge.to_port.clone(), from));
     }
 
-    let mut prepared_nodes = Vec::<PreparedGraphNode>::new();
+    let mut prepared_nodes = Vec::<PreparedSignalNode>::new();
     let mut prepared_index_by_node = vec![usize::MAX; node_ids.len()];
     for node_index in &node_order {
         let node_id = &node_ids[*node_index];
@@ -200,9 +212,8 @@ pub(crate) fn prepare_composition_graph(
                             layer_id.0
                         ),
                     })?;
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Layer { layer_index },
+                PreparedSignalNode {
+                    kind: PreparedSignalKind::Layer { layer_index },
                 }
             }
             CompositionGraphNodeKind::Operator(operator_node) => {
@@ -249,8 +260,13 @@ pub(crate) fn prepare_composition_graph(
                     &definition,
                     &operator_node.params,
                     EffectParamTiming {
-                        start_seconds: 0.0,
-                        duration_seconds: context.sequence.duration.as_seconds_f64(),
+                        start: dawn_language::values::SampleTime::from_ticks(0),
+                        duration: dawn_language::values::sample_duration_from_dawn_duration(
+                            &context.sequence.duration,
+                        )
+                        .map_err(|_| RenderError::InvalidTiming {
+                            reason: "sequence duration exceeds the runtime clock range".to_string(),
+                        })?,
                     },
                 )?;
                 let automation = automation_for_composition_node(context.sequence, &node.id);
@@ -260,9 +276,8 @@ pub(crate) fn prepare_composition_graph(
                     }
                     _ => None,
                 };
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Operator {
+                PreparedSignalNode {
+                    kind: PreparedSignalKind::Operator {
                         definition: Box::new(definition),
                         inputs,
                         params,
@@ -285,9 +300,8 @@ pub(crate) fn prepare_composition_graph(
                             })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                PreparedGraphNode {
-                    target: Arc::clone(&full_target),
-                    kind: PreparedGraphNodeKind::Output { inputs },
+                PreparedSignalNode {
+                    kind: PreparedSignalKind::Output { inputs },
                 }
             }
         };
@@ -317,8 +331,9 @@ pub(crate) fn prepare_composition_graph(
         });
     }
 
-    Ok(PreparedCompositionGraph {
+    Ok(PreparedSignalGraph {
         output_index,
+        target: full_target,
         nodes: prepared_nodes,
     })
 }

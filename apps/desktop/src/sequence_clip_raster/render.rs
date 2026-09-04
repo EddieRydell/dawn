@@ -47,13 +47,13 @@ pub(super) fn render_effect_raster(
             "effect target has no pixels".to_string(),
         ));
     }
-    let duration_frames = duration_seconds * f64::from(renderer.frame_rate());
+    let duration_frames = duration_seconds * renderer.frame_rate() as f32;
     if !duration_frames.is_finite() || duration_frames <= 0.0 {
         return Err(RasterRenderFailure::Error(
             "effect duration frames must be positive and finite".to_string(),
         ));
     }
-    let min_frame_stride = f64::from(settings.min_frame_stride.max(1));
+    let min_frame_stride = settings.min_frame_stride.max(1) as f32;
     let stride_limited_columns = (duration_frames / min_frame_stride).ceil().max(1.0) as u32;
     let columns = display_column_count
         .min(stride_limited_columns)

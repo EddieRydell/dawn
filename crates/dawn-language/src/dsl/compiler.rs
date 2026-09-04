@@ -1,9 +1,8 @@
 use super::ast::{BinaryOp, UnaryOp};
 use super::bytecode::{
-    ArithmeticOp, BoolSlot, ColorBinary, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot,
-    FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId, MarkOp,
-    ParamId, RefSlot, RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot,
-    slot_layout_id,
+    ArithmeticOp, BoolSlot, BytecodeProgram, ColorBinary, ColorSlot, CompareOp, ContextRead,
+    FloatBinary, FloatSlot, FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot,
+    LocalId, MarkOp, ParamId, RefSlot, SlotLayout, Target, TargetItemsOp, ValueSlot,
 };
 use super::checked::{
     CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule,
@@ -28,23 +27,23 @@ fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
     } else {
         EffectKind::Sample
     };
-    let function = FunctionCompiler::new(&effect.params, kind).compile(effect.body);
+    let bytecode = FunctionCompiler::new(&effect.params, kind).compile(effect.body);
     CompiledEffect {
         name: effect.name,
         params: effect.params,
         kind,
-        function,
+        bytecode,
     }
 }
 
 fn compile_operator(operator: CheckedOperatorDecl) -> CompiledOperator {
-    let function =
+    let bytecode =
         FunctionCompiler::new_operator(&operator.params, &operator.inputs).compile(operator.body);
     CompiledOperator {
         name: operator.name,
         inputs: operator.inputs,
         params: operator.params,
-        function,
+        bytecode,
     }
 }
 
@@ -123,7 +122,7 @@ fn float_const_operand(
     result_ty: &Type,
     left: &CheckedExpr,
     right: &CheckedExpr,
-) -> Option<(bool, f64)> {
+) -> Option<(bool, f32)> {
     let supported = match op {
         BinaryOp::Add
         | BinaryOp::Subtract
@@ -142,15 +141,15 @@ fn float_const_operand(
     numeric_literal(right).map(|constant| (false, constant))
 }
 
-fn numeric_literal(expr: &CheckedExpr) -> Option<f64> {
+fn numeric_literal(expr: &CheckedExpr) -> Option<f32> {
     match &expr.kind {
-        CheckedExprKind::Literal(Value::Int(value)) => Some(*value as f64),
+        CheckedExprKind::Literal(Value::Int(value)) => Some(*value as f32),
         CheckedExprKind::Literal(Value::Float(value)) => Some(*value),
         _ => None,
     }
 }
 
-fn numeric_literal_argument(args: &[CheckedExpr]) -> Option<(usize, f64)> {
+fn numeric_literal_argument(args: &[CheckedExpr]) -> Option<(usize, f32)> {
     if args.len() != 2 {
         return None;
     }
@@ -206,7 +205,7 @@ impl FunctionCompiler {
         compiler
     }
 
-    fn compile(mut self, block: CheckedBlock) -> RegisterFunction {
+    fn compile(mut self, block: CheckedBlock) -> BytecodeProgram {
         collect_assigned_names(&block, &mut self.assigned_names);
         self.compile_block(block);
         let void = self.allocate_slot(&Type::Void);
@@ -216,11 +215,10 @@ impl FunctionCompiler {
             constant,
         });
         self.emit(Instruction::Return(void));
-        RegisterFunction {
+        BytecodeProgram {
             instructions: self.instructions,
             constants: self.constants,
             layout: self.layout,
-            layout_id: slot_layout_id(self.layout),
         }
     }
 
@@ -392,8 +390,8 @@ impl FunctionCompiler {
                 }
                 None => {
                     let value = match name.as_str() {
-                        "PI" => Value::Float(std::f64::consts::PI),
-                        "TAU" => Value::Float(std::f64::consts::TAU),
+                        "PI" => Value::Float(std::f32::consts::PI),
+                        "TAU" => Value::Float(std::f32::consts::TAU),
                         _ => Value::Enum(name),
                     };
                     let dst = self.allocate_slot(&result_ty);
@@ -538,7 +536,7 @@ impl FunctionCompiler {
         right: CheckedExpr,
         result_ty: Type,
         constant_left: bool,
-        constant: f64,
+        constant: f32,
     ) -> ValueSlot {
         let value = if constant_left { right } else { left };
         let value = self.float_slot_from_expr(value);

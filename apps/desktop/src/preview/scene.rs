@@ -26,29 +26,26 @@ impl PreviewScene {
                 continue;
             };
             let position = point3_meters(prop.position);
-            let transform = Mat4::from_translation(Vec3::new(
-                position.x_meters as f32,
-                position.y_meters as f32,
-                position.z_meters as f32,
-            )) * Mat4::from_euler(
-                EulerRot::XYZ,
-                prop.rotation.x.to_radians() as f32,
-                prop.rotation.y.to_radians() as f32,
-                prop.rotation.z.to_radians() as f32,
-            ) * Mat4::from_scale(Vec3::new(
-                prop.scale.x as f32,
-                prop.scale.y as f32,
-                prop.scale.z as f32,
-            ));
-            let radius_meters = definition.bulb_radius.as_meters_f64() as f32;
+            let transform =
+                Mat4::from_translation(Vec3::new(
+                    position.x_meters,
+                    position.y_meters,
+                    position.z_meters,
+                )) * Mat4::from_euler(
+                    EulerRot::XYZ,
+                    prop.rotation.x.to_radians(),
+                    prop.rotation.y.to_radians(),
+                    prop.rotation.z.to_radians(),
+                ) * Mat4::from_scale(Vec3::new(prop.scale.x, prop.scale.y, prop.scale.z));
+            let radius_meters = definition.bulb_radius.as_meters_f32();
             for (emitter, binding) in geometry_emitters(&definition.geometry)
                 .into_iter()
                 .zip(&prop.bindings)
             {
                 let point = transform.transform_point3(Vec3::new(
-                    emitter.x_meters as f32,
-                    emitter.y_meters as f32,
-                    emitter.z_meters as f32,
+                    emitter.x_meters,
+                    emitter.y_meters,
+                    emitter.z_meters,
                 ));
                 instances.push(PreviewInstanceGpu {
                     center_radius: [point.x, point.y, radius_meters.max(0.005), 0.0],

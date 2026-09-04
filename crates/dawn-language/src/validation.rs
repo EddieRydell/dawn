@@ -12,7 +12,8 @@ use crate::sequence::{
     SequenceId,
 };
 
-pub const MAX_SEQUENCE_FRAME_COUNT: u64 = 250_000;
+pub const MAX_SEQUENCE_FRAME_COUNT: u32 = 250_000;
+pub const MAX_SEQUENCE_FRAME_RATE: u32 = 1_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProjectValidationError {
@@ -234,11 +235,17 @@ pub fn validate_sequence(
     if sequence.frame_rate == 0 {
         return Err(sequence_error("frame rate must be greater than zero"));
     }
+    if sequence.frame_rate > MAX_SEQUENCE_FRAME_RATE {
+        return Err(sequence_error(format!(
+            "sequence frame rate exceeds the limit of {MAX_SEQUENCE_FRAME_RATE} frames per second"
+        )));
+    }
     if sequence.duration.0.is_zero() {
         return Err(sequence_error("sequence duration must be positive"));
     }
-    let frame_count = sequence.duration.as_seconds_f64() * f64::from(sequence.frame_rate);
-    if !frame_count.is_finite() || frame_count.ceil() > MAX_SEQUENCE_FRAME_COUNT as f64 {
+    let frame_count = (sequence.duration.as_nanos() * u128::from(sequence.frame_rate))
+        .div_ceil(u128::from(crate::values::NANOS_PER_SECOND));
+    if frame_count > u128::from(MAX_SEQUENCE_FRAME_COUNT) {
         return Err(sequence_error(format!(
             "sequence exceeds the frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
         )));

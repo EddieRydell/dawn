@@ -60,8 +60,8 @@ pub enum Type {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Void,
-    Int(i64),
-    Float(f64),
+    Int(i32),
+    Float(f32),
     Bool(bool),
     Color(Color),
     Marks(Arc<Marks>),
@@ -123,11 +123,11 @@ pub struct TargetItemValue {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetPixelValue {
-    pub element_index: i64,
-    pub element_cell_index: i64,
-    pub pixel_index: i64,
-    pub pixel_count: i64,
-    pub pixel_fraction: f64,
+    pub element_index: i32,
+    pub element_cell_index: i32,
+    pub pixel_index: i32,
+    pub pixel_count: i32,
+    pub pixel_fraction: f32,
 }
 
 fn is_identifier_start(candidate: char) -> bool {

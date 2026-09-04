@@ -1,6 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Check, Maximize2, Minus, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Maximize2, Minimize2, Minus, X } from "lucide-react";
 import { commandRegistry } from "../commandRegistry";
 import { useAppStore } from "../store";
 import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./gui/sequence/marks";
@@ -10,6 +11,31 @@ import { THEME_METRICS } from "../theme";
 const appWindow = getCurrentWindow();
 
 export function TitleBar() {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    const updateMaximizedState = () => {
+      void appWindow.isMaximized().then((maximized) => {
+        if (!disposed) setIsMaximized(maximized);
+      });
+    };
+    updateMaximizedState();
+    const unlisten = appWindow.onResized(updateMaximizedState);
+
+    return () => {
+      disposed = true;
+      void unlisten.then((removeListener) => {
+        removeListener();
+      });
+    };
+  }, []);
+
+  async function toggleMaximize() {
+    await appWindow.toggleMaximize();
+    setIsMaximized(await appWindow.isMaximized());
+  }
+
   return (
     <header className="titlebar" onMouseDown={startTitlebarDrag}>
       <div className="brand">
@@ -34,8 +60,10 @@ export function TitleBar() {
         <button onClick={() => void appWindow.minimize()} aria-label="Minimize">
         <Minus size={THEME_METRICS.iconSizeCompact} />
         </button>
-        <button onClick={() => void appWindow.toggleMaximize()} aria-label="Maximize">
-          <Maximize2 size={THEME_METRICS.iconSizeSmall} />
+        <button onClick={() => void toggleMaximize()} aria-label={isMaximized ? "Restore" : "Maximize"}>
+          {isMaximized
+            ? <Minimize2 size={THEME_METRICS.iconSizeSmall} />
+            : <Maximize2 size={THEME_METRICS.iconSizeSmall} />}
         </button>
         <button className="close" onClick={() => void appWindow.close()} aria-label="Close">
           <X size={THEME_METRICS.iconSizeCompact} />

@@ -1,4 +1,5 @@
-use std::path::{Component, Path, PathBuf};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -131,68 +132,95 @@ fn start_audio_transport_poll(app: AppHandle) {
     });
 }
 
-fn audio_import_path(
-    snapshot: &AppSnapshot,
-    request: &GuiDocumentRequest,
-    selected_path: &Path,
-) -> Option<String> {
-    if !matches!(request.view, DocumentViewId::Sequence) {
-        return None;
+fn import_external_audio(snapshot: &AppSnapshot, selected_path: &Path) -> Result<String, String> {
+    let selected = selected_path
+        .canonicalize()
+        .map_err(|error| format!("Could not read selected audio file: {error}"))?;
+    let project_root = snapshot
+        .project_root
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "No project is loaded.".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("Could not resolve project directory: {error}"))?;
+
+    if selected.starts_with(&project_root) {
+        return selected
+            .strip_prefix(&project_root)
+            .ok()
+            .and_then(|path| path.to_str())
+            .map(|path| path.replace('\\', "/"))
+            .ok_or_else(|| "Selected audio path is not valid UTF-8".to_string());
     }
-    let selected = selected_path.canonicalize().ok()?;
-    let project_root = snapshot.project_root.as_deref().map(PathBuf::from)?;
-    let document_path = project_root.join(&request.path);
-    let document_dir = document_path.parent()?;
-    let document_dir = document_dir.canonicalize().ok()?;
-    relative_path(&document_dir, &selected).or_else(|| selected.to_str().map(ToString::to_string))
+
+    let file_name = selected
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Selected audio file name is not valid UTF-8".to_string())?;
+    let audio_root = project_root.join("audio");
+    fs::create_dir_all(&audio_root)
+        .map_err(|error| format!("Could not create the project audio directory: {error}"))?;
+
+    let destination = unique_audio_destination(&audio_root, file_name, &selected)?;
+    if destination != selected {
+        fs::copy(&selected, &destination)
+            .map_err(|error| format!("Could not copy audio into the project: {error}"))?;
+    }
+
+    let relative_path = destination
+        .strip_prefix(&project_root)
+        .map_err(|_| "Copied audio is outside the project directory.".to_string())?
+        .to_str()
+        .ok_or_else(|| "Copied audio path is not valid UTF-8".to_string())?
+        .replace('\\', "/");
+
+    let project_root = camino::Utf8Path::from_path(&project_root)
+        .ok_or_else(|| "Project path is not valid UTF-8".to_string())?;
+    let mut manifest = dawn_package::PackageManifest::read(project_root)
+        .map_err(|error| format!("Could not read project manifest: {error}"))?;
+    manifest.assets.insert(
+        relative_path.clone(),
+        dawn_package::AssetDeclaration {
+            kind: dawn_package::AssetKind::Audio,
+        },
+    );
+    manifest
+        .write(project_root)
+        .map_err(|error| format!("Could not update project manifest: {error}"))?;
+    Ok(relative_path)
 }
 
-fn relative_path(from: &Path, to: &Path) -> Option<String> {
-    let from_parts = path_parts(from)?;
-    let to_parts = path_parts(to)?;
-    if from_parts.prefix != to_parts.prefix || from_parts.rooted != to_parts.rooted {
-        return None;
+fn unique_audio_destination(
+    audio_root: &Path,
+    file_name: &str,
+    selected: &Path,
+) -> Result<PathBuf, String> {
+    let candidate = audio_root.join(file_name);
+    if !candidate.exists() {
+        return Ok(candidate);
     }
-    let common = from_parts
-        .normal
-        .iter()
-        .zip(&to_parts.normal)
-        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
-        .count();
-    let mut path = PathBuf::new();
-    for _ in common..from_parts.normal.len() {
-        path.push("..");
+    if candidate
+        .canonicalize()
+        .is_ok_and(|existing| existing == selected)
+    {
+        return Ok(candidate);
     }
-    for part in &to_parts.normal[common..] {
-        path.push(part);
-    }
-    path.to_str().map(|value| value.replace('\\', "/"))
-}
 
-struct PathParts {
-    prefix: Option<String>,
-    rooted: bool,
-    normal: Vec<String>,
-}
-
-fn path_parts(path: &Path) -> Option<PathParts> {
-    let mut prefix = None;
-    let mut rooted = false;
-    let mut normal = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(value) => {
-                prefix = Some(value.as_os_str().to_str()?.to_string());
-            }
-            Component::RootDir => rooted = true,
-            Component::CurDir => {}
-            Component::ParentDir => normal.push("..".to_string()),
-            Component::Normal(value) => normal.push(value.to_str()?.to_string()),
+    let source = Path::new(file_name);
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "Selected audio file name is not valid UTF-8".to_string())?;
+    let extension = source.extension().and_then(|value| value.to_str());
+    for index in 1.. {
+        let name = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        let candidate = audio_root.join(name);
+        if !candidate.exists() {
+            return Ok(candidate);
         }
     }
-    Some(PathParts {
-        prefix,
-        rooted,
-        normal,
-    })
+    Err("Could not choose a destination for the imported audio file.".to_string())
 }

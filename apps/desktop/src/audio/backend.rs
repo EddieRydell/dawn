@@ -12,29 +12,29 @@ type KiraStreamingHandle = StreamingSoundHandle<FromFileError>;
 pub(super) struct LoadedSource {
     pub(super) audio: SequenceAudio,
     pub(super) canonical_path: String,
-    pub(super) duration_seconds: f64,
+    pub(super) duration_seconds: f32,
 }
 
 pub(super) struct SourceMetadata {
-    pub(super) duration_seconds: f64,
+    pub(super) duration_seconds: f32,
 }
 
 pub(super) trait AudioDriver: Send {
     fn load_metadata(&mut self, path: &str) -> Result<SourceMetadata, String>;
-    fn play(&mut self, path: &str, position_seconds: f64) -> Result<Box<dyn AudioHandle>, String>;
+    fn play(&mut self, path: &str, position_seconds: f32) -> Result<Box<dyn AudioHandle>, String>;
 }
 
 pub(super) trait AudioHandle: Send {
     fn observe(&mut self) -> BackendObservation;
     fn pause(&mut self);
     fn resume(&mut self);
-    fn seek_to(&mut self, position_seconds: f64);
+    fn seek_to(&mut self, position_seconds: f32);
     fn stop(&mut self);
 }
 
 pub(super) struct BackendObservation {
     pub(super) state: BackendPlaybackState,
-    pub(super) position_seconds: f64,
+    pub(super) position_seconds: f32,
     pub(super) error: Option<String>,
 }
 
@@ -61,15 +61,15 @@ impl AudioDriver for KiraAudioDriver {
     fn load_metadata(&mut self, path: &str) -> Result<SourceMetadata, String> {
         StreamingSoundData::from_file(path)
             .map(|sound| SourceMetadata {
-                duration_seconds: sound.duration().as_secs_f64(),
+                duration_seconds: sound.duration().as_secs_f32(),
             })
             .map_err(|error| error.to_string())
     }
 
-    fn play(&mut self, path: &str, position_seconds: f64) -> Result<Box<dyn AudioHandle>, String> {
+    fn play(&mut self, path: &str, position_seconds: f32) -> Result<Box<dyn AudioHandle>, String> {
         let sound = StreamingSoundData::from_file(path)
             .map_err(|error| error.to_string())?
-            .start_position(position_seconds);
+            .start_position(f64::from(position_seconds));
         self.manager
             .play(sound)
             .map(|handle| Box::new(KiraAudioHandle { handle }) as Box<dyn AudioHandle>)
@@ -94,7 +94,7 @@ impl AudioHandle for KiraAudioHandle {
         };
         BackendObservation {
             state,
-            position_seconds: self.handle.position(),
+            position_seconds: self.handle.position() as f32,
             error: self.handle.pop_error().map(|error| error.to_string()),
         }
     }
@@ -107,8 +107,8 @@ impl AudioHandle for KiraAudioHandle {
         self.handle.resume(instant_tween());
     }
 
-    fn seek_to(&mut self, position_seconds: f64) {
-        self.handle.seek_to(position_seconds);
+    fn seek_to(&mut self, position_seconds: f32) {
+        self.handle.seek_to(f64::from(position_seconds));
     }
 
     fn stop(&mut self) {

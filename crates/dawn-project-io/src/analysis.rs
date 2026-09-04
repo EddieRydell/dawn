@@ -11,7 +11,7 @@ use crate::diagnostics::{
     source_range_for_value, with_yaml_location,
 };
 use crate::loader::parse::{
-    bool_field, f64_field, mapping, optional_sequence, parse_color, parse_duration,
+    bool_field, f32_field, mapping, optional_sequence, parse_color, parse_duration,
     parse_duration_as_time, parse_imports, required_field, sequence_values, string_field,
     u32_field,
 };
@@ -50,8 +50,8 @@ pub struct RecoveryObject {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecoverySequence {
-    pub duration_seconds: f64,
-    pub frame_rate: f64,
+    pub duration_seconds: f32,
+    pub frame_rate: f32,
     pub layers: Vec<RecoverySequenceLayer>,
     pub mark_collections: Vec<RecoveryMarkCollection>,
     pub items: Vec<RecoverySequenceItem>,
@@ -70,7 +70,7 @@ pub struct RecoveryMarkCollection {
     pub key: String,
     pub name: String,
     pub color: String,
-    pub marks_seconds: Vec<f64>,
+    pub marks_seconds: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,13 +93,13 @@ pub struct RecoverySequenceItem {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecoverySequencePlacement {
     Timeline {
-        start_seconds: f64,
-        duration_seconds: f64,
+        start_seconds: f32,
+        duration_seconds: f32,
         lane: RecoveryTimelineLane,
     },
     Graph {
-        x: f64,
-        y: f64,
+        x: f32,
+        y: f32,
     },
 }
 
@@ -430,8 +430,8 @@ fn analyze_sequence(
                 })
             })
             .and_then(|duration| {
-                (duration.as_seconds_f64() > 0.0)
-                    .then_some(duration.as_seconds_f64())
+                (duration.as_seconds_f32() > 0.0)
+                    .then_some(duration.as_seconds_f32())
                     .ok_or_else(|| LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
                         range: source_range_for_field_value(path, value, "duration"),
@@ -442,7 +442,7 @@ fn analyze_sequence(
     );
     let frame_rate = parse_field(
         diagnostics,
-        f64_field(path, value, "frame_rate").and_then(|frame_rate| {
+        f32_field(path, value, "frame_rate").and_then(|frame_rate| {
             if frame_rate.is_finite() && frame_rate > 0.0 {
                 Ok(frame_rate)
             } else {
@@ -620,7 +620,7 @@ fn analyze_mark_collections(
                         with_yaml_location(error, path, source_range_for_value(path, mark))
                     })
                 })
-                .map(|time| time.as_seconds_f64());
+                .map(|time| time.as_seconds_f32());
             if let Some(mark) = collect_item_field(diagnostics, result) {
                 marks_seconds.push(mark);
             }
@@ -715,8 +715,8 @@ fn analyze_timeline_items(
             kind: schema.kind(),
             id: id.to_string(),
             placement: RecoverySequencePlacement::Timeline {
-                start_seconds: start.as_seconds_f64(),
-                duration_seconds: duration.as_seconds_f64(),
+                start_seconds: start.as_seconds_f32(),
+                duration_seconds: duration.as_seconds_f32(),
                 lane: match schema.lane() {
                     TimelineLaneField::Layer => RecoveryTimelineLane::Layer(lane),
                     TimelineLaneField::Lane => RecoveryTimelineLane::Lane(lane),
@@ -804,8 +804,8 @@ fn analyze_graph_items(
         let position = required_field(path, node, "position");
         let parsed = position.and_then(|position| {
             Ok((
-                f64_field(path, position, "x")?,
-                f64_field(path, position, "y")?,
+                f32_field(path, position, "x")?,
+                f32_field(path, position, "y")?,
             ))
         });
         match (id, parsed) {

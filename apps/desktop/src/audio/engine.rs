@@ -9,8 +9,8 @@ pub(crate) struct AudioEngine {
     driver: Option<Box<dyn AudioDriver>>,
     handle: Option<Box<dyn AudioHandle>>,
     source: Option<LoadedSource>,
-    home_seconds: f64,
-    position_seconds: f64,
+    home_seconds: f32,
+    position_seconds: f32,
     state: AudioTransportState,
     generation: u32,
     last_error: Option<String>,
@@ -201,14 +201,14 @@ impl AudioEngine {
         self.seek_to(0.0, AudioTransportState::Paused)
     }
 
-    pub fn seek(&mut self, position_seconds: f64) -> AudioTransportSnapshot {
+    pub fn seek(&mut self, position_seconds: f32) -> AudioTransportSnapshot {
         let position_seconds = self.clamp_position(position_seconds);
         self.seek_to(position_seconds, AudioTransportState::Paused)
     }
 
     fn seek_to(
         &mut self,
-        position_seconds: f64,
+        position_seconds: f32,
         final_state: AudioTransportState,
     ) -> AudioTransportSnapshot {
         self.observe_backend();
@@ -320,14 +320,14 @@ impl AudioEngine {
         }
     }
 
-    fn clamp_position(&self, position_seconds: f64) -> f64 {
+    fn clamp_position(&self, position_seconds: f32) -> f32 {
         if !position_seconds.is_finite() {
             return 0.0;
         }
         position_seconds.clamp(0.0, self.duration_seconds())
     }
 
-    fn duration_seconds(&self) -> f64 {
+    fn duration_seconds(&self) -> f32 {
         self.source
             .as_ref()
             .map(|source| source.duration_seconds)
@@ -585,7 +585,7 @@ mod tests {
     }
 
     impl AudioFixture {
-        fn new(duration_seconds: f64) -> Self {
+        fn new(duration_seconds: f32) -> Self {
             Self {
                 shared: Arc::new(Mutex::new(FakeShared {
                     duration_seconds,
@@ -610,7 +610,7 @@ mod tests {
             self.shared.lock().expect("fake shared").handle_state = state;
         }
 
-        fn set_handle_position(&self, position_seconds: f64) {
+        fn set_handle_position(&self, position_seconds: f32) {
             self.shared.lock().expect("fake shared").handle_position = position_seconds;
         }
 
@@ -657,24 +657,24 @@ mod tests {
     }
 
     struct FakeShared {
-        duration_seconds: f64,
+        duration_seconds: f32,
         driver_actions: Vec<DriverAction>,
         handle_actions: Vec<HandleAction>,
         handle_state: BackendPlaybackState,
-        handle_position: f64,
+        handle_position: f32,
     }
 
     #[derive(Debug, PartialEq)]
     enum DriverAction {
         LoadMetadata,
-        Play(f64),
+        Play(f32),
     }
 
     #[derive(Debug, PartialEq)]
     enum HandleAction {
         Pause,
         Resume,
-        Seek(f64),
+        Seek(f32),
         Stop,
     }
 
@@ -694,7 +694,7 @@ mod tests {
         fn play(
             &mut self,
             _path: &str,
-            position_seconds: f64,
+            position_seconds: f32,
         ) -> Result<Box<dyn AudioHandle>, String> {
             let mut shared = self.shared.lock().expect("fake shared");
             shared
@@ -734,7 +734,7 @@ mod tests {
             shared.handle_state = BackendPlaybackState::Advancing;
         }
 
-        fn seek_to(&mut self, position_seconds: f64) {
+        fn seek_to(&mut self, position_seconds: f32) {
             let mut shared = self.shared.lock().expect("fake shared");
             shared
                 .handle_actions

@@ -268,7 +268,7 @@ pub(super) fn copy_sequence_selection(
                 };
                 copied.push(ClipboardEffect {
                     effect: effect.clone(),
-                    start_seconds: effect.start.as_seconds_f64(),
+                    start_seconds: effect.start.as_seconds_f32(),
                     lane_index: effect_lane_index(session, &effect.target),
                 });
             }
@@ -359,7 +359,7 @@ pub(super) fn paste_sequence_clipboard(
             let min_start = effects
                 .iter()
                 .map(|effect| effect.start_seconds)
-                .fold(f64::INFINITY, f64::min);
+                .fold(f32::INFINITY, f32::min);
             let min_lane = effects
                 .iter()
                 .map(|effect| effect.lane_index)
@@ -383,7 +383,7 @@ pub(super) fn paste_sequence_clipboard(
                     lane_count,
                 );
                 value.id = EffectInstId(next_id);
-                value.start = DawnTime::from_seconds_f64(
+                value.start = DawnTime::from_seconds_f32(
                     (anchor.time_seconds + effect.start_seconds - min_start).max(0.0),
                 );
                 if let Some(Some(target)) = lane_targets.get(target_lane) {
@@ -403,7 +403,7 @@ pub(super) fn paste_sequence_clipboard(
             let min_time = marks
                 .iter()
                 .map(|mark| mark.time_seconds)
-                .fold(f64::INFINITY, f64::min);
+                .fold(f32::INFINITY, f32::min);
             let mut pasted = Vec::new();
             let mut skipped = 0u32;
             let sequence = sequence_mut(session, sequence_id)?;
@@ -418,12 +418,12 @@ pub(super) fn paste_sequence_clipboard(
                 let time_seconds = (anchor.time_seconds + mark.time_seconds - min_time).max(0.0);
                 collection
                     .marks
-                    .push(DawnTime::from_seconds_f64(time_seconds));
+                    .push(DawnTime::from_seconds_f32(time_seconds));
                 collection.marks.sort_by_key(|time| time.0);
                 let index = collection
                     .marks
                     .iter()
-                    .position(|value| (value.as_seconds_f64() - time_seconds).abs() < f64::EPSILON)
+                    .position(|value| (value.as_seconds_f32() - time_seconds).abs() < f32::EPSILON)
                     .unwrap_or_else(|| collection.marks.len().saturating_sub(1));
                 pasted.push(SequenceMarkRef {
                     collection_key: mark.collection_key.clone(),
@@ -443,7 +443,7 @@ pub(super) fn move_effect_selection(
     session: &mut ProjectSession,
     sequence_id: &SequenceId,
     ids: &[u32],
-    time_delta_seconds: f64,
+    time_delta_seconds: f32,
     lane_delta: i32,
 ) -> Result<Vec<u32>, GuiMutationError> {
     let effect_updates = effect_selection_updates(session, sequence_id, ids, |session, effect| {
@@ -453,8 +453,8 @@ pub(super) fn move_effect_selection(
             sequence_lane_count(session),
         );
         (
-            effect.start.as_seconds_f64() + time_delta_seconds,
-            effect.duration.as_seconds_f64(),
+            effect.start.as_seconds_f32() + time_delta_seconds,
+            effect.duration.as_seconds_f32(),
             lane,
         )
     })?;
@@ -466,11 +466,11 @@ pub(super) fn resize_effect_selection(
     sequence_id: &SequenceId,
     ids: &[u32],
     edge: SequenceResizeEdge,
-    time_delta_seconds: f64,
+    time_delta_seconds: f32,
 ) -> Result<(), GuiMutationError> {
     let effect_updates = effect_selection_updates(session, sequence_id, ids, |session, effect| {
-        let start_seconds = effect.start.as_seconds_f64();
-        let duration_seconds = effect.duration.as_seconds_f64();
+        let start_seconds = effect.start.as_seconds_f32();
+        let duration_seconds = effect.duration.as_seconds_f32();
         let lane = effect_lane_index(session, &effect.target);
         match edge {
             SequenceResizeEdge::Left => (
@@ -491,7 +491,7 @@ pub(super) fn move_mark_selection(
     session: &mut ProjectSession,
     sequence_id: &SequenceId,
     marks: &[SequenceMarkRef],
-    time_delta_seconds: f64,
+    time_delta_seconds: f32,
 ) -> Result<Vec<SequenceMarkRef>, GuiMutationError> {
     let sequence = sequence_mut(session, sequence_id)?;
     let mut moved = Vec::new();
@@ -500,8 +500,8 @@ pub(super) fn move_mark_selection(
         for index in indexes {
             let collection = mark_collection_mut(sequence, &collection_key)?;
             if let Some(value) = collection.marks.get_mut(index) {
-                let time_seconds = (value.as_seconds_f64() + time_delta_seconds).max(0.0);
-                *value = DawnTime::from_seconds_f64(time_seconds);
+                let time_seconds = (value.as_seconds_f32() + time_delta_seconds).max(0.0);
+                *value = DawnTime::from_seconds_f32(time_seconds);
                 moved_times.push(time_seconds);
             }
         }
@@ -511,7 +511,7 @@ pub(super) fn move_mark_selection(
             if let Some(index) = collection
                 .marks
                 .iter()
-                .position(|value| (value.as_seconds_f64() - time_seconds).abs() < f64::EPSILON)
+                .position(|value| (value.as_seconds_f32() - time_seconds).abs() < f32::EPSILON)
             {
                 moved.push(SequenceMarkRef {
                     collection_key: collection_key.clone(),
@@ -525,8 +525,8 @@ pub(super) fn move_mark_selection(
 
 pub(super) struct EffectUpdate {
     id: u32,
-    start_seconds: f64,
-    duration_seconds: f64,
+    start_seconds: f32,
+    duration_seconds: f32,
     lane_index: usize,
 }
 
@@ -534,7 +534,7 @@ fn effect_selection_updates(
     session: &ProjectSession,
     sequence_id: &SequenceId,
     ids: &[u32],
-    update: impl Fn(&ProjectSession, &dawn_language::effect::EffectInst) -> (f64, f64, usize),
+    update: impl Fn(&ProjectSession, &dawn_language::effect::EffectInst) -> (f32, f32, usize),
 ) -> Result<Vec<EffectUpdate>, GuiMutationError> {
     let sequence = session
         .project
@@ -570,8 +570,8 @@ fn apply_effect_updates(
     let mut moved = Vec::new();
     for update in updates {
         let effect = effect_mut(sequence, update.id)?;
-        effect.start = DawnTime::from_seconds_f64(update.start_seconds.max(0.0));
-        effect.duration = DawnDuration::from_seconds_f64(update.duration_seconds.max(0.000000001));
+        effect.start = DawnTime::from_seconds_f32(update.start_seconds.max(0.0));
+        effect.duration = DawnDuration::from_seconds_f32(update.duration_seconds.max(0.000000001));
         if let Some((_, Some(target))) = targets.iter().find(|(id, _)| *id == update.id) {
             effect.target = target.clone();
         }
@@ -583,14 +583,14 @@ fn apply_effect_updates(
 fn mark_time_seconds(
     sequence: &dawn_language::sequence::Sequence,
     mark: &SequenceMarkRef,
-) -> Option<f64> {
+) -> Option<f32> {
     sequence
         .mark_collections
         .iter()
         .find(|collection| collection.key.name == mark.collection_key)?
         .marks
         .get(mark.index as usize)
-        .map(DawnTime::as_seconds_f64)
+        .map(DawnTime::as_seconds_f32)
 }
 
 fn mark_indexes_by_collection(marks: &[SequenceMarkRef]) -> BTreeMap<String, Vec<usize>> {
