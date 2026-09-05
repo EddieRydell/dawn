@@ -9,8 +9,7 @@ use crate::values::Color;
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ElementTreeId(pub SourceIdentity);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct ElementNodeId(pub u32);
+pub use dawn_runtime::element::ElementNodeId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct IndexedOptionId(pub u32);

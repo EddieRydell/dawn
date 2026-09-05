@@ -1,6 +1,6 @@
 use dawn_language::dsl::{
     Color, GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext, RuntimeError,
-    SignalSampler, TargetValue, VmWorkspace, compile_effects, compile_operators,
+    SignalSampler, TargetValue, Value, VmWorkspace, compile_effects, compile_operators,
 };
 use dawn_language::effect::BuiltinEffect;
 use dawn_language::values::{SampleDuration, SampleTime};
@@ -66,6 +66,196 @@ fn operator_requires_a_signal_input() {
             .iter()
             .any(|diagnostic| diagnostic.message.contains("at least one Signal input"))
     );
+}
+
+#[test]
+fn array_aliases_survive_loops_nested_reassignment_and_workspace_reuse() {
+    let effect = compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
+        .unwrap()
+        .remove(0);
+    let small = compile_effects("effect Small { color sample() { return rgb(0.0, 0.0, 0.0); } }")
+        .unwrap()
+        .remove(0);
+    let small_params = small.bind_params(&IndexMap::new()).unwrap();
+    let mut workspace = VmWorkspace::default();
+    for (progress, iterations, expected) in [
+        (
+            0.25,
+            4,
+            Color {
+                red: 64,
+                green: 89,
+                blue: 230,
+            },
+        ),
+        (
+            0.5,
+            256,
+            Color {
+                red: 128,
+                green: 153,
+                blue: 230,
+            },
+        ),
+        (
+            0.0,
+            2,
+            Color {
+                red: 0,
+                green: 26,
+                blue: 230,
+            },
+        ),
+    ] {
+        let context = OperatorRunContext {
+            progress,
+            time: SampleDuration::from_ticks(0),
+            duration: SampleDuration::from_ticks(1_000_000),
+            pixel_index: 0,
+            pixel_count: 1,
+            pixel_fraction: 0.0,
+        };
+        let mut values = IndexMap::from([
+            (
+                Identifier::new("iterations".into()).unwrap(),
+                Value::Int(iterations),
+            ),
+            (Identifier::new("fail".into()).unwrap(), Value::Bool(true)),
+        ]);
+        let failing = effect.bind_params(&values).unwrap();
+        let error = effect
+            .sample_bound(&failing, &context, &mut workspace)
+            .unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("integer arithmetic overflow or division by zero")
+        );
+        values.insert(Identifier::new("fail".into()).unwrap(), Value::Bool(false));
+        let params = effect.bind_params(&values).unwrap();
+        // Reuse after an error, then after a program with a different register layout.
+        assert_eq!(
+            effect
+                .sample_bound(&params, &context, &mut workspace)
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            small
+                .sample_bound(&small_params, &context, &mut workspace)
+                .unwrap(),
+            Color {
+                red: 0,
+                green: 0,
+                blue: 0
+            }
+        );
+        assert_eq!(
+            effect
+                .sample_bound(&params, &context, &mut workspace)
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn enum_identity_survives_subset_assignment_arrays_and_program_reuse() {
+    let mut workspace = VmWorkspace::default();
+    let context = OperatorRunContext {
+        progress: 0.0,
+        time: SampleDuration::from_ticks(0),
+        duration: SampleDuration::from_ticks(1_000_000),
+        pixel_index: 0,
+        pixel_count: 1,
+        pixel_fraction: 0.0,
+    };
+    for options in ["alpha, beta, gamma", "gamma, alpha, beta"] {
+        let effect = compile_effects(&format!(
+            "effect EnumIdentity {{
+                param enum wide {{ {options} }} = alpha;
+                param enum subset {{ gamma, beta }} = beta;
+                color sample() {{
+                    wide = subset;
+                    if (wide != subset || wide != beta || wide == alpha) {{ return rgb(1.0, 0.0, 0.0); }}
+                    subset = gamma;
+                    if (wide != beta || subset != gamma) {{ return rgb(0.0, 1.0, 0.0); }}
+                    wide = [wide, subset][1];
+                    if (wide != gamma) {{ return rgb(0.0, 0.0, 1.0); }}
+                    return rgb(0.25, 0.5, 0.75);
+                }}
+            }}"
+        )).unwrap().remove(0);
+        let params = effect.bind_params(&IndexMap::new()).unwrap();
+        for _ in 0..3 {
+            assert_eq!(
+                effect
+                    .sample_bound(&params, &context, &mut workspace)
+                    .unwrap(),
+                Color {
+                    red: 64,
+                    green: 128,
+                    blue: 191
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn generator_emitted_arrays_and_enums_outlive_vm_registers() {
+    let effect = compile_effects(
+        "effect EmitValues {
+            param enum mode { alpha, beta } = beta;
+            void generate() {
+                for (int i = 0; i < 3; i = i + 1) {
+                    timeline.emit Child {
+                        start: 0.0, duration: 1.0, target: target,
+                        mode: mode, values: [[i], [i + 1, i + 2]]
+                    };
+                    mode = alpha;
+                }
+            }
+        }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let context = GeneratorContext {
+        start_time: SampleTime::from_ticks(0),
+        duration: SampleDuration::from_ticks(1_000_000),
+        target: Arc::new(TargetValue { groups: Vec::new() }),
+    };
+    let mut workspace = VmWorkspace::default();
+    let first = effect
+        .generate_bound(&params, &context, &mut workspace)
+        .unwrap();
+    let second = effect
+        .generate_bound(&params, &context, &mut workspace)
+        .unwrap();
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 3);
+    for (index, child) in first.iter().enumerate() {
+        let index = index as i32;
+        assert_eq!(
+            child.params,
+            vec![
+                (
+                    Identifier::new("mode".into()).unwrap(),
+                    Value::Enum(
+                        Identifier::new(if index == 0 { "beta" } else { "alpha" }.into()).unwrap()
+                    )
+                ),
+                (
+                    Identifier::new("values".into()).unwrap(),
+                    Value::Array(Arc::from([
+                        Value::Array(Arc::from([Value::Int(index)])),
+                        Value::Array(Arc::from([Value::Int(index + 1), Value::Int(index + 2)])),
+                    ]))
+                ),
+            ]
+        );
+    }
 }
 
 #[test]

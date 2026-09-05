@@ -2,16 +2,14 @@ use indexmap::{IndexMap, IndexSet};
 
 use crate::element::IndexedOptionId;
 use crate::identity::SourceIdentity;
-use crate::values::{Color, Curve};
+use crate::values::Color;
+pub use dawn_runtime::fixture::{
+    ColorComponent, DimmingCurve, FixtureControlValue, FixtureEntryId, FixtureFunctionId,
+    FixtureState,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FixtureProfileId(pub SourceIdentity);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct FixtureFunctionId(pub u32);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct FixtureEntryId(pub u32);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FixtureProfile {
@@ -79,13 +77,6 @@ pub enum FixtureEntryTag {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum DimmingCurve {
-    Linear,
-    Gamma(f32),
-    Custom(Curve),
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct FixtureChannel {
     pub slot: u16,
     pub role: FixtureChannelRole,
@@ -105,14 +96,6 @@ pub enum FixtureChannelRole {
         component: ColorComponent,
     },
     Ignored,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum ColorComponent {
-    Red,
-    Green,
-    Blue,
-    White,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,34 +125,6 @@ pub enum FixtureBehaviorRule {
 pub struct ColorWheelColorMapping {
     pub color: Color,
     pub entry: FixtureEntryId,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum FixtureControlValue {
-    Normalized(f32),
-    Indexed { entry: FixtureEntryId, range: f32 },
-    Color(Color),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct FixtureState {
-    pub functions: Vec<(FixtureFunctionId, FixtureControlValue)>,
-}
-
-impl FixtureState {
-    pub fn get(&self, function: FixtureFunctionId) -> Option<&FixtureControlValue> {
-        self.functions
-            .iter()
-            .find_map(|(id, value)| (*id == function).then_some(value))
-    }
-
-    pub fn insert(&mut self, function: FixtureFunctionId, value: FixtureControlValue) {
-        if let Some((_, current)) = self.functions.iter_mut().find(|(id, _)| *id == function) {
-            *current = value;
-        } else {
-            self.functions.push((function, value));
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

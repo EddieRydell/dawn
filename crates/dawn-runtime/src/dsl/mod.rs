@@ -2,7 +2,7 @@ pub mod bytecode;
 pub mod types;
 mod vm;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 pub use types::{
     Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
@@ -42,6 +42,9 @@ pub struct CompiledEffect {
     pub params: Vec<ParamDecl>,
     pub kind: EffectKind,
     pub bytecode: bytecode::BytecodeProgram,
+    // Generator-only authoring tables are not retained in prepared playback bytecode.
+    pub emit_fields: Box<[(Identifier, bytecode::ValueSlot)]>,
+    pub generated_effects: Box<[GeneratedEffectRef]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -28,12 +28,15 @@ fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
     } else {
         EffectKind::Sample
     };
-    let bytecode = FunctionCompiler::new(&effect.params, kind).compile(effect.body);
+    let mut compiler = FunctionCompiler::new(&effect.params, kind);
+    let bytecode = compiler.compile(effect.body);
     CompiledEffect {
         name: effect.name,
         params: effect.params,
         kind,
         bytecode,
+        emit_fields: compiler.emit_fields.into_boxed_slice(),
+        generated_effects: compiler.generated_effects.into_boxed_slice(),
     }
 }
 
@@ -224,22 +227,22 @@ impl FunctionCompiler {
         compiler
     }
 
-    fn compile(mut self, block: CheckedBlock) -> BytecodeProgram {
+    fn compile(&mut self, block: CheckedBlock) -> BytecodeProgram {
         collect_assigned_names(&block, &mut self.assigned_names);
         self.compile_block(block);
-        let void = self.allocate_slot(&Type::Void);
-        let constant = self.add_constant(Value::Void);
-        self.emit(Instruction::LoadConst {
-            dst: void,
-            constant,
-        });
-        self.emit(Instruction::Return(void));
+        if self.kind == EffectKind::Generator {
+            let void = self.allocate_slot(&Type::Void);
+            let constant = self.add_constant(Value::Void);
+            self.emit(Instruction::LoadConst {
+                dst: void,
+                constant,
+            });
+            self.emit(Instruction::Return(void));
+        }
         BytecodeProgram {
-            instructions: self.instructions.into_boxed_slice(),
-            constants: self.constants.into_boxed_slice(),
-            value_operands: self.value_operands.into_boxed_slice(),
-            emit_fields: self.emit_fields.into_boxed_slice(),
-            generated_effects: self.generated_effects.into_boxed_slice(),
+            instructions: std::mem::take(&mut self.instructions).into_boxed_slice(),
+            constants: std::mem::take(&mut self.constants).into_boxed_slice(),
+            value_operands: std::mem::take(&mut self.value_operands).into_boxed_slice(),
             layout: self.layout,
         }
     }
@@ -459,8 +462,19 @@ impl FunctionCompiler {
                         position,
                     });
                     ValueSlot::Float(dst)
+                } else if let Some(param) = self.param_binding(&target, &Type::Gradient) {
+                    let position = self.float_slot_from_expr(*index);
+                    let slot = self.allocate_slot(&result_ty);
+                    let dst = self.color_slot(slot);
+                    self.emit(Instruction::GradientParamSample {
+                        dst,
+                        param,
+                        position,
+                    });
+                    ValueSlot::Color(dst)
                 } else {
                     let target = self.compile_expr(*target);
+                    let target = self.ref_slot(target);
                     let index = self.compile_expr(*index);
                     let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::Index { dst, target, index });
@@ -913,7 +927,7 @@ impl FunctionCompiler {
                 let args = self.compile_args(args);
                 self.emit(Instruction::Len {
                     dst: self.int_slot(dst),
-                    value: args[0],
+                    value: self.ref_slot(args[0]),
                 });
             }
             "mark_count" | "mark_at" | "mark_prev" | "mark_prev_index" | "mark_next_index"

@@ -650,9 +650,10 @@ pub(crate) fn run_generator_effect(
         VmContext::Generator(context),
         workspace,
         None,
-        Some(&mut generated),
+        Some((effect, &mut generated)),
     );
     let _ = vm.run()?;
+    drop(vm);
     Ok(generated)
 }
 
@@ -753,13 +754,31 @@ struct Vm<'a> {
     ip: usize,
     loop_iterations: usize,
     signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
-    generated: Option<&'a mut Vec<GeneratedEffect>>,
+    generated: Option<(&'a CompiledEffect, &'a mut Vec<GeneratedEffect>)>,
 }
 
 #[derive(Clone, Copy)]
 enum VmContext<'a> {
     Sample(&'a RunContext),
     Generator(&'a GeneratorContext),
+}
+
+impl Drop for Vm<'_> {
+    fn drop(&mut self) {
+        // Local values must not keep parameter resources shared between invocations:
+        // the next automation update needs exclusive access to its prepared curves.
+        // Preserve register lengths/capacities so the next invocation reuses storage.
+        // Assign directly: Clone-based slice fill produces unnecessary variant dispatch.
+        self.workspace
+            .registers
+            .refs
+            .iter_mut()
+            .for_each(|value| *value = RuntimeValue::Void);
+        self.workspace
+            .param_overrides
+            .iter_mut()
+            .for_each(|value| *value = None);
+    }
 }
 
 impl<'a> Vm<'a> {
@@ -769,14 +788,12 @@ impl<'a> Vm<'a> {
         context: VmContext<'a>,
         workspace: &'a mut VmWorkspace,
         signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
-        generated: Option<&'a mut Vec<GeneratedEffect>>,
+        generated: Option<(&'a CompiledEffect, &'a mut Vec<GeneratedEffect>)>,
     ) -> Self {
         workspace.registers.prepare(bytecode);
         if workspace.param_overrides.len() != params.values.len() {
             workspace.param_overrides.clear();
             workspace.param_overrides.resize(params.values.len(), None);
-        } else {
-            workspace.param_overrides.fill(None);
         }
         Self {
             bytecode,
@@ -855,9 +872,9 @@ impl<'a> Vm<'a> {
                     self.set_ref(*dst, RuntimeValue::Array(Arc::from(values)))?;
                 }
                 Instruction::Index { dst, target, index } => {
-                    let target = self.value(*target)?;
+                    let target = self.ref_value(*target)?;
                     let index = self.value(*index)?;
-                    let value = self.index_value(&target, &index)?;
+                    let value = self.index_value(target, &index)?;
                     self.set_value(*dst, value)?;
                 }
                 Instruction::CurveParamSample {
@@ -868,6 +885,23 @@ impl<'a> Vm<'a> {
                     let position = self.float(*position)?;
                     let curve = self.prepared_curve_param(*param)?;
                     self.set_float(*dst, sample_prepared_curve(curve, position)?)?;
+                }
+                Instruction::GradientParamSample {
+                    dst,
+                    param,
+                    position,
+                } => {
+                    let position = self.float(*position)?;
+                    let color = match self.workspace.param_overrides.get(*param) {
+                        Some(Some(RuntimeValue::Gradient(gradient))) => {
+                            sample_gradient(gradient, position)?
+                        }
+                        _ => sample_prepared_gradient(
+                            self.prepared_gradient_param(*param)?,
+                            position,
+                        )?,
+                    };
+                    self.set_color(*dst, color)?;
                 }
                 Instruction::SignalSample {
                     dst,
@@ -1294,8 +1328,7 @@ impl<'a> Vm<'a> {
                     self.set_float(*dst, curve_crossing(curve, value, fallback)?)?;
                 }
                 Instruction::Len { dst, value } => {
-                    let runtime_value = self.value(*value)?;
-                    let value = match &runtime_value {
+                    let value = match self.ref_value(*value)? {
                         RuntimeValue::Array(items) => i32::try_from(items.len())
                             .map_err(|_| RuntimeError::new("array length exceeds int range"))?,
                         RuntimeValue::Marks(marks) => i32::try_from(marks.marks.len())
@@ -1448,13 +1481,18 @@ impl<'a> Vm<'a> {
                     }
                 }
                 Instruction::Emit { effect, fields } => {
-                    let effect = self
-                        .bytecode
-                        .generated_effect(*effect)
+                    let definition = self
+                        .generated
+                        .as_ref()
+                        .ok_or_else(|| RuntimeError::new("emit is only valid in a generator"))?
+                        .0;
+                    let effect = definition
+                        .generated_effects
+                        .get(*effect as usize)
                         .ok_or_else(|| RuntimeError::new("invalid generated effect slot"))?;
-                    let fields = self
-                        .bytecode
-                        .emit_fields(*fields)
+                    let fields = definition
+                        .emit_fields
+                        .get(fields.range())
                         .ok_or_else(|| RuntimeError::new("invalid emit field span"))?;
                     self.emit_generated(effect, fields)?;
                 }
@@ -1965,9 +2003,9 @@ impl<'a> Vm<'a> {
                 "emitted effect duration must be positive",
             ));
         }
-        let generated = self
+        let (_, generated) = self
             .generated
-            .as_deref_mut()
+            .as_mut()
             .ok_or_else(|| RuntimeError::new("emit is only valid in a generator"))?;
         generated.push(GeneratedEffect {
             definition: effect.clone(),

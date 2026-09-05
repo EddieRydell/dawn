@@ -84,14 +84,14 @@ pub fn hash_compiled_effect<H: Hasher>(effect: &CompiledEffect, state: &mut H) {
     hash_param_decls(&effect.params, state);
     effect.kind.hash(state);
     hash_bytecode(&effect.bytecode, state);
+    effect.emit_fields.hash(state);
+    effect.generated_effects.hash(state);
 }
 
 fn hash_bytecode<H: Hasher>(bytecode: &BytecodeProgram, state: &mut H) {
     bytecode.instructions.hash(state);
     hash_values(&bytecode.constants, state);
     bytecode.value_operands.hash(state);
-    bytecode.emit_fields.hash(state);
-    bytecode.generated_effects.hash(state);
     bytecode.layout.hash(state);
 }
 

@@ -4,15 +4,15 @@ use dawn_language::sequence::SequenceId;
 use dawn_language::setup::SetupId;
 use dawn_language::validation::validate_sequence;
 use dawn_language::values::sample_duration_from_dawn_duration;
-use indexmap::IndexSet;
-use std::collections::HashMap;
+use indexmap::{IndexMap, IndexSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::composition::{PrepareGraphContext, prepare_signal_graph};
-use super::effects::generators::PrepareTargetCache;
 use super::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
 use super::elements::prepare_elements;
 use super::renderer::RenderError;
+use super::targets::PreparedTargetCache;
 use super::timeline::{frame_count, prepare_timing};
 use crate::{PreparedLayer, PreparedSequence};
 
@@ -62,8 +62,8 @@ pub fn elaborate_sequence(
     let mut effects = Vec::with_capacity(sequence.effects.len());
     let mut generated_child_count = 0usize;
     let mut bind_cache = DslBindCache::default();
-    let mut sample_programs = HashMap::new();
-    let mut target_cache = PrepareTargetCache::default();
+    let mut sample_programs = IndexMap::new();
+    let mut target_cache = PreparedTargetCache::default();
     let layers = sequence
         .layers
         .iter()
@@ -116,14 +116,40 @@ pub fn elaborate_sequence(
         }
     })?;
     let frame_count = frame_count(&sequence.duration, frame_rate)?;
+    let mut programs = sample_programs
+        .into_values()
+        .map(Arc::unwrap_or_clone)
+        .collect::<Vec<_>>();
     let signal_graph = prepare_signal_graph(
         PrepareGraphContext {
             project,
             sequence,
             elements: &elements,
+            programs: &mut programs,
+            targets: &mut target_cache,
         },
         &sequence.composition_graph,
     )?;
+    let mut target_pixels = Vec::new();
+    let targets = target_cache
+        .sample_targets
+        .into_iter()
+        .map(|pixels| {
+            let start = u32::try_from(target_pixels.len()).map_err(|_| RenderError::BadTarget)?;
+            let len = u32::try_from(pixels.len()).map_err(|_| RenderError::BadTarget)?;
+            let end = start.checked_add(len).ok_or(RenderError::BadTarget)?;
+            target_pixels.extend_from_slice(&pixels);
+            let count = pixels
+                .iter()
+                .map(|pixel| pixel.pixel_count)
+                .max()
+                .unwrap_or(0);
+            Ok(dawn_runtime::sequence::PreparedTarget {
+                pixels: start..end,
+                sample_count: if len > count { count } else { 0 },
+            })
+        })
+        .collect::<Result<Box<[_]>, RenderError>>()?;
     Ok(PreparedSequence {
         workspace_key: NEXT_SEQUENCE_ID.fetch_add(1, Ordering::Relaxed),
         frame_rate,
@@ -139,6 +165,9 @@ pub fn elaborate_sequence(
         element_cell_offsets: element_cell_offsets.into_boxed_slice(),
         pixel_count,
         effects: effects.into_boxed_slice(),
+        programs: programs.into_boxed_slice(),
+        targets,
+        target_pixels: target_pixels.into_boxed_slice(),
         effects_by_layer: effects_by_layer
             .into_iter()
             .map(Vec::into_boxed_slice)

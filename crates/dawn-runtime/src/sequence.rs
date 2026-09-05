@@ -12,6 +12,7 @@ use alloc::rc::Rc as Arc;
 use alloc::string::String;
 #[cfg(feature = "atomic")]
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 
 pub const MAX_SIGNAL_CACHE_ENTRIES_PER_PIXEL: usize = 1_024;
@@ -43,6 +44,9 @@ pub struct PreparedSequence {
     pub element_cell_offsets: Box<[usize]>,
     pub pixel_count: usize,
     pub effects: Box<[PreparedEffect]>,
+    pub programs: Box<[BytecodeProgram]>,
+    pub targets: Box<[PreparedTarget]>,
+    pub target_pixels: Box<[PreparedPixel]>,
     pub effects_by_layer: Box<[Box<[usize]>]>,
     pub layers: Box<[PreparedLayer]>,
     pub signal_graph: PreparedSignalGraph,
@@ -72,22 +76,12 @@ pub struct EvaluatedElement {
 pub struct PreparedEffect {
     pub start_time: SampleTime,
     pub duration: SampleDuration,
-    pub target: Arc<[PreparedPixel]>,
-    pub reuse_samples: bool,
+    pub target: u32,
     pub implementation: PreparedEffectImplementation,
     pub automation: Option<Box<PreparedEffectAutomation>>,
 }
 
 impl PreparedEffect {
-    pub fn target_repeats_context(target: &[PreparedPixel]) -> bool {
-        target.len()
-            > target
-                .iter()
-                .map(PreparedPixel::pixel_count)
-                .max()
-                .unwrap_or(0)
-    }
-
     pub fn is_active(&self, sample_time: SampleTime) -> bool {
         sample_time >= self.start_time
             && self
@@ -113,7 +107,7 @@ impl PreparedEffect {
 #[derive(Clone, Debug)]
 pub enum PreparedEffectImplementation {
     Dsl {
-        program: Arc<BytecodeProgram>,
+        program: u32,
         bound_params: BoundParams,
     },
     Native {
@@ -157,7 +151,7 @@ impl PreparedAutomation {
 #[derive(Clone, Debug)]
 pub struct PreparedSignalGraph {
     pub output_index: usize,
-    pub target: Arc<[PreparedPixel]>,
+    pub target: u32,
     pub nodes: Box<[PreparedSignalNode]>,
     pub vm_workspace_count: usize,
     pub frame_nodes: Box<[usize]>,
@@ -189,13 +183,20 @@ pub enum PreparedSignalKind {
 #[derive(Clone, Debug)]
 pub enum PreparedOperator {
     Native(BuiltinOperator),
-    Dsl(Box<BytecodeProgram>),
+    Dsl(u32),
 }
 
 #[derive(Clone, Debug)]
 pub struct PreparedOperatorNode {
     pub implementation: PreparedOperator,
     pub params: BoundParams,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedTarget {
+    pub pixels: core::ops::Range<u32>,
+    /// Zero disables sample reuse; otherwise this is the required cache width.
+    pub sample_count: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -246,7 +247,7 @@ pub struct EvaluationWorkspace {
     pub(crate) effect_vm: VmWorkspace,
     pub(crate) operator_vm: Vec<VmWorkspace>,
     pub(crate) signal_cache: Vec<CachedSignal>,
-    pub(crate) signal_buffers: Vec<Vec<Color>>,
+    pub(crate) signal_buffers: Box<[Color]>,
     pub(crate) effect_samples: Vec<CachedEffectSample>,
     pub(crate) effect_automation: Vec<Option<EffectAutomationWorkspace>>,
     pub(crate) operator_automation: Vec<Option<BoundParams>>,
@@ -268,8 +269,7 @@ pub(crate) struct CachedSignal {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CachedEffectSample {
-    pub(crate) pixel_index: usize,
-    pub(crate) pixel_count: usize,
+    pub(crate) pixel_count: u32,
     pub(crate) color: Color,
 }
 
@@ -281,6 +281,11 @@ pub(crate) struct EffectAutomationWorkspace {
 }
 
 impl PreparedSequence {
+    pub fn target(&self, index: u32) -> &[PreparedPixel] {
+        let range = &self.targets[index as usize].pixels;
+        &self.target_pixels[range.start as usize..range.end as usize]
+    }
+
     pub fn frame_count(&self) -> u32 {
         self.frame_count
     }
@@ -306,18 +311,52 @@ impl PreparedSequence {
             operator_vm: (0..self.signal_graph.vm_workspace_count)
                 .map(|_| VmWorkspace::default())
                 .collect(),
-            signal_cache: Vec::with_capacity(MAX_SIGNAL_CACHE_ENTRIES_PER_PIXEL),
-            signal_buffers: (0..self.signal_graph.frame_buffer_count)
-                .map(|_| Vec::with_capacity(self.pixel_count))
-                .collect(),
-            effect_samples: Vec::with_capacity(
+            signal_cache: Vec::with_capacity(
+                if self.signal_graph.frame_nodes.iter().any(|&index| {
+                    matches!(
+                        self.signal_graph.nodes[index].kind,
+                        PreparedSignalKind::Operator {
+                            operator: PreparedOperatorNode {
+                                implementation: PreparedOperator::Dsl(_)
+                                    | PreparedOperator::Native(
+                                        BuiltinOperator::Delay | BuiltinOperator::Echo
+                                    ),
+                                ..
+                            },
+                            ..
+                        }
+                    )
+                }) {
+                    MAX_SIGNAL_CACHE_ENTRIES_PER_PIXEL
+                } else {
+                    0
+                },
+            ),
+            signal_buffers: vec![
+                Color {
+                    red: 0,
+                    green: 0,
+                    blue: 0
+                };
+                usize::from(self.signal_graph.frame_buffer_count)
+                    * self.pixel_count
+            ]
+            .into_boxed_slice(),
+            effect_samples: vec![
+                CachedEffectSample {
+                    pixel_count: 0,
+                    color: Color {
+                        red: 0,
+                        green: 0,
+                        blue: 0
+                    }
+                };
                 self.effects
                     .iter()
-                    .filter(|effect| effect.reuse_samples)
-                    .map(|effect| effect.target.len())
+                    .map(|effect| self.targets[effect.target as usize].sample_count as usize)
                     .max()
-                    .unwrap_or(0),
-            ),
+                    .unwrap_or(0)
+            ],
             effect_automation: self
                 .effects
                 .iter()
@@ -354,7 +393,7 @@ impl PreparedSequence {
                 })
                 .collect(),
             workspace_key: Some(self.workspace_key),
-            frame_colors: Vec::with_capacity(self.pixel_count),
+            frame_colors: Vec::new(),
         };
         for effect in self.effects.iter() {
             if let PreparedEffectImplementation::Dsl {
@@ -362,7 +401,9 @@ impl PreparedSequence {
                 bound_params,
             } = &effect.implementation
             {
-                workspace.effect_vm.reserve(program, bound_params.len());
+                workspace
+                    .effect_vm
+                    .reserve(&self.programs[*program as usize], bound_params.len());
             }
         }
         for node in self.signal_graph.nodes.iter() {
@@ -378,7 +419,8 @@ impl PreparedSequence {
             else {
                 continue;
             };
-            workspace.operator_vm[usize::from(*vm_slot)].reserve(program, params.len());
+            workspace.operator_vm[usize::from(*vm_slot)]
+                .reserve(&self.programs[*program as usize], params.len());
         }
         workspace
     }

@@ -1,14 +1,13 @@
 use crate::RenderError;
 use crate::sequence::effects::generators::{
-    GeneratorExpansion, GeneratorPrepareContext, PrepareTargetCache, expand_generator,
-    expand_native_generator,
+    GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
 };
 use crate::sequence::effects::parameters::{EffectParamTiming, prepare_params};
 use crate::sequence::effects::sampling::apply_bound_automation;
 use crate::sequence::elements::PreparedElement;
 use crate::sequence::targets::{
-    PreparedTargetPixel, generator_expansion_targets, prepare_target, prepare_target_pixels_cached,
-    sorted_sample_target,
+    PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
+    prepare_target_pixels_cached, sorted_sample_target,
 };
 use crate::{
     PreparedAutomation, PreparedEffect, PreparedEffectAutomation, PreparedEffectImplementation,
@@ -22,7 +21,6 @@ use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect};
 use dawn_language::sequence::{AutomationBinding, AutomationClip, AutomationTarget, Sequence};
 use indexmap::{IndexMap, IndexSet};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) struct PrepareEffectContext<'a> {
@@ -34,8 +32,8 @@ pub(crate) struct PrepareEffectContext<'a> {
     pub(crate) effects: &'a mut Vec<PreparedEffect>,
     pub(crate) generated_child_count: &'a mut usize,
     pub(crate) bind_cache: &'a mut DslBindCache,
-    pub(crate) sample_programs: &'a mut HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
-    pub(crate) target_cache: &'a mut PrepareTargetCache,
+    pub(crate) sample_programs: &'a mut IndexMap<EffectDefinitionId, Arc<BytecodeProgram>>,
+    pub(crate) target_cache: &'a mut PreparedTargetCache,
 }
 
 pub(crate) fn prepare_effect_inst(
@@ -67,7 +65,7 @@ pub(crate) fn prepare_effect_inst(
         })?;
     let target_selection = prepare_target(&effect.target, context.element_ids, context.groups)?;
     let target = prepare_target_pixels_cached(
-        &mut context.target_cache.target,
+        context.target_cache,
         &target_selection,
         context.elements,
         &effect.scope,
@@ -90,11 +88,8 @@ pub(crate) fn prepare_effect_inst(
                     let EffectRef::Custom(id) = &effect.definition else {
                         unreachable!("DSL effects are custom")
                     };
-                    let program = context
-                        .sample_programs
-                        .entry(id.clone())
-                        .or_insert_with(|| Arc::new(compiled.bytecode.clone()))
-                        .clone();
+                    let program =
+                        prepare_sample_program(context.sample_programs, id, &compiled.bytecode)?;
                     PreparedEffectImplementation::Dsl {
                         bound_params: compiled.bind_params_cached(&params, context.bind_cache)?,
                         program,
@@ -117,7 +112,6 @@ pub(crate) fn prepare_effect_inst(
                 }
             };
             let target = sorted_sample_target(&target);
-            let reuse_samples = PreparedEffect::target_repeats_context(&target);
             let automation = (!automation.is_empty()).then(|| {
                 Box::new(PreparedEffectAutomation {
                     bindings: automation.into_boxed_slice(),
@@ -126,8 +120,7 @@ pub(crate) fn prepare_effect_inst(
             context.effects.push(PreparedEffect {
                 start_time,
                 duration,
-                target: Arc::clone(&target),
-                reuse_samples,
+                target: context.target_cache.sample_target(Arc::clone(&target))?,
                 implementation,
                 automation,
             });
@@ -246,4 +239,22 @@ pub(crate) fn automation_param(binding: &AutomationBinding) -> &Identifier {
         AutomationTarget::EffectParam { param, .. }
         | AutomationTarget::CompositionNodeParam { param, .. } => param,
     }
+}
+
+pub(crate) fn prepare_sample_program(
+    programs: &mut IndexMap<EffectDefinitionId, Arc<BytecodeProgram>>,
+    id: &EffectDefinitionId,
+    program: &BytecodeProgram,
+) -> Result<u32, RenderError> {
+    let index = match programs.get_index_of(id) {
+        Some(index) => index,
+        None => {
+            programs
+                .insert_full(id.clone(), Arc::new(program.clone()))
+                .0
+        }
+    };
+    u32::try_from(index).map_err(|_| RenderError::BadGraph {
+        message: "prepared sequence has too many bytecode programs".to_string(),
+    })
 }

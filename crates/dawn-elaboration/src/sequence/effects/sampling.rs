@@ -1,7 +1,8 @@
-use dawn_language::dsl::{RunContext, RuntimeError, VmWorkspace};
+use dawn_language::dsl::{BytecodeProgram, RunContext, RuntimeError, VmWorkspace};
 use dawn_language::native_effect::{self, NativeSample};
 use dawn_language::values::{Color, SampleTime};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::sequence::color::compose_max;
 use crate::sequence::targets::PreparedTargetPixel;
@@ -56,6 +57,7 @@ pub(crate) struct TargetColorAddress {
 }
 
 pub(crate) fn render_sampled_effect_target_colors(
+    programs: &[Arc<BytecodeProgram>],
     effect: &PreparedEffect,
     effect_pixels: &PreparedSampledEffectPixels,
     rendered: &mut [Color],
@@ -77,6 +79,7 @@ pub(crate) fn render_sampled_effect_target_colors(
     };
     render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
         sample_effect_group(
+            programs,
             effect,
             automated.as_ref(),
             native_sample.as_ref(),
@@ -139,7 +142,9 @@ fn run_context(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sample_effect_group(
+    programs: &[Arc<BytecodeProgram>],
     effect: &PreparedEffect,
     params: Option<&dawn_language::dsl::BoundParams>,
     native_sample: Option<&NativeSample>,
@@ -153,7 +158,11 @@ pub(crate) fn sample_effect_group(
         PreparedEffectImplementation::Dsl {
             program,
             bound_params,
-        } => program.sample_effect(params.unwrap_or(bound_params), &context, workspace),
+        } => programs[*program as usize].sample_effect(
+            params.unwrap_or(bound_params),
+            &context,
+            workspace,
+        ),
         PreparedEffectImplementation::Native { sample, .. } => {
             let sample_time = effect
                 .start_time

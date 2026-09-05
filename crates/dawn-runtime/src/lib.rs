@@ -4,11 +4,16 @@
 extern crate alloc;
 
 pub mod automation;
+pub mod control;
 pub mod dsl;
+pub mod element;
 mod evaluation;
+pub mod fixture;
 pub mod native_effect;
+pub mod patch;
 pub mod sampling;
 pub mod sequence;
+pub mod show;
 pub mod values;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

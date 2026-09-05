@@ -1,46 +1,33 @@
 use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use dawn_language::element::ElementNodeKind;
-use dawn_language::fixture_profile::{FixtureProfileStore, FixtureState};
+use dawn_language::fixture_profile::FixtureProfileStore;
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::SetupId;
 use dawn_language::validation::validate_project;
-use dawn_language::values::{Color, SampleTime, sample_time_from_seconds_f32};
+use dawn_language::values::{SampleTime, sample_time_from_seconds_f32};
 
-use super::controls::{
-    PreparedControl, apply_controls, apply_fixture_behavior_rules, prepare_controls,
-};
+use super::controls::{prepare_controls, prepare_fixture_behaviors};
 use super::errors::{SequenceOutputPrepareError, SequenceOutputRenderError};
-use super::frame::{ControllerPortFrame, RenderedElementState, RenderedSequenceFrame};
-use super::patch::{PatchWorkspace, PreparedPatch};
-use super::values::black;
+use super::frame::{ControllerPortFrame, RenderedSequenceFrame};
+use super::patch::prepare_patch;
 use crate::sequence::timeline::{frame_at_or_before, sample_time_for_frame};
-use crate::{EvaluationWorkspace, PreparedSequence, RenderError, elaborate_sequence};
+use crate::{RenderError, elaborate_sequence};
+use dawn_runtime::element::ElementLayout;
+use dawn_runtime::show::{PreparedShow, ShowWorkspace};
 
 static NEXT_OUTPUT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub struct PreparedSequenceOutput {
-    id: u32,
-    sequence: PreparedSequence,
-    element_templates: Box<[RenderedElementState]>,
-    profiles: FixtureProfileStore,
-    controls: Box<[PreparedControl]>,
-    patch: PreparedPatch,
+    pub show: PreparedShow,
     controller_ports: Box<[ControllerPortFrame]>,
-    color_spans: Box<[(usize, Range<usize>)]>,
 }
 
 #[derive(Debug)]
 pub struct OutputEvaluationWorkspace {
-    sequence: EvaluationWorkspace,
-    patch: PatchWorkspace,
-    output_id: Option<u32>,
-    colors: Vec<Color>,
-    elements: Vec<RenderedElementState>,
-    explicit_fixture_controls: Vec<(u32, dawn_language::fixture_profile::FixtureFunctionId)>,
+    show: ShowWorkspace,
     controller_frames: Vec<ControllerPortFrame>,
 }
 
@@ -89,6 +76,7 @@ impl PreparedSequenceOutput {
             }
         }
         let controls = prepare_controls(&tree, &profiles, &sequence_definition.control_clips)?;
+        let fixture_behaviors = prepare_fixture_behaviors(&tree, &profiles)?;
         let sequence = elaborate_sequence(project, setup_id, sequence_id)
             .map_err(SequenceOutputPrepareError::Render)?;
         let patch = project.patches.get(&setup.patch).ok_or_else(|| {
@@ -107,40 +95,23 @@ impl PreparedSequenceOutput {
                 });
             }
         }
-        let patch = PreparedPatch::prepare(&tree, patch, &controller_ports)?;
-        let mut element_templates = Vec::new();
+        let patch = prepare_patch(&tree, patch, &profiles, &controller_ports)?;
+        let mut elements = Vec::new();
         for (node_id, node) in &tree.nodes {
-            let element = match &node.kind {
+            let layout = match &node.kind {
                 ElementNodeKind::Group { .. } => continue,
-                ElementNodeKind::Color { cells, capability } => RenderedElementState::Color {
-                    node: *node_id,
-                    capability: capability.clone(),
-                    cells: vec![black(); *cells as usize],
-                },
-                ElementNodeKind::Scalar { cells } => RenderedElementState::Scalar {
-                    node: *node_id,
-                    cells: vec![0.0; *cells as usize],
-                },
-                ElementNodeKind::Indexed { cells, .. } => RenderedElementState::Indexed {
-                    node: *node_id,
-                    cells: vec![0; *cells as usize],
-                },
-                ElementNodeKind::Fixture { profile } => {
-                    let capacity = profiles
-                        .definitions
-                        .get(profile)
-                        .map_or(0, |profile| profile.functions.len());
-                    RenderedElementState::Fixture {
-                        node: *node_id,
-                        profile: profile.clone(),
-                        color: black(),
-                        state: FixtureState {
-                            functions: Vec::with_capacity(capacity),
-                        },
-                    }
-                }
+                ElementNodeKind::Color { cells, .. } => ElementLayout::Color(*cells),
+                ElementNodeKind::Scalar { cells } => ElementLayout::Scalar(*cells),
+                ElementNodeKind::Indexed { cells, .. } => ElementLayout::Indexed(*cells),
+                ElementNodeKind::Fixture { profile } => ElementLayout::Fixture(
+                    u32::try_from(profiles.definitions[profile].functions.len()).map_err(|_| {
+                        SequenceOutputPrepareError::InvalidPatch(
+                            "fixture function count exceeds u32".to_string(),
+                        )
+                    })?,
+                ),
             };
-            element_templates.push(element);
+            elements.push((*node_id, layout));
         }
         let element_indexes = tree
             .nodes
@@ -163,19 +134,35 @@ impl PreparedSequenceOutput {
                 node.kind,
                 ElementNodeKind::Color { .. } | ElementNodeKind::Fixture { .. }
             ) {
-                color_spans.push((element_indexes[&element_id], offset..end));
+                let index32 = |value| {
+                    u32::try_from(value).map_err(|_| {
+                        SequenceOutputPrepareError::InvalidPatch(
+                            "color span exceeds u32".to_string(),
+                        )
+                    })
+                };
+                color_spans.push((
+                    index32(element_indexes[&element_id])?,
+                    index32(offset)?..index32(end)?,
+                ));
             }
             offset = end;
         }
         Ok(Self {
-            id: NEXT_OUTPUT_ID.fetch_add(1, Ordering::Relaxed),
-            sequence,
-            element_templates: element_templates.into_boxed_slice(),
-            profiles,
-            controls: controls.into_boxed_slice(),
-            patch,
+            show: PreparedShow {
+                workspace_key: NEXT_OUTPUT_ID.fetch_add(1, Ordering::Relaxed),
+                sequence,
+                elements: elements.into_boxed_slice(),
+                controls: controls.into_boxed_slice(),
+                fixture_behaviors,
+                patch,
+                output_widths: controller_ports
+                    .iter()
+                    .map(|port| port.slots.len() as u32)
+                    .collect(),
+                color_spans: color_spans.into_boxed_slice(),
+            },
             controller_ports: controller_ports.into_boxed_slice(),
-            color_spans: color_spans.into_boxed_slice(),
         })
     }
 
@@ -220,37 +207,15 @@ impl PreparedSequenceOutput {
     }
 
     pub fn frame_rate(&self) -> u32 {
-        self.sequence.frame_rate()
+        self.show.sequence.frame_rate()
     }
     pub fn frame_count(&self) -> u32 {
-        self.sequence.frame_count()
+        self.show.sequence.frame_count()
     }
 
     pub fn workspace(&self) -> OutputEvaluationWorkspace {
-        let mut elements = self.element_templates.to_vec();
-        for element in &mut elements {
-            let RenderedElementState::Fixture { profile, state, .. } = element else {
-                continue;
-            };
-            let function_count = self
-                .profiles
-                .definitions
-                .get(profile)
-                .map_or(0, |profile| profile.functions.len());
-            state.functions.reserve(function_count);
-        }
         OutputEvaluationWorkspace {
-            sequence: self.sequence.workspace(),
-            patch: self.patch.workspace(&self.profiles),
-            output_id: Some(self.id),
-            colors: vec![black(); self.sequence.pixel_count()],
-            elements,
-            explicit_fixture_controls: Vec::with_capacity(
-                self.controls
-                    .iter()
-                    .map(PreparedControl::explicit_fixture_count)
-                    .sum(),
-            ),
+            show: self.show.workspace(),
             controller_frames: self.controller_ports.to_vec(),
         }
     }
@@ -263,54 +228,13 @@ impl PreparedSequenceOutput {
         sample_time: SampleTime,
         workspace: &'a mut OutputEvaluationWorkspace,
     ) -> Result<&'a [ControllerPortFrame], SequenceOutputRenderError> {
-        if workspace.output_id != Some(self.id) {
-            return Err(SequenceOutputRenderError::Patch(
-                "evaluation workspace belongs to another prepared output".to_string(),
-            ));
-        }
-        self.sequence
-            .evaluate(sample_time, &mut workspace.colors, &mut workspace.sequence)
-            .map_err(|error| SequenceOutputRenderError::Render(error.into()))?;
-
-        for element in &mut workspace.elements {
-            match element {
-                RenderedElementState::Color { cells, .. } => cells.fill(black()),
-                RenderedElementState::Scalar { cells, .. } => cells.fill(0.0),
-                RenderedElementState::Indexed { cells, .. } => cells.fill(0),
-                RenderedElementState::Fixture { color, state, .. } => {
-                    *color = black();
-                    state.functions.clear();
-                }
-            }
-        }
-        for (element, span) in &self.color_spans {
-            match &mut workspace.elements[*element] {
-                RenderedElementState::Color { cells, .. } => {
-                    cells.copy_from_slice(&workspace.colors[span.clone()]);
-                }
-                RenderedElementState::Fixture { color, .. } => {
-                    *color = workspace.colors[span.start];
-                }
-                _ => unreachable!("prepared color span targets a color-capable element"),
-            }
-        }
-        apply_controls(
-            &mut workspace.elements,
-            &self.controls,
-            sample_time,
-            &mut workspace.explicit_fixture_controls,
-        )?;
-        apply_fixture_behavior_rules(
-            &mut workspace.elements,
-            &self.profiles,
-            &workspace.explicit_fixture_controls,
-        )?;
-        self.patch.evaluate(
-            &self.profiles,
-            &workspace.elements,
-            &mut workspace.controller_frames,
-            &mut workspace.patch,
-        )?;
+        self.show
+            .evaluate(
+                sample_time,
+                &mut workspace.controller_frames,
+                &mut workspace.show,
+            )
+            .map_err(SequenceOutputRenderError::from)?;
         Ok(&workspace.controller_frames)
     }
 
@@ -325,7 +249,7 @@ impl PreparedSequenceOutput {
             frame_index,
             frame_rate: self.frame_rate(),
             sample_time,
-            elements: workspace.elements.clone(),
+            elements: workspace.show.elements().to_vec(),
             controller_frames: workspace.controller_frames.clone(),
         })
     }

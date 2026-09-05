@@ -1,5 +1,4 @@
-use super::GeneratedEffectRef;
-use super::types::{Identifier, Type, Value};
+use super::types::{Type, Value};
 use alloc::boxed::Box;
 
 pub type ConstantId = usize;
@@ -12,22 +11,12 @@ pub struct BytecodeProgram {
     pub instructions: Box<[Instruction]>,
     pub constants: Box<[Value]>,
     pub value_operands: Box<[ValueSlot]>,
-    pub emit_fields: Box<[(Identifier, ValueSlot)]>,
-    pub generated_effects: Box<[GeneratedEffectRef]>,
     pub layout: SlotLayout,
 }
 
 impl BytecodeProgram {
     pub fn value_operands(&self, span: PoolSpan) -> Option<&[ValueSlot]> {
         self.value_operands.get(span.range())
-    }
-
-    pub fn emit_fields(&self, span: PoolSpan) -> Option<&[(Identifier, ValueSlot)]> {
-        self.emit_fields.get(span.range())
-    }
-
-    pub fn generated_effect(&self, index: u32) -> Option<&GeneratedEffectRef> {
-        self.generated_effects.get(index as usize)
     }
 
     pub fn sample_effect(
@@ -57,7 +46,7 @@ pub struct PoolSpan {
 }
 
 impl PoolSpan {
-    fn range(self) -> core::ops::Range<usize> {
+    pub(super) fn range(self) -> core::ops::Range<usize> {
         self.start as usize..self.start.saturating_add(self.len) as usize
     }
 }
@@ -181,11 +170,16 @@ pub enum Instruction {
     },
     Index {
         dst: ValueSlot,
-        target: ValueSlot,
+        target: RefSlot,
         index: ValueSlot,
     },
     CurveParamSample {
         dst: FloatSlot,
+        param: ParamId,
+        position: FloatSlot,
+    },
+    GradientParamSample {
+        dst: ColorSlot,
         param: ParamId,
         position: FloatSlot,
     },
@@ -398,7 +392,7 @@ pub enum Instruction {
     },
     Len {
         dst: IntSlot,
-        value: ValueSlot,
+        value: RefSlot,
     },
     Mark {
         dst: ValueSlot,

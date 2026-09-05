@@ -7,7 +7,6 @@
 use crate::PreparedEffect;
 use crate::RenderError;
 use crate::sequence::color::black;
-use crate::sequence::effects::generators::PrepareTargetCache;
 use crate::sequence::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
 use crate::sequence::effects::sampling::{
     PreparedSampledEffectPixel, PreparedSampledEffectPixels, TargetColorAddress,
@@ -15,6 +14,7 @@ use crate::sequence::effects::sampling::{
     render_sampled_effect_target_colors,
 };
 use crate::sequence::elements::{PreparedElement, prepare_elements};
+use crate::sequence::targets::PreparedTargetCache;
 use crate::sequence::targets::PreparedTargetPixel;
 use crate::sequence::timeline::{
     first_frame_at_or_after, frame_at_or_before, frame_count, prepare_timing, sample_time_for_frame,
@@ -39,7 +39,9 @@ pub struct PreparedEffectRasterRenderer {
     start_time: SampleTime,
     duration: SampleDuration,
     target: Arc<[PreparedTargetPixel]>,
+    targets: Box<[Arc<[PreparedTargetPixel]>]>,
     effects: Box<[PreparedEffect]>,
+    programs: Box<[Arc<BytecodeProgram>]>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,8 +64,8 @@ pub struct EffectRasterPrepareBatch<'a> {
     frame_rate: u32,
     frame_count: u32,
     bind_cache: DslBindCache,
-    sample_programs: HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
-    target_cache: PrepareTargetCache,
+    sample_programs: IndexMap<EffectDefinitionId, Arc<BytecodeProgram>>,
+    target_cache: PreparedTargetCache,
 }
 
 impl PreparedEffectRasterRenderer {
@@ -139,8 +141,7 @@ impl PreparedEffectRasterRenderer {
             .effects
             .iter()
             .map(|effect| {
-                let pixels = effect
-                    .target
+                let pixels = self.targets[effect.target as usize]
                     .iter()
                     .filter_map(|pixel| {
                         sample_lookup
@@ -202,6 +203,7 @@ impl PreparedEffectRasterRenderer {
                 continue;
             };
             render_sampled_effect_target_colors(
+                &self.programs,
                 effect,
                 effect_pixels,
                 &mut rendered,
@@ -259,8 +261,8 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             frame_rate,
             frame_count,
             bind_cache: DslBindCache::default(),
-            sample_programs: HashMap::new(),
-            target_cache: PrepareTargetCache::default(),
+            sample_programs: IndexMap::new(),
+            target_cache: PreparedTargetCache::default(),
         })
     }
 
@@ -313,6 +315,8 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             duration,
             target,
             effects: effects.into_boxed_slice(),
+            programs: self.sample_programs.values().cloned().collect(),
+            targets: self.target_cache.sample_targets.clone().into_boxed_slice(),
         })
     }
 }

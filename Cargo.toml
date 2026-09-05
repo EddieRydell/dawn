@@ -1,5 +1,6 @@
 [workspace]
 members = ["apps/desktop", "crates/dawn-runtime", "crates/dawn-language", "crates/dawn-elaboration", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-package", "crates/dawn-cli"]
+exclude = ["vendor/offset-allocator"]
 resolver = "2"
 
 [workspace.package]
@@ -30,6 +31,7 @@ indexmap = "2.14.0"
 ignore = "0.4.23"
 kira = "0.12.1"
 marked-yaml = "0.8.0"
+offset-allocator = { path = "vendor/offset-allocator", version = "0.2.0" }
 pathdiff = { version = "0.2.3", features = ["camino"] }
 pubgrub = "0.4.0"
 sacn = "0.11.1"

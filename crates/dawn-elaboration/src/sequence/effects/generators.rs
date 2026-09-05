@@ -1,7 +1,7 @@
+use super::preparation::prepare_sample_program;
 use dawn_language::dsl::{
     BoundParams, BytecodeProgram, DslBindCache, EffectKind as RootEffectKind, GeneratedEffect,
-    GeneratedEffectRef, GeneratorContext, Identifier, ParamDecl, TargetItemValue, TargetPixelValue,
-    TargetValue, Type, Value, VmWorkspace,
+    GeneratedEffectRef, GeneratorContext, Identifier, ParamDecl, Type, Value, VmWorkspace,
 };
 use dawn_language::effect::{
     EffectDefinitionId, EffectImplementation, EffectRef, builtin_effect_definition,
@@ -10,36 +10,18 @@ use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
 use dawn_language::values::{SampleDuration, SampleTime};
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::sync::Arc;
 
 use crate::MAX_GENERATED_EFFECTS;
-use crate::sequence::targets::{PreparedTargetCache, PreparedTargetPixel, sorted_sample_target};
+use crate::sequence::targets::{
+    PreparedTargetCache, PreparedTargetPixel, generator_context_target,
+    prepared_pixels_from_generated_target_cached, sorted_sample_target,
+};
 use crate::{PreparedEffect, PreparedEffectImplementation, PreparedElement, RenderError};
 
 const MAX_GENERATOR_DEPTH: usize = 4;
 const MAX_GENERATED_CHILDREN: usize = MAX_GENERATED_EFFECTS;
-
-#[derive(Default)]
-pub(crate) struct PrepareTargetCache {
-    pub(crate) target: PreparedTargetCache,
-    generated_targets: HashMap<usize, GeneratedTargetCacheEntry>,
-    generator_context_targets: HashMap<usize, GeneratorContextTargetCacheEntry>,
-}
-
-struct GeneratedTargetCacheEntry {
-    source: Arc<TargetItemValue>,
-    pixels: Arc<[PreparedTargetPixel]>,
-}
-
-struct GeneratorContextTargetCacheEntry {
-    source: Arc<[PreparedTargetPixel]>,
-    target: Arc<TargetValue>,
-}
-
-fn arc_key<T: ?Sized>(value: &Arc<T>) -> usize {
-    Arc::as_ptr(value).cast::<()>() as usize
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct GeneratorExpansion {
@@ -56,8 +38,8 @@ pub(crate) struct GeneratorPrepareContext<'a> {
     pub(crate) effects: &'a mut Vec<PreparedEffect>,
     pub(crate) generated_child_count: &'a mut usize,
     pub(crate) bind_cache: &'a mut DslBindCache,
-    pub(crate) sample_programs: &'a mut HashMap<EffectDefinitionId, Arc<BytecodeProgram>>,
-    pub(crate) target_cache: &'a mut PrepareTargetCache,
+    pub(crate) sample_programs: &'a mut IndexMap<EffectDefinitionId, Arc<BytecodeProgram>>,
+    pub(crate) target_cache: &'a mut PreparedTargetCache,
 }
 
 pub(crate) fn expand_generator(
@@ -139,12 +121,10 @@ fn prepare_native_child(
         child.target,
     )?;
     let target = sorted_sample_target(&target);
-    let reuse_samples = PreparedEffect::target_repeats_context(&target);
     context.effects.push(PreparedEffect {
         start_time: child.start_time,
         duration: child.duration,
-        target,
-        reuse_samples,
+        target: context.target_cache.sample_target(target)?,
         implementation: PreparedEffectImplementation::Native {
             sample: child.sample,
             params: None,
@@ -204,18 +184,16 @@ fn prepare_generated_child(
                 definition_compiled.bind_params_pairs_cached(&child.params, context.bind_cache)?;
             match definition.kind {
                 RootEffectKind::Sample => {
-                    let program = context
-                        .sample_programs
-                        .entry(effect_id.clone())
-                        .or_insert_with(|| Arc::new(definition_compiled.bytecode.clone()))
-                        .clone();
+                    let program = prepare_sample_program(
+                        context.sample_programs,
+                        effect_id,
+                        &definition_compiled.bytecode,
+                    )?;
                     let target = sorted_sample_target(&target);
-                    let reuse_samples = PreparedEffect::target_repeats_context(&target);
                     context.effects.push(PreparedEffect {
                         start_time,
                         duration,
-                        target,
-                        reuse_samples,
+                        target: context.target_cache.sample_target(target)?,
                         implementation: PreparedEffectImplementation::Dsl {
                             program,
                             bound_params,
@@ -257,12 +235,10 @@ fn prepare_generated_child(
                         params: None,
                     };
                     let target = sorted_sample_target(&target);
-                    let reuse_samples = PreparedEffect::target_repeats_context(&target);
                     context.effects.push(PreparedEffect {
                         start_time,
                         duration,
-                        target,
-                        reuse_samples,
+                        target: context.target_cache.sample_target(target)?,
                         implementation,
                         automation: None,
                     });
@@ -332,120 +308,4 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
         (Value::Enum(value), Type::Enum(options)) => options.iter().any(|option| option == value),
         _ => false,
     }
-}
-
-fn target_groups_from_pixels(pixels: &[PreparedTargetPixel]) -> Vec<Arc<TargetItemValue>> {
-    vec![Arc::new(TargetItemValue {
-        pixels: Arc::from(pixels.iter().map(target_pixel_value).collect::<Vec<_>>()),
-    })]
-}
-
-fn generator_context_target(
-    cache: &mut PrepareTargetCache,
-    prepared_target: &Arc<[PreparedTargetPixel]>,
-) -> Arc<TargetValue> {
-    let key = arc_key(prepared_target);
-    if let Some(entry) = cache.generator_context_targets.get(&key)
-        && Arc::ptr_eq(&entry.source, prepared_target)
-    {
-        return Arc::clone(&entry.target);
-    }
-    let target = Arc::new(TargetValue {
-        groups: target_groups_from_pixels(prepared_target),
-    });
-    cache.generator_context_targets.insert(
-        key,
-        GeneratorContextTargetCacheEntry {
-            source: Arc::clone(prepared_target),
-            target: Arc::clone(&target),
-        },
-    );
-    target
-}
-
-fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
-    TargetPixelValue {
-        element_index: pixel.element_index() as i32,
-        element_cell_index: pixel.element_cell_index() as i32,
-        pixel_index: pixel.pixel_index() as i32,
-        pixel_count: pixel.pixel_count() as i32,
-        pixel_fraction: pixel.pixel_fraction,
-    }
-}
-
-fn prepared_pixels_from_generated_target(
-    elements: &[PreparedElement],
-    target: Arc<TargetItemValue>,
-) -> Result<Vec<PreparedTargetPixel>, RenderError> {
-    target
-        .pixels
-        .iter()
-        .copied()
-        .map(|pixel| {
-            let element_index = usize::try_from(pixel.element_index).map_err(|_| {
-                RenderError::GeneratorPrepare {
-                    message: "generated target element index cannot be negative".to_string(),
-                }
-            })?;
-            let element_cell_index = usize::try_from(pixel.element_cell_index).map_err(|_| {
-                RenderError::GeneratorPrepare {
-                    message: "generated target pixel index cannot be negative".to_string(),
-                }
-            })?;
-            let element =
-                elements
-                    .get(element_index)
-                    .ok_or_else(|| RenderError::GeneratorPrepare {
-                        message: "generated target element index is out of bounds".to_string(),
-                    })?;
-            if element_cell_index >= element.pixel_count {
-                return Err(RenderError::GeneratorPrepare {
-                    message: "generated target pixel index is out of bounds".to_string(),
-                });
-            }
-            let pixel_index =
-                usize::try_from(pixel.pixel_index).map_err(|_| RenderError::GeneratorPrepare {
-                    message: "generated target pixel context index cannot be negative".to_string(),
-                })?;
-            let pixel_count =
-                usize::try_from(pixel.pixel_count).map_err(|_| RenderError::GeneratorPrepare {
-                    message: "generated target pixel context count cannot be negative".to_string(),
-                })?;
-            PreparedTargetPixel::try_new(
-                element_index,
-                element_cell_index,
-                pixel_index,
-                pixel_count,
-                pixel.pixel_fraction,
-            )
-            .ok_or_else(|| RenderError::GeneratorPrepare {
-                message: "generated target pixel exceeds the prepared runtime range".to_string(),
-            })
-        })
-        .collect()
-}
-
-fn prepared_pixels_from_generated_target_cached(
-    cache: &mut PrepareTargetCache,
-    elements: &[PreparedElement],
-    target: Arc<TargetItemValue>,
-) -> Result<Arc<[PreparedTargetPixel]>, RenderError> {
-    let key = arc_key(&target);
-    if let Some(entry) = cache.generated_targets.get(&key)
-        && Arc::ptr_eq(&entry.source, &target)
-    {
-        return Ok(Arc::clone(&entry.pixels));
-    }
-    let pixels = Arc::from(prepared_pixels_from_generated_target(
-        elements,
-        Arc::clone(&target),
-    )?);
-    cache.generated_targets.insert(
-        key,
-        GeneratedTargetCacheEntry {
-            source: target,
-            pixels: Arc::clone(&pixels),
-        },
-    );
-    Ok(pixels)
 }

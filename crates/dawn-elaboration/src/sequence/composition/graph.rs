@@ -1,4 +1,4 @@
-use dawn_language::dsl::{BoundParams, ParamDecl};
+use dawn_language::dsl::{BoundParams, BytecodeProgram, ParamDecl};
 use dawn_language::operator::{OperatorImplementation, validate_composition_graph};
 use dawn_language::sequence::{
     AutomationTarget, CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, Sequence,
@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::sequence::effects::parameters::prepare_operator_params;
 use crate::sequence::effects::preparation::prepare_automation;
+use crate::sequence::targets::PreparedTargetCache;
 use crate::sequence::targets::full_rig_target_pixels;
 use crate::{EffectParamTiming, PreparedAutomation, PreparedElement, RenderError};
 use dawn_language::model::DawnProject;
@@ -47,13 +48,17 @@ pub(crate) struct PrepareGraphContext<'a> {
     pub(crate) project: &'a DawnProject,
     pub(crate) sequence: &'a Sequence,
     pub(crate) elements: &'a [PreparedElement],
+    pub(crate) programs: &'a mut Vec<BytecodeProgram>,
+    pub(crate) targets: &'a mut PreparedTargetCache,
 }
 
 pub(crate) fn prepare_signal_graph(
     context: PrepareGraphContext<'_>,
     graph: &SequenceCompositionGraph,
 ) -> Result<PreparedSignalGraph, RenderError> {
-    let full_target = Arc::from(full_rig_target_pixels(context.elements)?);
+    let full_target = context
+        .targets
+        .sample_target(Arc::from(full_rig_target_pixels(context.elements)?))?;
     validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
         RenderError::BadGraph {
             message: error.message,
@@ -76,6 +81,7 @@ pub(crate) fn prepare_signal_graph(
     }
 
     let mut prepared_nodes = Vec::<PreparedSignalNode>::new();
+    let mut operator_programs = Vec::new();
     let mut prepared_index_by_node = vec![usize::MAX; node_ids.len()];
     for node_index in &node_order {
         let node_id = &node_ids[*node_index];
@@ -156,7 +162,26 @@ pub(crate) fn prepare_signal_graph(
                 )?;
                 let implementation = match &definition.implementation {
                     OperatorImplementation::Dsl(compiled) => {
-                        PreparedOperator::Dsl(Box::new(compiled.bytecode.clone()))
+                        let program = match operator_programs
+                            .iter()
+                            .find(|(operator, _)| operator == &operator_node.operator)
+                        {
+                            Some((_, index)) => *index,
+                            None => {
+                                let index =
+                                    u32::try_from(context.programs.len()).map_err(|_| {
+                                        RenderError::BadGraph {
+                                            message:
+                                                "prepared sequence has too many bytecode programs"
+                                                    .to_string(),
+                                        }
+                                    })?;
+                                context.programs.push(compiled.bytecode.clone());
+                                operator_programs.push((operator_node.operator.clone(), index));
+                                index
+                            }
+                        };
+                        PreparedOperator::Dsl(program)
                     }
                     OperatorImplementation::Native(builtin) => PreparedOperator::Native(*builtin),
                 };

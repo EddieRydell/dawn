@@ -1,3 +1,4 @@
+use dawn_language::dsl::{TargetItemValue, TargetPixelValue, TargetValue};
 use dawn_language::effect::EffectScope;
 use dawn_language::element::ElementSelection;
 use dawn_language::element::{ElementCellRange, ElementNodeId};
@@ -66,6 +67,9 @@ pub(crate) struct PreparedTargetSelection {
 #[derive(Default)]
 pub(crate) struct PreparedTargetCache {
     prepared_targets: HashMap<PreparedTargetCacheKey, Arc<[PreparedTargetPixel]>>,
+    pub(crate) sample_targets: Vec<Arc<[PreparedTargetPixel]>>,
+    generated_targets: HashMap<usize, GeneratedTargetCacheEntry>,
+    generator_context_targets: HashMap<usize, GeneratorContextTargetCacheEntry>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -276,6 +280,166 @@ pub(crate) fn generator_expansion_targets(
 
             targets
         }
+    }
+}
+
+struct GeneratedTargetCacheEntry {
+    source: Arc<TargetItemValue>,
+    pixels: Arc<[PreparedTargetPixel]>,
+}
+
+struct GeneratorContextTargetCacheEntry {
+    source: Arc<[PreparedTargetPixel]>,
+    target: Arc<TargetValue>,
+}
+
+fn arc_key<T: ?Sized>(value: &Arc<T>) -> usize {
+    Arc::as_ptr(value).cast::<()>() as usize
+}
+
+fn target_groups_from_pixels(pixels: &[PreparedTargetPixel]) -> Vec<Arc<TargetItemValue>> {
+    vec![Arc::new(TargetItemValue {
+        pixels: Arc::from(pixels.iter().map(target_pixel_value).collect::<Vec<_>>()),
+    })]
+}
+
+pub(crate) fn generator_context_target(
+    cache: &mut PreparedTargetCache,
+    prepared_target: &Arc<[PreparedTargetPixel]>,
+) -> Arc<TargetValue> {
+    let key = arc_key(prepared_target);
+    if let Some(entry) = cache.generator_context_targets.get(&key)
+        && Arc::ptr_eq(&entry.source, prepared_target)
+    {
+        return Arc::clone(&entry.target);
+    }
+    let target = Arc::new(TargetValue {
+        groups: target_groups_from_pixels(prepared_target),
+    });
+    cache.generator_context_targets.insert(
+        key,
+        GeneratorContextTargetCacheEntry {
+            source: Arc::clone(prepared_target),
+            target: Arc::clone(&target),
+        },
+    );
+    target
+}
+
+fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
+    TargetPixelValue {
+        element_index: pixel.element_index() as i32,
+        element_cell_index: pixel.element_cell_index() as i32,
+        pixel_index: pixel.pixel_index() as i32,
+        pixel_count: pixel.pixel_count() as i32,
+        pixel_fraction: pixel.pixel_fraction,
+    }
+}
+
+fn prepared_pixels_from_generated_target(
+    elements: &[PreparedElement],
+    target: Arc<TargetItemValue>,
+) -> Result<Vec<PreparedTargetPixel>, RenderError> {
+    target
+        .pixels
+        .iter()
+        .copied()
+        .map(|pixel| {
+            let element_index = usize::try_from(pixel.element_index).map_err(|_| {
+                RenderError::GeneratorPrepare {
+                    message: "generated target element index cannot be negative".to_string(),
+                }
+            })?;
+            let element_cell_index = usize::try_from(pixel.element_cell_index).map_err(|_| {
+                RenderError::GeneratorPrepare {
+                    message: "generated target pixel index cannot be negative".to_string(),
+                }
+            })?;
+            let element =
+                elements
+                    .get(element_index)
+                    .ok_or_else(|| RenderError::GeneratorPrepare {
+                        message: "generated target element index is out of bounds".to_string(),
+                    })?;
+            if element_cell_index >= element.pixel_count {
+                return Err(RenderError::GeneratorPrepare {
+                    message: "generated target pixel index is out of bounds".to_string(),
+                });
+            }
+            let pixel_index =
+                usize::try_from(pixel.pixel_index).map_err(|_| RenderError::GeneratorPrepare {
+                    message: "generated target pixel context index cannot be negative".to_string(),
+                })?;
+            let pixel_count =
+                usize::try_from(pixel.pixel_count).map_err(|_| RenderError::GeneratorPrepare {
+                    message: "generated target pixel context count cannot be negative".to_string(),
+                })?;
+            PreparedTargetPixel::try_new(
+                element_index,
+                element_cell_index,
+                pixel_index,
+                pixel_count,
+                pixel.pixel_fraction,
+            )
+            .ok_or_else(|| RenderError::GeneratorPrepare {
+                message: "generated target pixel exceeds the prepared runtime range".to_string(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn prepared_pixels_from_generated_target_cached(
+    cache: &mut PreparedTargetCache,
+    elements: &[PreparedElement],
+    target: Arc<TargetItemValue>,
+) -> Result<Arc<[PreparedTargetPixel]>, RenderError> {
+    let key = arc_key(&target);
+    if let Some(entry) = cache.generated_targets.get(&key)
+        && Arc::ptr_eq(&entry.source, &target)
+    {
+        return Ok(Arc::clone(&entry.pixels));
+    }
+    let pixels = Arc::from(prepared_pixels_from_generated_target(
+        elements,
+        Arc::clone(&target),
+    )?);
+    cache.generated_targets.insert(
+        key,
+        GeneratedTargetCacheEntry {
+            source: target,
+            pixels: Arc::clone(&pixels),
+        },
+    );
+    Ok(pixels)
+}
+
+impl PreparedTargetCache {
+    pub(crate) fn sample_target(
+        &mut self,
+        pixels: Arc<[PreparedTargetPixel]>,
+    ) -> Result<u32, RenderError> {
+        let key = |pixel: &PreparedTargetPixel| {
+            (
+                pixel.element_index,
+                pixel.element_cell_index,
+                pixel.pixel_index,
+                pixel.pixel_count,
+                pixel.pixel_fraction.to_bits(),
+            )
+        };
+        // Intern exact contexts, including local indices and float bits, not just output addresses.
+        let index = self
+            .sample_targets
+            .iter()
+            .position(|target| {
+                Arc::ptr_eq(target, &pixels) || target.iter().map(key).eq(pixels.iter().map(key))
+            })
+            .unwrap_or(self.sample_targets.len());
+        let id = u32::try_from(index).map_err(|_| RenderError::BadTarget)?;
+        if index == self.sample_targets.len() {
+            self.sample_targets.push(pixels);
+        }
+        Ok(id)
     }
 }
 
