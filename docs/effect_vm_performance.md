@@ -1,5 +1,8 @@
 # Effect VM Performance
 
+Current embedded optimization work and measurement limitations are recorded in
+the [September 4 checkpoint](runtime_optimization_2026-09-04.md).
+
 Dawn uses Criterion for Effect DSL VM and real-project render benchmarks. Timing deltas are
 advisory; benchmark assertions fail only when the VM or renderer changes output.
 
@@ -828,3 +831,12 @@ versus new 13.854 ms (+0.80%). Both comparisons remain within the noise
 threshold. The old binary's own upward shift supports temporal measurement
 drift rather than attributing the original 3-5% shift to this unused dependency;
 it does not establish the exact cause of the machine's timing variation.
+
+## First classic ESP32 hardware baseline (2026-09-04)
+
+The runtime has now been built and run on the user's ESP32-D0WD-V3 revision
+3.1 at 240 MHz. See [the on-board profiling report](esp32_profiling.md) for
+exact workloads, frame rates, memory, checksum validation, build sensitivity
+and limitations. These hardware results replace speculative desktop-to-ESP32
+throughput estimates; they do not indicate that the broader runtime overhaul
+or Wi-Fi/physical-output integration is complete.

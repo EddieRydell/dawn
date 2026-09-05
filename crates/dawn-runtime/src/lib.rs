@@ -13,7 +13,7 @@ pub mod native_effect;
 pub mod patch;
 pub mod sampling;
 pub mod sequence;
-pub mod show;
+pub mod signal;
 pub mod values;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

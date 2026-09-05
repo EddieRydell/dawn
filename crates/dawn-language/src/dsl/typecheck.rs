@@ -167,12 +167,14 @@ impl Checker {
                 ),
             );
         }
-        if type_contains_signal(&param.ty)
-            || matches!(
-                param.ty,
-                Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem
-            )
-        {
+        let mut item_type = &param.ty;
+        while let Type::Array(inner) = item_type {
+            item_type = inner;
+        }
+        if matches!(
+            item_type,
+            Type::Signal | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem
+        ) {
             self.error(
                 TextSpan { start: 0, end: 0 },
                 format!(

@@ -115,6 +115,15 @@ pub fn deterministic_random(values: impl Iterator<Item = f32>) -> f32 {
 
 #[inline(always)]
 pub fn deterministic_random_seed(seed: f32) -> f32 {
-    let value = libm::sinf(seed) * 43_758.547;
-    (value - libm::truncf(value)).abs()
+    // MurmurHash3's 32-bit avalanche finalizer. Hash the seed representation,
+    // not its sine: this is stateless, allocation-free and uses no doubles.
+    // Normalize signed zero so numerically equal zero seeds agree.
+    let mut value = if seed == 0.0 { 0 } else { seed.to_bits() };
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x85eb_ca6b);
+    value ^= value >> 13;
+    value = value.wrapping_mul(0xc2b2_ae35);
+    value ^= value >> 16;
+    // The upper 24 bits convert exactly to f32 and cannot round up to 1.
+    (value >> 8) as f32 * (1.0 / 16_777_216.0)
 }

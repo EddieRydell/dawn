@@ -7,6 +7,14 @@ use dawn_language::sequence::{AutomationClip, AutomationClipId, AutomationMappin
 use dawn_language::values::{Curve, CurvePoint, DawnDuration, DawnTime};
 use indexmap::IndexMap;
 
+#[allow(dead_code)]
+#[path = "../../../firmware/dawn-profile/src/workload.rs"]
+mod workload;
+
+#[allow(dead_code)]
+#[path = "../benches/fixtures/mod.rs"]
+mod fixtures;
+
 struct CountingAllocator;
 
 thread_local! {
@@ -61,6 +69,44 @@ unsafe impl GlobalAlloc for CountingAllocator {
             record_memory_change(size, layout.size());
         }
         pointer
+    }
+}
+
+#[test]
+fn borrowed_sequence_output_seeks_and_clears_without_allocating() {
+    use dawn_runtime::values::{Color, SampleTime};
+    let (effect, params) = fixtures::uniform_resources();
+    let show = workload::show(200, effect.bytecode, params);
+    let sequence = &show.signals;
+    let mut workspace = sequence.workspace();
+    let expected = sequence
+        .evaluate(workload::time(4), &mut sequence.workspace())
+        .unwrap()
+        .to_vec();
+    let black = Color {
+        red: 0,
+        green: 0,
+        blue: 0,
+    };
+    assert!(expected.iter().any(|&color| color != black));
+    for time in [
+        workload::time(4),
+        SampleTime::from_ticks(sequence.duration.ticks()),
+        SampleTime::from_ticks(u32::MAX),
+        workload::time(4),
+    ] {
+        ALLOCATIONS.set(0);
+        COUNTING.set(true);
+        let result = sequence.evaluate(time, &mut workspace);
+        COUNTING.set(false);
+        let colors = result.unwrap();
+        assert_eq!(colors.len(), 200);
+        assert_eq!(ALLOCATIONS.get(), 0);
+        if time.ticks() >= sequence.duration.ticks() {
+            assert!(colors.iter().all(|&color| color == black));
+        } else {
+            assert_eq!(colors, expected);
+        }
     }
 }
 
@@ -182,7 +228,6 @@ fn warmed_curve_enum_automation_and_constant_arrays_do_not_allocate() {
 }
 
 #[test]
-#[ignore = "MakeArray still allocates; enable when calculated-array storage is preallocated"]
 fn calculated_arrays_do_not_allocate_after_warmup() {
     let effect =
         dawn_language::dsl::compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
@@ -254,4 +299,357 @@ fn calculated_arrays_do_not_allocate_after_warmup() {
         [0, 0, 0],
         "allocation calls for two samples at 2, 64, and 9999 loop iterations; peak newly allocated payload bytes: {peaks:?}"
     );
+}
+
+#[test]
+fn prepared_calculated_arrays_do_not_allocate_on_the_first_frame() {
+    let effect =
+        dawn_language::dsl::compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
+            .unwrap()
+            .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let show = workload::layered_show(200, effect.bytecode, params, 4);
+    let mut workspace = show.workspace();
+    let mut buffers = [vec![0; 600]];
+    ALLOCATIONS.set(0);
+    COUNTING.set(true);
+    let result = [0, 31, 4, 0]
+        .into_iter()
+        .try_for_each(|frame| show.evaluate(workload::time(frame), &mut buffers, &mut workspace));
+    COUNTING.set(false);
+    result.unwrap();
+    assert_eq!(ALLOCATIONS.get(), 0, "prepared array evaluation allocated");
+}
+
+#[test]
+fn enum_local_assignment_and_constant_loads_do_not_allocate() {
+    let effect = dawn_language::dsl::compile_effects(
+        "effect EnumLocals {
+        param enum mode { short, much_longer_option } = short;
+        color sample() {
+            if (progress() > 0.5) { mode = much_longer_option; }
+            if (mode == much_longer_option) { return #ffffff; }
+            return #000000;
+        }
+    }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let mut workspace = dawn_language::dsl::VmWorkspace::default();
+    let mut context = dawn_language::dsl::RunContext {
+        progress: 0.0,
+        time: dawn_language::values::SampleDuration::from_ticks(0),
+        duration: dawn_language::values::SampleDuration::from_ticks(1_000_000),
+        pixel_index: 0,
+        pixel_count: 1,
+        pixel_fraction: 0.0,
+    };
+    effect
+        .sample_bound(&params, &context, &mut workspace)
+        .unwrap();
+    ALLOCATIONS.set(0);
+    COUNTING.set(true);
+    let result = [1.0, 0.0, 1.0].into_iter().try_for_each(|progress| {
+        context.progress = progress;
+        effect
+            .sample_bound(&params, &context, &mut workspace)
+            .map(|_| ())
+    });
+    COUNTING.set(false);
+    result.unwrap();
+    assert_eq!(ALLOCATIONS.get(), 0, "enum copies allocated");
+}
+
+#[test]
+fn many_signal_times_use_fixed_storage_from_the_first_frame() {
+    let effect = dawn_language::dsl::compile_effects(
+        "effect Ramp { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let expected = workload::show(2, effect.bytecode.clone(), params.clone());
+    let mut show = workload::show(2, effect.bytecode, params);
+    let operator = dawn_language::dsl::compile_operators(
+        "operator ManyTimes { input Signal source; color sample() {
+            color saved = source.at(seconds());
+            for (int i = 0; i < 1100; i = i + 1) { color sampled = source.at(i * 0.001); }
+            return max(source.at(seconds() * 0.5), source.at(seconds()));
+        } }",
+    )
+    .unwrap()
+    .remove(0);
+    workload::apply_operator(&mut show, operator.bytecode, true);
+    let mut workspace = show.workspace();
+    let mut expected_workspace = expected.workspace();
+    let mut actual = [vec![0; 6]];
+    let mut expected_bytes = [vec![0; 6]];
+    for frame in [0, 31, 4, 0] {
+        expected
+            .evaluate(
+                workload::time(frame),
+                &mut expected_bytes,
+                &mut expected_workspace,
+            )
+            .unwrap();
+        ALLOCATIONS.set(0);
+        COUNTING.set(true);
+        let result = show.evaluate(workload::time(frame), &mut actual, &mut workspace);
+        COUNTING.set(false);
+        result.unwrap();
+        assert_eq!(ALLOCATIONS.get(), 0, "signal cache allocated");
+        assert_eq!(actual, expected_bytes);
+    }
+}
+
+#[test]
+fn unautomated_effects_do_not_expand_the_evaluation_workspace() {
+    let (effect, params) = fixtures::uniform_resources();
+    let mut expected_bytes = None;
+    for count in [1, 16, 128] {
+        let mut show = workload::show(200, effect.bytecode.clone(), params.clone());
+        show.signals.effects = vec![show.signals.effects[0].clone(); count].into();
+        show.signals.effects_by_layer[0] = (0..count).collect();
+        ALLOCATIONS.set(0);
+        LIVE_BYTES.set(0);
+        PEAK_BYTES.set(0);
+        COUNTING.set(true);
+        let mut workspace = show.workspace();
+        COUNTING.set(false);
+        println!(
+            "effects={count} workspace_bytes={} workspace_allocations={}",
+            LIVE_BYTES.get(),
+            ALLOCATIONS.get()
+        );
+        if let Some(expected) = expected_bytes {
+            assert_eq!(LIVE_BYTES.get(), expected);
+        } else {
+            expected_bytes = Some(LIVE_BYTES.get());
+        }
+        let mut output = [vec![0; 600]];
+        ALLOCATIONS.set(0);
+        COUNTING.set(true);
+        let result = show.evaluate(workload::time(0), &mut output, &mut workspace);
+        COUNTING.set(false);
+        result.unwrap();
+        assert_eq!(ALLOCATIONS.get(), 0);
+    }
+}
+
+#[test]
+fn hoisted_resources_and_curve_automation_do_not_allocate_from_the_first_frame() {
+    use dawn_runtime::signal::{PreparedAutomation, PreparedEffectAutomation};
+    use dawn_runtime::values::{SampleDuration, SampleTime};
+    let (effect, params) = fixtures::uniform_resources();
+    for recursive in [false, true] {
+        let mut show = workload::show(200, effect.bytecode.clone(), params.clone());
+        show.signals.effects[0].automation = Some(Box::new(PreparedEffectAutomation {
+            workspace_slot: 0,
+            bindings: vec![PreparedAutomation {
+                start: SampleTime::from_ticks(0),
+                duration: SampleDuration::from_ticks(8_000_000),
+                curve: params.curve(0).unwrap(),
+                mapping: dawn_runtime::automation::AutomationMapping::Curve { min: 0.0, max: 1.0 },
+                param_index: 0,
+            }]
+            .into(),
+        }));
+        if recursive {
+            let operator = dawn_language::dsl::compile_operators(workload::IDENTITY_SOURCE)
+                .unwrap()
+                .remove(0);
+            workload::apply_operator(&mut show, operator.bytecode, true);
+        }
+        let mut workspace = show.workspace();
+        let mut output = [vec![0; 600]];
+        let mut expected = [vec![0; 600]];
+        for frame in [0, 31, 4, 0] {
+            show.evaluate(workload::time(frame), &mut expected, &mut show.workspace())
+                .unwrap();
+            ALLOCATIONS.set(0);
+            COUNTING.set(true);
+            let result = show.evaluate(workload::time(frame), &mut output, &mut workspace);
+            COUNTING.set(false);
+            result.unwrap();
+            assert_eq!(ALLOCATIONS.get(), 0, "resource frame allocated");
+            assert_eq!(output, expected);
+        }
+    }
+}
+
+#[test]
+fn native_curve_automation_releases_previous_sample_before_update() {
+    let effect = dawn_language::dsl::compile_effects(
+        "effect Reference { color sample() { return rgb(0.0, 0.0, 0.0); } }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let mut show = workload::show(2, effect.bytecode, params);
+    workload::apply_native_automation(&mut show, false);
+    let reference = dawn_language::dsl::compile_effects(
+        "effect Reference { param gradient ramp; param curve shape; color sample() { return ramp[progress()] * shape[progress()]; } }",
+    ).unwrap().remove(0);
+    let dawn_runtime::signal::PreparedEffectImplementation::Native {
+        params: Some((_, params)),
+        ..
+    } = &show.signals.effects[0].implementation
+    else {
+        panic!("expected native parameters")
+    };
+    let mut reference_show = workload::show(2, reference.bytecode, params.clone());
+    workload::apply_native_automation(&mut reference_show, false);
+    reference_show.signals.effects[0].implementation =
+        dawn_runtime::signal::PreparedEffectImplementation::Dsl {
+            program: 0,
+            bound_params: params.clone(),
+        };
+    let mut workspace = show.workspace();
+    let mut actual = [vec![0; 6]];
+    let mut expected = [vec![0; 6]];
+    let mut counts = [0; 4];
+    for (index, frame) in [0, 31, 4, 0].into_iter().enumerate() {
+        ALLOCATIONS.set(0);
+        COUNTING.set(true);
+        let result = show.evaluate(workload::time(frame), &mut actual, &mut workspace);
+        COUNTING.set(false);
+        counts[index] = ALLOCATIONS.get();
+        result.unwrap();
+        show.evaluate(workload::time(frame), &mut expected, &mut show.workspace())
+            .unwrap();
+        assert_eq!(actual, expected);
+        reference_show
+            .evaluate(
+                workload::time(frame),
+                &mut expected,
+                &mut reference_show.workspace(),
+            )
+            .unwrap();
+        assert_eq!(actual, expected, "native pulse differs from DSL");
+    }
+    assert_eq!(counts, [0; 4]);
+}
+
+#[test]
+fn native_signal_nodes_do_not_displace_upstream_vm_storage() {
+    let effect = dawn_language::dsl::compile_effects(
+        "effect Ramp { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let reference = workload::show(2, effect.bytecode.clone(), params.clone());
+    let mut show = workload::show(2, effect.bytecode, params);
+    let operator = dawn_language::dsl::compile_operators(workload::IDENTITY_SOURCE)
+        .unwrap()
+        .remove(0);
+    workload::apply_operator(&mut show, operator.bytecode, true);
+    workload::insert_native_invert(&mut show);
+    let mut workspace = show.workspace();
+    let mut reference_workspace = reference.workspace();
+    let mut actual = [vec![0; 6]];
+    let mut expected = [vec![0; 6]];
+    for frame in [0, 31, 4, 0] {
+        reference
+            .evaluate(
+                workload::time(frame),
+                &mut expected,
+                &mut reference_workspace,
+            )
+            .unwrap();
+        for value in &mut expected[0] {
+            *value = 255 - *value;
+        }
+        ALLOCATIONS.set(0);
+        COUNTING.set(true);
+        let result = show.evaluate(workload::time(frame), &mut actual, &mut workspace);
+        COUNTING.set(false);
+        result.unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(ALLOCATIONS.get(), 0, "native node displaced VM storage");
+    }
+}
+
+#[test]
+fn empty_curve_automation_reserves_its_fallback_point() {
+    use dawn_runtime::signal::{PreparedAutomation, PreparedEffectAutomation};
+    use dawn_runtime::values::{Curve, SampleDuration, SampleTime};
+    let effect = dawn_language::dsl::compile_effects("effect Empty { param curve shape; color sample() { return rgb(shape[progress()], 0.0, 0.0); } }").unwrap().remove(0);
+    let params = effect
+        .bind_params(&IndexMap::from([(
+            dawn_language::dsl::Identifier::new("shape".into()).unwrap(),
+            dawn_language::dsl::Value::Curve(Curve { points: vec![] }.into()),
+        )]))
+        .unwrap();
+    let mut show = workload::show(2, effect.bytecode, params);
+    show.signals.effects[0].automation = Some(Box::new(PreparedEffectAutomation {
+        workspace_slot: 0,
+        bindings: vec![PreparedAutomation {
+            start: SampleTime::from_ticks(0),
+            duration: SampleDuration::from_ticks(8_000_000),
+            curve: Curve { points: vec![] }.into(),
+            mapping: dawn_runtime::automation::AutomationMapping::Curve { min: 0.5, max: 1.0 },
+            param_index: 0,
+        }]
+        .into(),
+    }));
+    let mut workspace = show.workspace();
+    let mut buffers = [vec![0; 6]];
+    ALLOCATIONS.set(0);
+    COUNTING.set(true);
+    let result = show.evaluate(workload::time(0), &mut buffers, &mut workspace);
+    COUNTING.set(false);
+    result.unwrap();
+    assert!(buffers[0].iter().any(|&value| value != 0));
+    assert_eq!(ALLOCATIONS.get(), 0, "empty automation window allocated");
+}
+
+#[test]
+fn preview_cell_reads_do_not_allocate_or_copy_element_buffers() {
+    use dawn_runtime::element::{ElementLayout, ElementNodeId, RenderedElementState};
+    use dawn_runtime::values::Color;
+    let color = Color {
+        red: 128,
+        green: 64,
+        blue: 32,
+    };
+    let colored = RenderedElementState::Color {
+        node: ElementNodeId(0),
+        cells: vec![color; 200],
+    };
+    let scalar = RenderedElementState::Scalar {
+        node: ElementNodeId(1),
+        cells: vec![0.5; 200],
+    };
+    let indexed = ElementLayout::Indexed(200).create(ElementNodeId(2));
+    let fixture = ElementLayout::Fixture(0).create(ElementNodeId(3));
+    ALLOCATIONS.set(0);
+    COUNTING.set(true);
+    for cell in 0..200 {
+        assert_eq!(colored.preview_color(cell), Some(color));
+        assert_eq!(
+            scalar.preview_color(cell),
+            Some(Color {
+                red: 128,
+                green: 128,
+                blue: 128
+            })
+        );
+        assert_eq!(
+            indexed.preview_color(cell),
+            Some(Color {
+                red: 0,
+                green: 0,
+                blue: 0
+            })
+        );
+    }
+    assert!(colored.preview_color(200).is_none());
+    assert!(scalar.preview_color(200).is_none());
+    assert!(indexed.preview_color(200).is_none());
+    assert!(fixture.preview_color(0).is_some());
+    assert!(fixture.preview_color(1).is_none());
+    COUNTING.set(false);
+    assert_eq!(ALLOCATIONS.get(), 0);
 }

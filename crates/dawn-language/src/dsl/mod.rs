@@ -1,8 +1,10 @@
+mod array_lowering;
 mod ast;
 mod bytecode;
 mod checked;
 mod compiler;
 mod diagnostic;
+mod optimize;
 mod parser;
 mod typecheck;
 
@@ -34,7 +36,7 @@ pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnost
         )]);
     }
     let module = check_module(module)?;
-    Ok(compile_checked_effects(module))
+    compile_checked_effects(module).map_err(|error| vec![error])
 }
 
 pub fn compile_operators(source: &str) -> Result<Vec<CompiledOperator>, Vec<Diagnostic>> {
@@ -76,7 +78,7 @@ pub fn compile_operators(source: &str) -> Result<Vec<CompiledOperator>, Vec<Diag
         )]);
     }
     let module = check_module(module)?;
-    Ok(compile_checked_operators(module))
+    compile_checked_operators(module).map_err(|error| vec![error])
 }
 
 pub fn hash_compiled_effect<H: Hasher>(effect: &CompiledEffect, state: &mut H) {
@@ -93,6 +95,10 @@ fn hash_bytecode<H: Hasher>(bytecode: &BytecodeProgram, state: &mut H) {
     hash_values(&bytecode.constants, state);
     bytecode.value_operands.hash(state);
     bytecode.layout.hash(state);
+    bytecode.uses_pixel_context.hash(state);
+    bytecode.pixel_entry.hash(state);
+    bytecode.array_capacity.hash(state);
+    bytecode.array_width.hash(state);
 }
 
 fn hash_param_decls<H: Hasher>(params: &[ParamDecl], state: &mut H) {

@@ -1,0 +1,35 @@
+[package]
+name = "dawn-profile"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+pc-profile = ["esp-hal/unstable"]
+
+[[bin]]
+name = "pc_profile"
+path = "src/bin/pc_profile.rs"
+required-features = ["pc-profile"]
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+dawn-runtime = { path = "../../crates/dawn-runtime", default-features = false }
+esp-hal = { version = "~1.1.0", features = ["esp32"] }
+esp-alloc = { version = "0.10.0", features = ["esp32", "alloc-hooks"] }
+esp-println = { version = "0.17.0", default-features = false, features = ["esp32", "uart", "critical-section"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32"] }
+
+[build-dependencies]
+dawn-language = { path = "../../crates/dawn-language" }
+dawn-runtime = { path = "../../crates/dawn-runtime" }
+indexmap = "2.14.0"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+debug = 2
+panic = "abort"

@@ -8,20 +8,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-#[derive(Debug, Eq, PartialEq, Hash)]
-pub struct Identifier(String);
-
-impl Clone for Identifier {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-
-    #[inline]
-    fn clone_from(&mut self, source: &Self) {
-        self.0.clone_from(&source.0);
-    }
-}
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct Identifier(Arc<str>);
 
 impl Identifier {
     pub fn new(value: String) -> Result<Self, IdentifierError> {
@@ -42,17 +30,11 @@ impl Identifier {
             return Err(IdentifierError::InvalidCharacter);
         }
 
-        Ok(Self(value))
+        Ok(Self(value.into()))
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    pub(crate) fn reserve_len(&mut self, len: usize) {
-        if self.0.capacity() < len {
-            self.0.reserve(len - self.0.len());
-        }
     }
 }
 

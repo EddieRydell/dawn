@@ -73,12 +73,13 @@ impl RenderedElementState {
         }
     }
 
-    pub fn preview_colors(&self) -> Vec<Color> {
+    /// Read one preview cell without allocating or copying the element buffer.
+    pub fn preview_color(&self, cell: usize) -> Option<Color> {
         match self {
-            Self::Color { cells, .. } => cells.clone(),
-            Self::Fixture { color, .. } => vec![*color],
-            Self::Scalar { cells, .. } => cells.iter().map(|level| grayscale(*level)).collect(),
-            Self::Indexed { cells, .. } => vec![black(); cells.len()],
+            Self::Color { cells, .. } => cells.get(cell).copied(),
+            Self::Fixture { color, .. } => (cell == 0).then_some(*color),
+            Self::Scalar { cells, .. } => cells.get(cell).copied().map(grayscale),
+            Self::Indexed { cells, .. } => cells.get(cell).map(|_| black()),
         }
     }
 }

@@ -14,41 +14,45 @@ use super::{CompiledEffect, CompiledOperator, EffectKind};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
-pub(crate) fn compile_checked_effects(module: CheckedModule) -> Vec<CompiledEffect> {
+pub(crate) fn compile_checked_effects(
+    module: CheckedModule,
+) -> Result<Vec<CompiledEffect>, super::Diagnostic> {
     module.effects.into_iter().map(compile_effect).collect()
 }
 
-pub(crate) fn compile_checked_operators(module: CheckedModule) -> Vec<CompiledOperator> {
+pub(crate) fn compile_checked_operators(
+    module: CheckedModule,
+) -> Result<Vec<CompiledOperator>, super::Diagnostic> {
     module.operators.into_iter().map(compile_operator).collect()
 }
 
-fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
+fn compile_effect(effect: CheckedEffectDecl) -> Result<CompiledEffect, super::Diagnostic> {
     let kind = if effect.entrypoint.name.as_str() == "generate" {
         EffectKind::Generator
     } else {
         EffectKind::Sample
     };
     let mut compiler = FunctionCompiler::new(&effect.params, kind);
-    let bytecode = compiler.compile(effect.body);
-    CompiledEffect {
+    let bytecode = compiler.compile(effect.body)?;
+    Ok(CompiledEffect {
         name: effect.name,
         params: effect.params,
         kind,
         bytecode,
         emit_fields: compiler.emit_fields.into_boxed_slice(),
         generated_effects: compiler.generated_effects.into_boxed_slice(),
-    }
+    })
 }
 
-fn compile_operator(operator: CheckedOperatorDecl) -> CompiledOperator {
-    let bytecode =
-        FunctionCompiler::new_operator(&operator.params, &operator.inputs).compile(operator.body);
-    CompiledOperator {
+fn compile_operator(operator: CheckedOperatorDecl) -> Result<CompiledOperator, super::Diagnostic> {
+    let bytecode = FunctionCompiler::new_operator(&operator.params, &operator.inputs)
+        .compile(operator.body)?;
+    Ok(CompiledOperator {
         name: operator.name,
         inputs: operator.inputs,
         params: operator.params,
         bytecode,
-    }
+    })
 }
 
 struct FunctionCompiler {
@@ -65,6 +69,17 @@ struct FunctionCompiler {
     assigned_names: HashSet<Identifier>,
     context_reads: HashMap<ContextRead, ValueSlot>,
     param_reads: HashMap<ParamId, ValueSlot>,
+    array_roots: Vec<u32>,
+    array_widths: Vec<u32>,
+}
+
+fn array_depth(mut ty: &Type) -> usize {
+    let mut depth = 0;
+    while let Type::Array(item) = ty {
+        depth += 1;
+        ty = item;
+    }
+    depth
 }
 
 fn constant_array_item(expr: &CheckedExpr) -> Option<Value> {
@@ -211,6 +226,8 @@ impl FunctionCompiler {
             assigned_names: HashSet::new(),
             context_reads: HashMap::new(),
             param_reads: HashMap::new(),
+            array_roots: Vec::new(),
+            array_widths: Vec::new(),
         }
     }
 
@@ -227,8 +244,24 @@ impl FunctionCompiler {
         compiler
     }
 
-    fn compile(&mut self, block: CheckedBlock) -> BytecodeProgram {
+    fn compile(&mut self, block: CheckedBlock) -> Result<BytecodeProgram, super::Diagnostic> {
         collect_assigned_names(&block, &mut self.assigned_names);
+        // Parameters are immutable inputs. Assignment uses an ordinary local,
+        // initialized once on entry, including assignments inside branches/loops.
+        let assigned_params = self.scopes[0]
+            .iter()
+            .filter_map(|(name, binding)| match binding {
+                Binding::Param(index) if self.assigned_names.contains(name) => {
+                    Some((name.clone(), *index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (name, index) in assigned_params {
+            let slot = self.allocate_slot(&self.param_types[index].clone());
+            self.emit_load_param(slot, index);
+            self.scopes[0].insert(name, Binding::Local(slot));
+        }
         self.compile_block(block);
         if self.kind == EffectKind::Generator {
             let void = self.allocate_slot(&Type::Void);
@@ -239,12 +272,54 @@ impl FunctionCompiler {
             });
             self.emit(Instruction::Return(void));
         }
-        BytecodeProgram {
+        super::array_lowering::lower_arrays(
+            &mut self.instructions,
+            &mut self.constants,
+            &mut self.value_operands,
+        );
+        super::optimize::cleanup(
+            &mut self.instructions,
+            &mut self.constants,
+            &mut self.value_operands,
+            &mut self.emit_fields,
+            &mut self.layout,
+        );
+        let (array_capacity, array_width) = self.array_storage_bound().ok_or_else(|| {
+            super::Diagnostic::new(
+                super::lexer::TextSpan { start: 0, end: 0 },
+                "calculated array storage exceeds 32-bit addressable capacity",
+            )
+        })?;
+        let pixel_entry = if self.kind == EffectKind::Sample {
+            super::optimize::hoist_uniform(
+                &mut self.instructions,
+                &mut self.value_operands,
+                &mut self.emit_fields,
+            )
+        } else {
+            0
+        };
+        Ok(BytecodeProgram {
+            pixel_entry,
+            array_capacity,
+            array_width,
+            uses_pixel_context: self.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::ContextRead {
+                        read: ContextRead::PixelIndex
+                            | ContextRead::PixelCount
+                            | ContextRead::PixelFraction,
+                        ..
+                    } | Instruction::SectionPosition { .. }
+                        | Instruction::SignalSample { .. }
+                )
+            }),
             instructions: std::mem::take(&mut self.instructions).into_boxed_slice(),
             constants: std::mem::take(&mut self.constants).into_boxed_slice(),
             value_operands: std::mem::take(&mut self.value_operands).into_boxed_slice(),
             layout: self.layout,
-        }
+        })
     }
 
     fn compile_block(&mut self, block: CheckedBlock) {
@@ -290,14 +365,6 @@ impl FunctionCompiler {
             CheckedStmt::Assign { name, value } => {
                 let value = self.compile_expr(value);
                 match self.lookup(&name) {
-                    Some(Binding::Param(slot)) => {
-                        let ty = self.param_types[slot].clone();
-                        let value = self.coerce_slot(value, &ty);
-                        self.emit(Instruction::StoreParam {
-                            param: slot,
-                            src: value,
-                        });
-                    }
                     Some(Binding::Local(slot)) => {
                         let value = self.coerce_to_slot(value, slot);
                         self.emit(Instruction::Move {
@@ -305,6 +372,7 @@ impl FunctionCompiler {
                             src: value,
                         });
                     }
+                    Some(Binding::Param(_)) => unreachable!("assigned parameters are locals"),
                     Some(Binding::GeneratorContext(_)) | None => {}
                 }
             }
@@ -442,6 +510,10 @@ impl FunctionCompiler {
                     .into_iter()
                     .map(|item| self.compile_expr(item))
                     .collect::<Vec<_>>();
+                let depth = array_depth(&result_ty);
+                self.array_widths
+                    .resize(self.array_widths.len().max(depth + 1), 0);
+                self.array_widths[depth] = self.array_widths[depth].max(item_slots.len() as u32);
                 let item_slots = self.add_value_operands(item_slots);
                 let dst = self.allocate_slot(&result_ty);
                 let dst = self.ref_slot(dst);
@@ -1167,7 +1239,41 @@ impl FunctionCompiler {
     }
 
     fn allocate_slot(&mut self, ty: &Type) -> ValueSlot {
+        let depth = array_depth(ty);
+        if depth != 0 {
+            self.array_roots
+                .resize(self.array_roots.len().max(depth + 1), 0);
+            self.array_roots[depth] += 1;
+        }
         ValueSlot::for_type(ty, &mut self.layout)
+    }
+
+    fn array_storage_bound(&self) -> Option<(u32, u32)> {
+        if !self
+            .instructions
+            .iter()
+            .any(|op| matches!(op, Instruction::MakeArray { .. }))
+        {
+            return Some((0, 0));
+        }
+        let width = self.array_widths.iter().copied().max().unwrap_or(0);
+        if width == 0 {
+            return Some((0, 0));
+        }
+        let mut live = 0_u32;
+        let mut capacity = 1_u32; // New array before its destination is overwritten.
+        for depth in (1..self.array_roots.len()).rev() {
+            let parent_width = self.array_widths.get(depth + 1).copied().unwrap_or(0);
+            live = live
+                .checked_mul(parent_width)?
+                .checked_add(self.array_roots[depth])?;
+            capacity = capacity.checked_add(live)?;
+        }
+        capacity
+            .checked_mul(width)?
+            .checked_mul(size_of::<Value>() as u32)?;
+        capacity.checked_mul(2)?.checked_add(3)?;
+        Some((capacity, width))
     }
 
     fn int_slot(&self, slot: ValueSlot) -> IntSlot {

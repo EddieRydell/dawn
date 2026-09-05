@@ -13,11 +13,11 @@
 mod output;
 mod sequence;
 pub use dawn_language::values::{SampleDuration, SampleTime};
-pub use dawn_runtime::sequence::{
+pub use dawn_runtime::signal::{
     EvaluatedElement as RenderedElement, EvaluatedFrame as RenderedFrame, EvaluationWorkspace,
-    PreparedSequence,
+    PreparedSignalGraph,
 };
-pub(crate) use dawn_runtime::sequence::{
+pub(crate) use dawn_runtime::signal::{
     PreparedAutomation, PreparedEffect, PreparedEffectAutomation, PreparedEffectImplementation,
     PreparedLayer,
 };

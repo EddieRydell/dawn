@@ -12,6 +12,13 @@ pub struct BytecodeProgram {
     pub constants: Box<[Value]>,
     pub value_operands: Box<[ValueSlot]>,
     pub layout: SlotLayout,
+    /// Compiler-proven dependency on pixel geometry or an upstream signal.
+    pub uses_pixel_context: bool,
+    /// First pixel-dependent instruction, following pure frame initialization.
+    pub pixel_entry: u32,
+    /// Conservative live calculated-array bound, including construction space.
+    pub array_capacity: u32,
+    pub array_width: u32,
 }
 
 impl BytecodeProgram {
@@ -25,7 +32,27 @@ impl BytecodeProgram {
         context: &super::RunContext,
         workspace: &mut super::VmWorkspace,
     ) -> Result<crate::values::Color, super::RuntimeError> {
-        super::vm::run_sample_program(self, params, context, workspace)
+        self.sample_effect_from(params, context, workspace, false)
+    }
+
+    pub(crate) fn sample_effect_from(
+        &self,
+        params: &super::BoundParams,
+        context: &super::RunContext,
+        workspace: &mut super::VmWorkspace,
+        reuse_uniform: bool,
+    ) -> Result<crate::values::Color, super::RuntimeError> {
+        super::vm::run_sample_program(
+            self,
+            params,
+            context,
+            workspace,
+            if reuse_uniform {
+                self.pixel_entry as usize
+            } else {
+                0
+            },
+        )
     }
 
     pub fn sample_operator(
@@ -35,7 +62,29 @@ impl BytecodeProgram {
         sampler: &mut dyn super::SignalSampler,
         workspace: &mut super::VmWorkspace,
     ) -> Result<crate::values::Color, super::RuntimeError> {
-        super::vm::run_operator_program(self, params, context, sampler, workspace)
+        self.sample_operator_from(params, context, sampler, workspace, false)
+    }
+
+    pub(crate) fn sample_operator_from(
+        &self,
+        params: &super::BoundParams,
+        context: &super::OperatorRunContext,
+        sampler: &mut dyn super::SignalSampler,
+        workspace: &mut super::VmWorkspace,
+        reuse_uniform: bool,
+    ) -> Result<crate::values::Color, super::RuntimeError> {
+        super::vm::run_operator_program(
+            self,
+            params,
+            context,
+            sampler,
+            workspace,
+            if reuse_uniform {
+                self.pixel_entry as usize
+            } else {
+                0
+            },
+        )
     }
 }
 
@@ -156,10 +205,6 @@ pub enum Instruction {
         dst: ValueSlot,
         slot: GeneratorContextId,
     },
-    StoreParam {
-        param: ParamId,
-        src: ValueSlot,
-    },
     Move {
         dst: ValueSlot,
         src: ValueSlot,
@@ -171,6 +216,12 @@ pub enum Instruction {
     Index {
         dst: ValueSlot,
         target: RefSlot,
+        index: ValueSlot,
+    },
+    /// Index an immutable array snapshot lowered to existing value slots.
+    Select {
+        dst: ValueSlot,
+        items: PoolSpan,
         index: ValueSlot,
     },
     CurveParamSample {

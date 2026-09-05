@@ -253,7 +253,6 @@ where
         }
         self.free_storage -= node_total_size;
 
-
         // Bin empty?
         if self.bin_indices[bin_index as usize].is_none() {
             // Remove a leaf bin mask bit
@@ -457,7 +456,6 @@ where
         self.free_nodes[self.free_offset as usize] = node_index;
 
         self.free_storage -= node.data_size;
-
     }
 
     /// Returns the *used* size of an allocation.

@@ -16,18 +16,18 @@ use super::patch::prepare_patch;
 use crate::sequence::timeline::{frame_at_or_before, sample_time_for_frame};
 use crate::{RenderError, elaborate_sequence};
 use dawn_runtime::element::ElementLayout;
-use dawn_runtime::show::{PreparedShow, ShowWorkspace};
+use dawn_runtime::sequence::{PreparedSequence, SequenceWorkspace};
 
 static NEXT_OUTPUT_ID: AtomicU32 = AtomicU32::new(1);
 
 pub struct PreparedSequenceOutput {
-    pub show: PreparedShow,
+    pub sequence: PreparedSequence,
     controller_ports: Box<[ControllerPortFrame]>,
 }
 
 #[derive(Debug)]
 pub struct OutputEvaluationWorkspace {
-    show: ShowWorkspace,
+    sequence: SequenceWorkspace,
     controller_frames: Vec<ControllerPortFrame>,
 }
 
@@ -149,9 +149,9 @@ impl PreparedSequenceOutput {
             offset = end;
         }
         Ok(Self {
-            show: PreparedShow {
+            sequence: PreparedSequence {
                 workspace_key: NEXT_OUTPUT_ID.fetch_add(1, Ordering::Relaxed),
-                sequence,
+                signals: sequence,
                 elements: elements.into_boxed_slice(),
                 controls: controls.into_boxed_slice(),
                 fixture_behaviors,
@@ -207,15 +207,15 @@ impl PreparedSequenceOutput {
     }
 
     pub fn frame_rate(&self) -> u32 {
-        self.show.sequence.frame_rate()
+        self.sequence.signals.frame_rate()
     }
     pub fn frame_count(&self) -> u32 {
-        self.show.sequence.frame_count()
+        self.sequence.signals.frame_count()
     }
 
     pub fn workspace(&self) -> OutputEvaluationWorkspace {
         OutputEvaluationWorkspace {
-            show: self.show.workspace(),
+            sequence: self.sequence.workspace(),
             controller_frames: self.controller_ports.to_vec(),
         }
     }
@@ -228,11 +228,11 @@ impl PreparedSequenceOutput {
         sample_time: SampleTime,
         workspace: &'a mut OutputEvaluationWorkspace,
     ) -> Result<&'a [ControllerPortFrame], SequenceOutputRenderError> {
-        self.show
+        self.sequence
             .evaluate(
                 sample_time,
                 &mut workspace.controller_frames,
-                &mut workspace.show,
+                &mut workspace.sequence,
             )
             .map_err(SequenceOutputRenderError::from)?;
         Ok(&workspace.controller_frames)
@@ -249,7 +249,7 @@ impl PreparedSequenceOutput {
             frame_index,
             frame_rate: self.frame_rate(),
             sample_time,
-            elements: workspace.show.elements().to_vec(),
+            elements: workspace.sequence.elements().to_vec(),
             controller_frames: workspace.controller_frames.clone(),
         })
     }

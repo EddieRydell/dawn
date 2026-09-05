@@ -13,4 +13,5 @@ atomic = []
 [dependencies]
 fugit.workspace = true
 libm.workspace = true
+micromath.workspace = true
 offset-allocator.workspace = true

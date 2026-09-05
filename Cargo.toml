@@ -1,6 +1,6 @@
 [workspace]
 members = ["apps/desktop", "crates/dawn-runtime", "crates/dawn-language", "crates/dawn-elaboration", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-package", "crates/dawn-cli"]
-exclude = ["vendor/offset-allocator"]
+exclude = ["vendor/offset-allocator", "firmware/dawn-profile"]
 resolver = "2"
 
 [workspace.package]
@@ -27,6 +27,7 @@ fs4 = "1.1.0"
 fugit = "0.3.9"
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
 libm = "0.2.15"
+micromath = { version = "2.1.0", default-features = false }
 indexmap = "2.14.0"
 ignore = "0.4.23"
 kira = "0.12.1"

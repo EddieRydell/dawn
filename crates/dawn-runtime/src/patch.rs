@@ -58,6 +58,7 @@ pub enum PreparedFilter {
     PackRgb {
         cell_count: u32,
         order: [u8; 3],
+        lookup: Option<Box<[u8; 256]>>,
     },
     ColorBreakdown {
         capability: ColorEncoding,
@@ -120,15 +121,31 @@ impl PreparedFilter {
         outputs: &mut [PatchValue],
     ) -> Result<(), FilterError> {
         match (self, input) {
-            (Self::PackRgb { cell_count, order }, PatchValue::Colors(colors)) => {
+            (
+                Self::PackRgb {
+                    cell_count,
+                    order,
+                    lookup,
+                },
+                PatchValue::Colors(colors),
+            ) => {
                 check_width(*cell_count as usize, colors.len())?;
                 let [PatchValue::Slots(output)] = outputs else {
                     return Err(FilterError::TypeMismatch);
                 };
                 output.clear();
-                for color in colors {
-                    let channels = [color.red, color.green, color.blue];
-                    output.extend(order.map(|index| channels[usize::from(index)]));
+                if let Some(lookup) = lookup {
+                    for color in colors {
+                        let channels = [color.red, color.green, color.blue];
+                        output.extend(
+                            order.map(|index| lookup[usize::from(channels[usize::from(index)])]),
+                        );
+                    }
+                } else {
+                    for color in colors {
+                        let channels = [color.red, color.green, color.blue];
+                        output.extend(order.map(|index| channels[usize::from(index)]));
+                    }
                 }
             }
             (
@@ -299,13 +316,13 @@ fn check_width(expected: usize, actual: usize) -> Result<(), FilterError> {
 
 #[derive(Clone)]
 pub struct PatchSource {
-    pub cells: Box<[PatchSourceCell]>,
+    pub spans: Box<[PatchSourceSpan]>,
 }
 
-#[derive(Clone, Copy)]
-pub struct PatchSourceCell {
+#[derive(Clone)]
+pub struct PatchSourceSpan {
     pub element: u32,
-    pub cell: u32,
+    pub cells: core::ops::Range<u32>,
 }
 
 impl PatchSource {
@@ -317,53 +334,57 @@ impl PatchSource {
         match output {
             PatchValue::Colors(output) => {
                 output.clear();
-                for cell in &self.cells {
-                    let value = match elements.get(cell.element as usize) {
+                for span in &self.spans {
+                    let values = match elements.get(span.element as usize) {
                         Some(RenderedElementState::Color { cells, .. }) => {
-                            cells.get(cell.cell as usize).copied()
+                            cells.get(span.cells.start as usize..span.cells.end as usize)
                         }
-                        Some(RenderedElementState::Fixture { color, .. }) if cell.cell == 0 => {
-                            Some(*color)
+                        Some(RenderedElementState::Fixture { color, .. })
+                            if span.cells == (0..1) =>
+                        {
+                            Some(core::slice::from_ref(color))
                         }
                         _ => None,
                     }
                     .ok_or(FilterError::TypeMismatch)?;
-                    output.push(value);
+                    output.extend_from_slice(values);
                 }
             }
             PatchValue::Scalars(output) => {
                 output.clear();
-                for cell in &self.cells {
-                    let value = match elements.get(cell.element as usize) {
+                for span in &self.spans {
+                    let values = match elements.get(span.element as usize) {
                         Some(RenderedElementState::Scalar { cells, .. }) => {
-                            cells.get(cell.cell as usize).copied()
+                            cells.get(span.cells.start as usize..span.cells.end as usize)
                         }
                         _ => None,
                     }
                     .ok_or(FilterError::TypeMismatch)?;
-                    output.push(value);
+                    output.extend_from_slice(values);
                 }
             }
             PatchValue::Indexed(output) => {
                 output.clear();
-                for cell in &self.cells {
-                    let value = match elements.get(cell.element as usize) {
+                for span in &self.spans {
+                    let values = match elements.get(span.element as usize) {
                         Some(RenderedElementState::Indexed { cells, .. }) => {
-                            cells.get(cell.cell as usize).copied()
+                            cells.get(span.cells.start as usize..span.cells.end as usize)
                         }
                         _ => None,
                     }
                     .ok_or(FilterError::TypeMismatch)?;
-                    output.push(value);
+                    output.extend_from_slice(values);
                 }
             }
             PatchValue::FixtureStates(output) => {
-                output.resize_with(self.cells.len(), || FixtureState {
+                output.resize_with(self.spans.len(), || FixtureState {
                     functions: Vec::new(),
                 });
-                for (output, cell) in output.iter_mut().zip(&self.cells) {
-                    let state = match elements.get(cell.element as usize) {
-                        Some(RenderedElementState::Fixture { state, .. }) if cell.cell == 0 => {
+                for (output, span) in output.iter_mut().zip(&self.spans) {
+                    let state = match elements.get(span.element as usize) {
+                        Some(RenderedElementState::Fixture { state, .. })
+                            if span.cells == (0..1) =>
+                        {
                             Some(state)
                         }
                         _ => None,

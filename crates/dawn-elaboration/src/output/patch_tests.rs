@@ -30,6 +30,54 @@ fn reorders_are_composed_into_packing_without_changing_output() {
         .collect::<Vec<_>>();
     let mut patch = project.patches[&setup.patch].clone();
     let before = prepare_patch(tree, &patch, profiles, &frames).unwrap();
+    let element_ids = tree
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| {
+            (!matches!(node.kind, ElementNodeKind::Group { .. })).then_some(*id)
+        })
+        .collect::<Vec<_>>();
+    let source = before
+        .steps
+        .iter()
+        .find_map(|step| match step {
+            PatchStep::Source { source, .. } => Some(source),
+            _ => None,
+        })
+        .unwrap();
+    let authored = patch
+        .nodes
+        .values()
+        .find_map(|node| match node {
+            PatchNode::Source(source) => Some(source),
+            _ => None,
+        })
+        .unwrap();
+    let expected_addresses = tree
+        .flatten_selection(&authored.selection)
+        .unwrap()
+        .into_iter()
+        .map(|address| (address.node, address.cell))
+        .collect::<Vec<_>>();
+    let actual_addresses = source
+        .spans
+        .iter()
+        .flat_map(|span| {
+            span.cells
+                .clone()
+                .map(|cell| (element_ids[span.element as usize], cell))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual_addresses, expected_addresses);
+    assert!(source.spans.len() < actual_addresses.len());
+    assert!(
+        source
+            .spans
+            .windows(2)
+            .all(|pair| pair[0].element != pair[1].element
+                || pair[0].cells.end != pair[1].cells.start),
+        "adjacent source runs must already be merged"
+    );
     assert_eq!(
         before.value_layouts.as_ref(),
         &[PatchValueLayout::Color(113), PatchValueLayout::Slots(339)]
@@ -170,7 +218,7 @@ fn rgb_packing_is_exact_for_every_byte_and_preserves_shared_or_transformed_input
             [expected] = output;
         }
         let mut packed = original.clone();
-        fuse_rgb_packing(&mut packed, 4);
+        fuse_rgb_packing(&mut packed, 4).unwrap();
         assert_eq!(packed.len(), 1);
         let PatchStep::Filter {
             input: 0,
@@ -192,7 +240,7 @@ fn rgb_packing_is_exact_for_every_byte_and_preserves_shared_or_transformed_input
             output_start: 4,
             filter: PreparedFilter::Quantize8 { width: 768 },
         });
-        fuse_rgb_packing(&mut shared, 5);
+        fuse_rgb_packing(&mut shared, 5).unwrap();
         assert_eq!(
             shared.len(),
             4,
@@ -215,12 +263,10 @@ fn rgb_packing_is_exact_for_every_byte_and_preserves_shared_or_transformed_input
             unreachable!()
         };
         *input = 4;
-        fuse_rgb_packing(&mut transformed, 5);
-        assert_eq!(
-            transformed.len(),
-            4,
-            "a dimming transform must not be skipped"
-        );
+        let expected = evaluate_rgb_chain(&transformed, &colors);
+        fuse_rgb_packing(&mut transformed, 5).unwrap();
+        assert_eq!(transformed.len(), 1);
+        assert_eq!(evaluate_rgb_chain(&transformed, &colors), expected);
     }
     let mut rgbw = vec![
         PatchStep::Filter {
@@ -237,6 +283,114 @@ fn rgb_packing_is_exact_for_every_byte_and_preserves_shared_or_transformed_input
             filter: PreparedFilter::Quantize8 { width: 1024 },
         },
     ];
-    fuse_rgb_packing(&mut rgbw, 3);
+    fuse_rgb_packing(&mut rgbw, 3).unwrap();
     assert_eq!(rgbw.len(), 2, "RGBW needs white extraction");
+}
+
+fn evaluate_rgb_chain(steps: &[PatchStep], colors: &[Color]) -> PatchValue {
+    let mut input = PatchValue::Colors(colors.to_vec());
+    for step in steps {
+        let PatchStep::Filter { filter, .. } = step else {
+            unreachable!()
+        };
+        let layout = if matches!(
+            filter,
+            PreparedFilter::Quantize8 { .. } | PreparedFilter::PackRgb { .. }
+        ) {
+            PatchValueLayout::Slots(768)
+        } else {
+            PatchValueLayout::Components(768)
+        };
+        let mut output = [PatchValue::new(layout)];
+        filter.evaluate(&input, &mut output).unwrap();
+        [input] = output;
+    }
+    input
+}
+
+#[test]
+fn rgb_lookup_preserves_transform_order_and_all_channel_values() {
+    use dawn_language::fixture_profile::DimmingCurve;
+    use dawn_language::values::{Curve, CurvePoint};
+    let colors = (0..=255u8)
+        .map(|value| Color {
+            red: value,
+            green: !value,
+            blue: value.rotate_left(1),
+        })
+        .collect::<Vec<_>>();
+    for curve in [
+        DimmingCurve::Linear,
+        DimmingCurve::Gamma(0.5),
+        DimmingCurve::Gamma(2.2),
+        DimmingCurve::Custom(Curve {
+            points: vec![
+                CurvePoint {
+                    position: 0.0,
+                    value: 0.9,
+                },
+                CurvePoint {
+                    position: 0.4,
+                    value: 0.2,
+                },
+                CurvePoint {
+                    position: 1.0,
+                    value: 0.7,
+                },
+            ],
+        }),
+    ] {
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let filters = [
+                PreparedFilter::ColorBreakdown {
+                    capability: ColorEncoding::Rgb,
+                    cell_count: 256,
+                },
+                PreparedFilter::ScaleInvert {
+                    scale: 0.8,
+                    invert: false,
+                    width: 768,
+                },
+                PreparedFilter::DimmingCurve {
+                    curve: curve.clone(),
+                    width: 768,
+                },
+                PreparedFilter::ComponentReorder {
+                    components_per_cell: 3,
+                    order: Box::new(order),
+                    cell_count: 256,
+                },
+                PreparedFilter::ScaleInvert {
+                    scale: 1.3,
+                    invert: true,
+                    width: 768,
+                },
+                PreparedFilter::DimmingCurve {
+                    curve: DimmingCurve::Gamma(1.7),
+                    width: 768,
+                },
+                PreparedFilter::Quantize8 { width: 768 },
+            ];
+            let mut steps = filters
+                .into_iter()
+                .enumerate()
+                .map(|(index, filter)| PatchStep::Filter {
+                    input: index as u32,
+                    output_start: index as u32 + 1,
+                    filter,
+                })
+                .collect::<Vec<_>>();
+            let expected = evaluate_rgb_chain(&steps, &colors);
+            fuse_rgb_packing(&mut steps, 8).unwrap();
+            assert_eq!(steps.len(), 1);
+            assert_eq!(evaluate_rgb_chain(&steps, &colors), expected);
+        }
+    }
 }

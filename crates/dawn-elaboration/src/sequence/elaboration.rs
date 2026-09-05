@@ -14,7 +14,7 @@ use super::elements::prepare_elements;
 use super::renderer::RenderError;
 use super::targets::PreparedTargetCache;
 use super::timeline::{frame_count, prepare_timing};
-use crate::{PreparedLayer, PreparedSequence};
+use crate::{PreparedLayer, PreparedSignalGraph};
 
 static NEXT_SEQUENCE_ID: AtomicU32 = AtomicU32::new(1);
 
@@ -22,7 +22,7 @@ pub fn elaborate_sequence(
     project: &DawnProject,
     setup_id: &SetupId,
     sequence_id: &SequenceId,
-) -> Result<PreparedSequence, RenderError> {
+) -> Result<PreparedSignalGraph, RenderError> {
     let setup = project
         .setups
         .get(setup_id)
@@ -109,6 +109,16 @@ pub fn elaborate_sequence(
                 .then(left.cmp(right))
         });
     }
+    for (slot, automation) in effects
+        .iter_mut()
+        .filter_map(|effect| effect.automation.as_mut())
+        .enumerate()
+    {
+        automation.workspace_slot =
+            u32::try_from(slot).map_err(|_| RenderError::GeneratorPrepare {
+                message: "too many automated effects".to_string(),
+            })?;
+    }
     let frame_rate = sequence.frame_rate;
     let duration = sample_duration_from_dawn_duration(&sequence.duration).map_err(|_| {
         RenderError::InvalidTiming {
@@ -120,7 +130,7 @@ pub fn elaborate_sequence(
         .into_values()
         .map(Arc::unwrap_or_clone)
         .collect::<Vec<_>>();
-    let signal_graph = prepare_signal_graph(
+    let plan = prepare_signal_graph(
         PrepareGraphContext {
             project,
             sequence,
@@ -144,20 +154,20 @@ pub fn elaborate_sequence(
                 .map(|pixel| pixel.pixel_count)
                 .max()
                 .unwrap_or(0);
-            Ok(dawn_runtime::sequence::PreparedTarget {
+            Ok(dawn_runtime::signal::PreparedTarget {
                 pixels: start..end,
                 sample_count: if len > count { count } else { 0 },
             })
         })
         .collect::<Result<Box<[_]>, RenderError>>()?;
-    Ok(PreparedSequence {
+    Ok(PreparedSignalGraph {
         workspace_key: NEXT_SEQUENCE_ID.fetch_add(1, Ordering::Relaxed),
         frame_rate,
         frame_count,
         duration,
         elements: elements
             .iter()
-            .map(|element| dawn_runtime::sequence::PreparedElement {
+            .map(|element| dawn_runtime::signal::PreparedElement {
                 id: element.id.0,
                 pixel_count: element.pixel_count,
             })
@@ -173,6 +183,6 @@ pub fn elaborate_sequence(
             .map(Vec::into_boxed_slice)
             .collect(),
         layers: layers.into_boxed_slice(),
-        signal_graph,
+        plan,
     })
 }

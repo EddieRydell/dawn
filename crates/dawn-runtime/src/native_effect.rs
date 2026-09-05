@@ -231,9 +231,9 @@ fn sample_chase(
     context: &RunContext,
     revolutions: Option<i32>,
 ) -> Result<Color, RuntimeError> {
-    let width = (chase.section_width_pixels as f32).max(1.0);
-    let count = libm::floorf((context.pixel_count as f32 + width - 1.0) / width).max(1.0);
-    let position = libm::floorf(context.pixel_index as f32 / width) / (count - 1.0).max(1.0);
+    let width = chase.section_width_pixels.max(1);
+    let count = (1 + (context.pixel_count.max(1) - 1) / width) as f32;
+    let position = context.pixel_index.div_euclid(width) as f32 / (count - 1.0).max(1.0);
     if let Some(revolutions) = revolutions {
         let revolutions = revolutions.max(1);
         let virtual_count = count * revolutions as f32;
@@ -448,11 +448,12 @@ impl MarkChase {
 
 impl MarkPulseChild {
     fn sample(&self, c: &RunContext, sample_time: SampleTime) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f32).max(1.0);
-        let pixel = c.pixel_index as f32;
-        let choice = libm::floorf(pixel / width);
         let fade = self.section_edge_fade_pixels.max(0.0);
         let active = if fade > 0.0 {
+            let width = self.section_width_pixels.max(1);
+            let choice = c.pixel_index.div_euclid(width) as f32;
+            let width = width as f32;
+            let pixel = c.pixel_index as f32;
             let start = choice * width;
             let end = (start + width - 1.0).min(c.pixel_count as f32 - 1.0);
             ((pixel - start).min(end - pixel) / fade).clamp(0.0, 1.0)
@@ -473,21 +474,21 @@ impl MarkPulseChild {
 }
 impl MarkChaseChild {
     fn sample(&self, c: &RunContext, sample_time: SampleTime) -> Result<Color, RuntimeError> {
-        let width = (self.section_width_pixels as f32).max(1.0);
-        let pixel = c.pixel_index as f32;
-        let section = (pixel - libm::floorf(pixel / width) * width) / width;
-        let travel_start = -self.pulse_overlap / (c.pixel_count as f32).max(1.0);
-        let travel_end = 1.0 + self.pulse_overlap / (c.pixel_count as f32).max(1.0);
+        let span = self.pulse_overlap / (c.pixel_count as f32).max(1.0);
+        let travel_start = -span;
+        let travel_end = 1.0 + span;
         let chase = travel_start
             + (travel_end - travel_start)
                 * sample_curve(&self.chase_position, c.progress).clamp(0.0, 1.0);
-        let pulse_progress = (c.pixel_fraction - chase).abs()
-            / (self.pulse_overlap / (c.pixel_count as f32).max(1.0)).max(1e-9);
+        let pulse_progress = (c.pixel_fraction - chase).abs() / span.max(1e-9);
         let level = sample_curve(&self.pulse_shape, pulse_progress.clamp(0.0, 1.0));
         let gp = match self.gradient_mode {
             GradientMode::ThroughEffect => c.progress,
             GradientMode::AcrossItems => c.pixel_fraction,
-            GradientMode::PerPulse => section,
+            GradientMode::PerPulse => {
+                let width = self.section_width_pixels.max(1);
+                c.pixel_index.rem_euclid(width) as f32 / width as f32
+            }
         };
         let parent = parent_progress(sample_time, self.parent_start, self.parent_duration);
         let value = gradient_scaled(&self.gradient, gp.clamp(0.0, 1.0), level)?;

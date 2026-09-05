@@ -4,7 +4,7 @@ use dawn_language::element::ElementSelection;
 use dawn_language::element::{ElementCellRange, ElementNodeId};
 use dawn_language::model::DawnProject;
 use dawn_language::setup::SetupId;
-pub(crate) use dawn_runtime::sequence::PreparedPixel as PreparedTargetPixel;
+pub(crate) use dawn_runtime::signal::PreparedPixel as PreparedTargetPixel;
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,5 +1,5 @@
 // Host elaboration lowers compiled Dawn definitions into one immutable
-// PreparedSequence. Evaluation consumes only that sequence, a SampleTime, and
+// PreparedSignalGraph. Evaluation consumes only that sequence, a SampleTime, and
 // reusable workspace; it does not depend on authored project state.
 pub(crate) mod color;
 pub(crate) mod composition;

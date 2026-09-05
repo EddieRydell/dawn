@@ -9,7 +9,7 @@ use dawn_language::values::Color;
 use dawn_runtime::element::{ElementNodeId, RenderedElementState};
 use dawn_runtime::fixture::FixtureEncodingError;
 use dawn_runtime::patch::{
-    FilterError, PatchSource, PatchSourceCell, PatchStep, PatchValue, PatchValueLayout,
+    FilterError, PatchSource, PatchSourceSpan, PatchStep, PatchValue, PatchValueLayout,
     PreparedPatch,
 };
 use indexmap::IndexMap;
@@ -48,15 +48,62 @@ fn source(output: u32, element: u32, cells: u32) -> PatchStep {
     PatchStep::Source {
         output,
         source: PatchSource {
-            cells: (0..cells)
-                .map(|cell| PatchSourceCell { element, cell })
-                .collect(),
+            spans: vec![PatchSourceSpan {
+                element,
+                cells: 0..cells,
+            }]
+            .into(),
         },
     }
 }
 
 #[test]
 fn prepared_filters_and_fixture_channels_are_exact_and_do_not_allocate() {
+    // Preserve arbitrary selection order across spans, including repeated cells.
+    let selection = PatchSource {
+        spans: vec![
+            PatchSourceSpan {
+                element: 1,
+                cells: 2..4,
+            },
+            PatchSourceSpan {
+                element: 0,
+                cells: 1..3,
+            },
+            PatchSourceSpan {
+                element: 1,
+                cells: 0..1,
+            },
+            PatchSourceSpan {
+                element: 0,
+                cells: 1..2,
+            },
+        ]
+        .into(),
+    };
+    let indexed_elements = [0, 10].map(|base| RenderedElementState::Indexed {
+        node: ElementNodeId(base),
+        cells: (base..base + 4).collect(),
+    });
+    let mut selected = PatchValue::new(PatchValueLayout::Indexed(6));
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNTING.store(true, Ordering::Relaxed);
+    let result = selection.write(&indexed_elements, &mut selected);
+    COUNTING.store(false, Ordering::Relaxed);
+    result.unwrap();
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(selected, PatchValue::Indexed(vec![12, 13, 1, 2, 10, 1]));
+    let invalid = PatchSource {
+        spans: vec![PatchSourceSpan {
+            element: 0,
+            cells: 3..5,
+        }]
+        .into(),
+    };
+    assert_eq!(
+        invalid.write(&indexed_elements, &mut selected),
+        Err(FilterError::TypeMismatch)
+    );
     let color = Color {
         red: 128,
         green: 64,

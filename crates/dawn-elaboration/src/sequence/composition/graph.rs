@@ -5,9 +5,8 @@ use dawn_language::sequence::{
     SequenceCompositionGraph,
 };
 use dawn_runtime::BuiltinOperator;
-use dawn_runtime::sequence::{
-    PreparedOperator, PreparedOperatorNode, PreparedSignalGraph, PreparedSignalKind,
-    PreparedSignalNode,
+use dawn_runtime::signal::{
+    PreparedOperator, PreparedOperatorNode, PreparedSignalKind, PreparedSignalNode, SignalPlan,
 };
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
@@ -55,7 +54,7 @@ pub(crate) struct PrepareGraphContext<'a> {
 pub(crate) fn prepare_signal_graph(
     context: PrepareGraphContext<'_>,
     graph: &SequenceCompositionGraph,
-) -> Result<PreparedSignalGraph, RenderError> {
+) -> Result<SignalPlan, RenderError> {
     let full_target = context
         .targets
         .sample_target(Arc::from(full_rig_target_pixels(context.elements)?))?;
@@ -82,6 +81,7 @@ pub(crate) fn prepare_signal_graph(
 
     let mut prepared_nodes = Vec::<PreparedSignalNode>::new();
     let mut operator_programs = Vec::new();
+    let mut automation_count = 0usize;
     let mut prepared_index_by_node = vec![usize::MAX; node_ids.len()];
     for node_index in &node_order {
         let node_id = &node_ids[*node_index];
@@ -186,9 +186,15 @@ pub(crate) fn prepare_signal_graph(
                     OperatorImplementation::Native(builtin) => PreparedOperator::Native(*builtin),
                 };
                 let operator = PreparedOperatorNode {
+                    automation_slot: u32::try_from(automation_count).map_err(|_| {
+                        RenderError::BadGraph {
+                            message: "too many automated operators".to_string(),
+                        }
+                    })?,
                     implementation,
                     params: BoundParams::bind(&definition.params, &params)?,
                 };
+                automation_count += usize::from(!automation.is_empty());
                 PreparedSignalNode {
                     kind: PreparedSignalKind::Operator {
                         operator,
@@ -292,7 +298,7 @@ pub(crate) fn prepare_signal_graph(
     let (frame_nodes, frame_slots, frame_buffer_count) =
         prepare_frame_plan(&prepared_nodes, output_index)?;
 
-    Ok(PreparedSignalGraph {
+    Ok(SignalPlan {
         output_index,
         target: full_target,
         nodes: prepared_nodes.into_boxed_slice(),
@@ -331,6 +337,15 @@ fn prepare_frame_plan(
     let mut frame_buffer_count = 0u16;
     for (index, node) in nodes.iter().enumerate() {
         if !required[index] {
+            continue;
+        }
+        // A terminal single-input output is an alias, not another frame pass.
+        // Keep the input slot live through evaluation's final output copy.
+        if index == output_index
+            && let PreparedSignalKind::Output { inputs } = &node.kind
+            && let [input] = inputs.as_ref()
+        {
+            frame_slots[index] = frame_slots[*input];
             continue;
         }
         let slot = if let Some(slot) = available.pop() {
@@ -503,4 +518,38 @@ fn topological_composition_graph_order(
         });
     }
     Ok(order)
+}
+
+#[cfg(test)]
+mod frame_plan_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_output_aliases_one_input_but_composes_multiple_inputs() {
+        let mut nodes = vec![
+            PreparedSignalNode {
+                kind: PreparedSignalKind::Layer { layer_index: 0 },
+            },
+            PreparedSignalNode {
+                kind: PreparedSignalKind::Output {
+                    inputs: vec![0].into(),
+                },
+            },
+        ];
+        let (frames, slots, count) = prepare_frame_plan(&nodes, 1).unwrap();
+        assert_eq!(&*frames, &[0]);
+        assert_eq!(&*slots, &[0, 0]);
+        assert_eq!(count, 1);
+
+        nodes[1].kind = PreparedSignalKind::Layer { layer_index: 1 };
+        nodes.push(PreparedSignalNode {
+            kind: PreparedSignalKind::Output {
+                inputs: vec![0, 1].into(),
+            },
+        });
+        let (frames, slots, count) = prepare_frame_plan(&nodes, 2).unwrap();
+        assert_eq!(&*frames, &[0, 1, 2]);
+        assert_eq!(&*slots, &[0, 1, 2]);
+        assert_eq!(count, 3);
+    }
 }

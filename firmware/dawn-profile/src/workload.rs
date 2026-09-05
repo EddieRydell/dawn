@@ -1,0 +1,738 @@
+extern crate alloc;
+
+use alloc::vec;
+use dawn_runtime::dsl::{BoundParams, RunContext, bytecode::BytecodeProgram};
+use dawn_runtime::element::{ElementLayout, ElementNodeId};
+use dawn_runtime::fixture::FixtureBehaviors;
+use dawn_runtime::patch::{
+    PatchSource, PatchSourceSpan, PatchStep, PatchValueLayout, PreparedFilter, PreparedPatch,
+};
+use dawn_runtime::sequence::PreparedSequence;
+use dawn_runtime::signal::*;
+use dawn_runtime::values::{SampleDuration, SampleTime};
+
+pub const COUNTS: [usize; 4] = [200, 400, 800, 1600];
+pub const FRAMES: usize = 32;
+pub const GAMMA_CASE: usize = 5; // PixelRamp in the shared fixture list.
+pub const OPERATOR_DEPTHS: [usize; 3] = [2, 4, 8];
+#[allow(dead_code)] // PC profiler and host golden generation only.
+pub const CHASE_PULSE_CASES: [(&str, usize); 3] =
+    [("ChasePulse1", 1), ("ChasePulse4", 4), ("ChasePulse16", 16)];
+#[allow(dead_code)]
+pub const MARK_CASES: [(&str, bool, f32); 3] = [
+    ("MarkPulse200", true, 0.0),
+    ("MarkChase200", false, 0.0),
+    ("MarkPulseEdge200", true, 1.0),
+];
+
+#[allow(dead_code)] // Shared native-generator fixture; construction is outside sampling.
+pub fn mark_show(
+    count: usize,
+    pulse: bool,
+    edge_fade: f32,
+    program: BytecodeProgram,
+) -> PreparedSequence {
+    use dawn_runtime::dsl::{
+        GeneratorContext, Identifier, ParamDecl, TargetItemValue, TargetPixelValue, TargetValue,
+        Type, Value,
+    };
+    use dawn_runtime::values::{Color, Curve, CurvePoint, Gradient, GradientStop, Marks};
+    let mut show = show(count, program, BoundParams::default());
+    let ramp = Value::Curve(
+        Curve {
+            points: vec![
+                CurvePoint {
+                    position: 0.0,
+                    value: 0.0,
+                },
+                CurvePoint {
+                    position: 1.0,
+                    value: 1.0,
+                },
+            ],
+        }
+        .into(),
+    );
+    let gradient = Value::Gradient(
+        Gradient {
+            stops: vec![GradientStop {
+                position: 0.0,
+                color: Color {
+                    red: 193,
+                    green: 89,
+                    blue: 47,
+                },
+            }],
+        }
+        .into(),
+    );
+    let mut values = vec![
+        (
+            Type::Marks,
+            Value::Marks(
+                Marks {
+                    marks: (0..32)
+                        .map(|i| SampleDuration::from_ticks(2_000_000 + i * 50_000))
+                        .collect(),
+                }
+                .into(),
+            ),
+        ),
+        (
+            Type::Color,
+            Value::Color(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }),
+        ),
+    ];
+    if pulse {
+        values.extend([
+            (Type::Gradient, gradient),
+            (Type::Curve, ramp),
+            (Type::Float, Value::Float(0.35)),
+            (Type::Float, Value::Float(0.0)),
+            (Type::Float, Value::Float(1.2)),
+            (Type::Int, Value::Int(5)),
+            (Type::Float, Value::Float(edge_fade)),
+            (Type::Int, Value::Int(3)),
+            (Type::Float, Value::Float(0.0)),
+        ]);
+    } else {
+        let mode = Identifier::new("per_pulse".into()).unwrap();
+        values.extend([
+            (Type::Enum(vec![mode.clone()]), Value::Enum(mode)),
+            (
+                Type::Array(alloc::boxed::Box::new(Type::Gradient)),
+                Value::Array(vec![gradient].into()),
+            ),
+            (Type::Curve, ramp.clone()),
+            (Type::Float, Value::Float(0.35)),
+            (Type::Float, Value::Float(0.0)),
+            (Type::Float, Value::Float(1.2)),
+            (Type::Float, Value::Float(8.0)),
+            (Type::Int, Value::Int(5)),
+            (
+                Type::Array(alloc::boxed::Box::new(Type::Curve)),
+                Value::Array(vec![ramp.clone()].into()),
+            ),
+            (Type::Curve, ramp),
+        ]);
+    }
+    let declarations = values
+        .into_iter()
+        .enumerate()
+        .map(|(index, (ty, value))| ParamDecl {
+            name: Identifier::new(alloc::format!("p{index}")).unwrap(),
+            ty,
+            default: Some(value),
+        })
+        .collect::<vec::Vec<_>>();
+    let params = BoundParams::bind_pairs(&declarations, &[]).unwrap();
+    let generator = dawn_runtime::native_effect::bind_prepared(
+        if pulse {
+            dawn_runtime::BuiltinEffect::MarkPulse
+        } else {
+            dawn_runtime::BuiltinEffect::MarkChase
+        },
+        params,
+    )
+    .unwrap();
+    let context = GeneratorContext {
+        start_time: SampleTime::from_ticks(0),
+        duration: show.signals.duration,
+        target: TargetValue {
+            groups: vec![
+                TargetItemValue {
+                    pixels: show
+                        .signals
+                        .target_pixels
+                        .iter()
+                        .map(|p| TargetPixelValue {
+                            element_index: p.element_index as i32,
+                            element_cell_index: p.element_cell_index as i32,
+                            pixel_index: p.pixel_index as i32,
+                            pixel_count: p.pixel_count as i32,
+                            pixel_fraction: p.pixel_fraction,
+                        })
+                        .collect::<vec::Vec<_>>()
+                        .into(),
+                }
+                .into(),
+            ],
+        }
+        .into(),
+    };
+    let generated = generator.generate(&context).unwrap();
+    assert!(generated.len() >= 32);
+    let mut pixels = show.signals.target_pixels.to_vec();
+    let mut targets = show.signals.targets.to_vec();
+    show.signals.effects = generated
+        .into_iter()
+        .map(|child| {
+            let target = if child.target == context.target.groups[0] {
+                0
+            } else {
+                let target = targets.len() as u32;
+                let start = pixels.len() as u32;
+                pixels.extend(child.target.pixels.iter().map(|p| PreparedPixel {
+                    element_index: p.element_index as u16,
+                    element_cell_index: p.element_cell_index as u16,
+                    pixel_index: p.pixel_index as u32,
+                    pixel_count: p.pixel_count as u32,
+                    pixel_fraction: p.pixel_fraction,
+                }));
+                targets.push(PreparedTarget {
+                    pixels: start..pixels.len() as u32,
+                    sample_count: 0,
+                });
+                target
+            };
+            PreparedEffect {
+                start_time: child.start_time,
+                duration: child.duration,
+                target,
+                implementation: PreparedEffectImplementation::Native {
+                    sample: child.sample,
+                    params: None,
+                },
+                automation: None,
+            }
+        })
+        .collect();
+    show.signals.targets = targets.into();
+    show.signals.target_pixels = pixels.into();
+    show.signals.programs = vec![].into();
+    show.signals.effects_by_layer = vec![(0..show.signals.effects.len()).collect()].into();
+    show
+}
+
+// Profiling fixture only: varied, overlapping native chases and pulses. This
+// contains no evaluator shortcuts; desktop and device use the same setup.
+#[allow(dead_code)] // Normal timing binary uses a different workload subset.
+pub fn chase_pulse_show(count: usize, layers: usize, program: BytecodeProgram) -> PreparedSequence {
+    use dawn_runtime::dsl::{Identifier, ParamDecl, Type, Value};
+    use dawn_runtime::values::{Color, Curve, CurvePoint, Gradient, GradientStop};
+    let mut show = layered_show(count, program, BoundParams::default(), layers);
+    show.signals.programs = vec![].into();
+    let shape: Value = Value::Curve(
+        Curve {
+            points: vec![
+                CurvePoint {
+                    position: 0.0,
+                    value: 0.0,
+                },
+                CurvePoint {
+                    position: 0.25,
+                    value: 1.0,
+                },
+                CurvePoint {
+                    position: 1.0,
+                    value: 0.0,
+                },
+            ],
+        }
+        .into(),
+    );
+    let position: Value = Value::Curve(
+        Curve {
+            points: vec![
+                CurvePoint {
+                    position: 0.0,
+                    value: 0.0,
+                },
+                CurvePoint {
+                    position: 1.0,
+                    value: 1.0,
+                },
+            ],
+        }
+        .into(),
+    );
+    for (index, effect) in show.signals.effects.iter_mut().enumerate() {
+        let gradient = Value::Gradient(
+            Gradient {
+                stops: vec![GradientStop {
+                    position: 0.0,
+                    color: Color {
+                        red: (47 + index * 31) as u8,
+                        green: (193 + index * 17) as u8,
+                        blue: (89 + index * 43) as u8,
+                    },
+                }],
+            }
+            .into(),
+        );
+        let builtin = if index % 2 == 0 {
+            dawn_runtime::BuiltinEffect::Chase
+        } else {
+            dawn_runtime::BuiltinEffect::Pulse
+        };
+        let values = if builtin == dawn_runtime::BuiltinEffect::Chase {
+            vec![
+                (Type::Gradient, gradient),
+                (
+                    Type::Enum(vec![Identifier::new("across_items".into()).unwrap()]),
+                    Value::Enum(Identifier::new("across_items".into()).unwrap()),
+                ),
+                (Type::Float, Value::Float(12.0 + index as f32)),
+                (Type::Int, Value::Int(3 + index as i32 % 4)),
+                (Type::Curve, position.clone()),
+                (Type::Bool, Value::Bool(index % 4 == 0)),
+                (Type::Bool, Value::Bool(true)),
+                (Type::Bool, Value::Bool(true)),
+                (Type::Curve, shape.clone()),
+            ]
+        } else {
+            vec![(Type::Gradient, gradient), (Type::Curve, shape.clone())]
+        };
+        let declarations = values
+            .into_iter()
+            .enumerate()
+            .map(|(slot, (ty, value))| ParamDecl {
+                name: Identifier::new(alloc::format!("p{slot}")).unwrap(),
+                ty,
+                default: Some(value),
+            })
+            .collect::<vec::Vec<_>>();
+        let params = BoundParams::bind_pairs(&declarations, &[]).unwrap();
+        effect.implementation = PreparedEffectImplementation::Native {
+            sample: dawn_runtime::native_effect::prepare_sample(builtin, &params).unwrap(),
+            params: None,
+        };
+        effect.start_time = SampleTime::from_ticks(index as u32 * 43_000);
+        effect.duration = SampleDuration::from_ticks(4_000_000 + index as u32 * 97_000);
+    }
+    show
+}
+
+// Extend the single-operator fixture into a chain, sharing its bytecode.
+pub fn nest_operator(show: &mut PreparedSequence, depth: usize) {
+    assert!(depth > 0);
+    let graph = &mut show.signals.plan;
+    let mut nodes = core::mem::take(&mut graph.nodes).into_vec();
+    assert_eq!(nodes.len(), 2);
+    for input in 1..depth {
+        let mut node = nodes[1].clone();
+        let PreparedSignalKind::Operator {
+            inputs, vm_slot, ..
+        } = &mut node.kind
+        else {
+            panic!("nested fixture requires a DSL operator");
+        };
+        inputs[0] = input;
+        *vm_slot = input as u16;
+        nodes.push(node);
+    }
+    graph.nodes = nodes.into();
+    graph.output_index = depth;
+    graph.vm_workspace_count = depth;
+    graph.frame_nodes = vec![depth].into();
+    graph.frame_slots = vec![0; depth + 1].into();
+}
+
+#[allow(dead_code)] // Compiled on the host, not the device.
+pub const IDENTITY_SOURCE: &str =
+    "operator Identity { input Signal source; color sample() { return source.at(seconds()); } }";
+
+pub fn insert_native_invert(show: &mut PreparedSequence) {
+    nest_operator(show, 2);
+    let graph = &mut show.signals.plan;
+    let mut nodes = core::mem::take(&mut graph.nodes).into_vec();
+    nodes.insert(
+        2,
+        PreparedSignalNode {
+            kind: PreparedSignalKind::Operator {
+                operator: PreparedOperatorNode {
+                    automation_slot: 0,
+                    implementation: PreparedOperator::Native(dawn_runtime::BuiltinOperator::Invert),
+                    params: Default::default(),
+                },
+                inputs: vec![1].into(),
+                automation: vec![].into(),
+                vm_slot: 0,
+            },
+        },
+    );
+    let PreparedSignalKind::Operator { inputs, .. } = &mut nodes[3].kind else {
+        unreachable!()
+    };
+    inputs[0] = 2;
+    graph.nodes = nodes.into();
+    graph.output_index = 3;
+    graph.frame_nodes = vec![3].into();
+    graph.frame_slots = vec![0; 4].into();
+}
+
+#[allow(dead_code)] // Compiled on the host, not the device.
+pub const GROUPED_SOURCE: &str = "operator Times { input Signal source; color sample() {
+    float now = seconds(); float past = now - 0.1;
+    color a = source.at(now); color b = source.at(now);
+    color c = source.at(past); color d = source.at(past);
+    return max(max(a, b), max(c, d));
+} }";
+#[allow(dead_code)]
+pub const ALTERNATING_SOURCE: &str = "operator Times { input Signal source; color sample() {
+    float now = seconds(); float past = now - 0.1;
+    color a = source.at(now); color b = source.at(past);
+    color c = source.at(now); color d = source.at(past);
+    return max(max(a, b), max(c, d));
+} }";
+
+pub fn apply_native_automation(show: &mut PreparedSequence, empty: bool) {
+    use dawn_runtime::dsl::{Identifier, ParamDecl, Type, Value};
+    use dawn_runtime::values::{Color, Curve, CurvePoint, Gradient, GradientStop};
+    let mut curve = Curve {
+        points: vec![
+            CurvePoint {
+                position: 0.0,
+                value: 0.0,
+            },
+            CurvePoint {
+                position: 0.4,
+                value: 1.0,
+            },
+            CurvePoint {
+                position: 1.0,
+                value: 0.0,
+            },
+        ],
+    };
+    if empty {
+        curve.points.clear();
+    }
+    let values = [
+        (
+            "ramp",
+            Type::Gradient,
+            Value::Gradient(
+                Gradient {
+                    stops: vec![GradientStop {
+                        position: 0.0,
+                        color: Color {
+                            red: 255,
+                            green: 128,
+                            blue: 64,
+                        },
+                    }],
+                }
+                .into(),
+            ),
+        ),
+        ("shape", Type::Curve, Value::Curve(curve.clone().into())),
+    ];
+    let declarations = values.map(|(name, ty, value)| ParamDecl {
+        name: Identifier::new(name.into()).unwrap(),
+        ty,
+        default: Some(value),
+    });
+    let params = BoundParams::bind_pairs(&declarations, &[]).unwrap();
+    show.signals.effects[0].implementation = PreparedEffectImplementation::Native {
+        sample: dawn_runtime::native_effect::prepare_sample(
+            dawn_runtime::BuiltinEffect::Pulse,
+            &params,
+        )
+        .unwrap(),
+        params: Some((dawn_runtime::BuiltinEffect::Pulse, params)),
+    };
+    show.signals.effects[0].automation = Some(alloc::boxed::Box::new(PreparedEffectAutomation {
+        workspace_slot: 0,
+        bindings: vec![PreparedAutomation {
+            start: SampleTime::from_ticks(0),
+            duration: SampleDuration::from_ticks(8_000_000),
+            curve: curve.into(),
+            mapping: dawn_runtime::automation::AutomationMapping::Curve {
+                min: if empty { 0.5 } else { 0.0 },
+                max: 1.0,
+            },
+            param_index: 1,
+        }]
+        .into(),
+    }));
+}
+
+#[allow(dead_code)] // Compiled on the host; firmware receives only bytecode.
+pub const OPERATOR_SOURCE: &str = "operator Wave { input Signal source;
+    color sample() { return source.at(seconds()) * (sin(seconds() * 7.0) * 0.5 + 0.5); }
+}";
+
+pub fn apply_operator(show: &mut PreparedSequence, mut program: BytecodeProgram, reuse: bool) {
+    if !reuse {
+        program.pixel_entry = 0;
+    }
+    let sequence = &mut show.signals;
+    let mut programs = core::mem::take(&mut sequence.programs).into_vec();
+    let program_index = programs.len() as u32;
+    programs.push(program);
+    sequence.programs = programs.into();
+    sequence.plan = SignalPlan {
+        output_index: 1,
+        target: 0,
+        vm_workspace_count: 1,
+        nodes: vec![
+            PreparedSignalNode {
+                kind: PreparedSignalKind::Layer { layer_index: 0 },
+            },
+            PreparedSignalNode {
+                kind: PreparedSignalKind::Operator {
+                    operator: PreparedOperatorNode {
+                        automation_slot: 0,
+                        implementation: PreparedOperator::Dsl(program_index),
+                        params: BoundParams::default(),
+                    },
+                    inputs: vec![0].into(),
+                    automation: vec![].into(),
+                    vm_slot: 0,
+                },
+            },
+        ]
+        .into(),
+        frame_nodes: vec![1].into(),
+        frame_slots: vec![0, 0].into(),
+        frame_buffer_count: 1,
+    };
+}
+
+// Used on the build host only; firmware receives the resulting table as data.
+#[allow(dead_code)]
+pub fn gamma_lookup() -> [u8; 256] {
+    use dawn_runtime::fixture::{DimmingCurve, apply_dimming_curve, quantize8};
+    core::array::from_fn(|value| {
+        quantize8(apply_dimming_curve(
+            &DimmingCurve::Gamma(2.2),
+            value as f32 / 255.0,
+        ))
+    })
+}
+
+pub fn apply_gamma(show: &mut PreparedSequence, lookup: Option<[u8; 256]>) {
+    use alloc::boxed::Box;
+    use dawn_runtime::fixture::DimmingCurve;
+    use dawn_runtime::patch::ColorEncoding;
+    let count = show.signals.pixel_count() as u32;
+    if let Some(lookup) = lookup {
+        let PatchStep::Filter {
+            filter: PreparedFilter::PackRgb { lookup: table, .. },
+            ..
+        } = &mut show.patch.steps[1]
+        else {
+            unreachable!()
+        };
+        *table = Some(Box::new(lookup));
+    } else {
+        let mut steps = show.patch.steps.to_vec();
+        steps.splice(
+            1..2,
+            [
+                PatchStep::Filter {
+                    input: 0,
+                    output_start: 2,
+                    filter: PreparedFilter::ColorBreakdown {
+                        capability: ColorEncoding::Rgb,
+                        cell_count: count,
+                    },
+                },
+                PatchStep::Filter {
+                    input: 2,
+                    output_start: 3,
+                    filter: PreparedFilter::DimmingCurve {
+                        curve: DimmingCurve::Gamma(2.2),
+                        width: count * 3,
+                    },
+                },
+                PatchStep::Filter {
+                    input: 3,
+                    output_start: 2,
+                    filter: PreparedFilter::ComponentReorder {
+                        components_per_cell: 3,
+                        order: Box::new([1, 0, 2]),
+                        cell_count: count,
+                    },
+                },
+                PatchStep::Filter {
+                    input: 2,
+                    output_start: 1,
+                    filter: PreparedFilter::Quantize8 { width: count * 3 },
+                },
+            ],
+        );
+        show.patch.steps = steps.into_boxed_slice();
+        show.patch.value_layouts = vec![
+            PatchValueLayout::Color(count),
+            PatchValueLayout::Slots(count * 3),
+            PatchValueLayout::Components(count * 3),
+            PatchValueLayout::Components(count * 3),
+        ]
+        .into_boxed_slice();
+    }
+}
+
+pub fn time(frame: usize) -> SampleTime {
+    SampleTime::from_ticks(3_000_000 + frame as u32 * 8_333)
+}
+
+pub fn context(count: usize, pixel: usize, frame: usize) -> RunContext {
+    RunContext {
+        progress: time(frame).ticks() as f32 / 8_000_000.0,
+        time: SampleDuration::from_ticks(time(frame).ticks()),
+        duration: SampleDuration::from_ticks(8_000_000),
+        pixel_index: pixel as i32,
+        pixel_count: count as i32,
+        pixel_fraction: pixel as f32 / (count - 1) as f32,
+    }
+}
+
+pub fn checksum(bytes: &[u8]) -> u32 {
+    bytes.iter().fold(0x811c9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(*byte)).wrapping_mul(0x01000193)
+    })
+}
+
+// A deliberately small prepared workload: one DSL effect on one RGB element,
+// one layer/output signal graph, and the production RGB-to-GRB patch path.
+// Construction is measured separately; the runtime evaluator is not duplicated.
+pub fn show(count: usize, program: BytecodeProgram, params: BoundParams) -> PreparedSequence {
+    PreparedSequence {
+        workspace_key: 1,
+        signals: PreparedSignalGraph {
+            workspace_key: 1,
+            frame_rate: 120,
+            frame_count: 960,
+            duration: SampleDuration::from_ticks(8_000_000),
+            elements: vec![PreparedElement {
+                id: 0,
+                pixel_count: count,
+            }]
+            .into_boxed_slice(),
+            element_cell_offsets: vec![0].into_boxed_slice(),
+            pixel_count: count,
+            effects: vec![PreparedEffect {
+                start_time: SampleTime::from_ticks(0),
+                duration: SampleDuration::from_ticks(8_000_000),
+                target: 0,
+                implementation: PreparedEffectImplementation::Dsl {
+                    program: 0,
+                    bound_params: params,
+                },
+                automation: None,
+            }]
+            .into_boxed_slice(),
+            programs: vec![program].into_boxed_slice(),
+            targets: vec![PreparedTarget {
+                pixels: 0..count as u32,
+                sample_count: 0,
+            }]
+            .into_boxed_slice(),
+            target_pixels: (0..count)
+                .map(|pixel| PreparedPixel {
+                    element_index: 0,
+                    element_cell_index: pixel as u16,
+                    pixel_index: pixel as u32,
+                    pixel_count: count as u32,
+                    pixel_fraction: pixel as f32 / (count - 1) as f32,
+                })
+                .collect(),
+            effects_by_layer: vec![vec![0].into_boxed_slice()].into_boxed_slice(),
+            layers: vec![PreparedLayer { enabled: true }].into_boxed_slice(),
+            plan: SignalPlan {
+                output_index: 1,
+                target: 0,
+                nodes: vec![
+                    PreparedSignalNode {
+                        kind: PreparedSignalKind::Layer { layer_index: 0 },
+                    },
+                    PreparedSignalNode {
+                        kind: PreparedSignalKind::Output {
+                            inputs: vec![0].into_boxed_slice(),
+                        },
+                    },
+                ]
+                .into_boxed_slice(),
+                vm_workspace_count: 0,
+                frame_nodes: vec![0, 1].into_boxed_slice(),
+                frame_slots: vec![0, 1].into_boxed_slice(),
+                frame_buffer_count: 2,
+            },
+        },
+        elements: vec![(ElementNodeId(0), ElementLayout::Color(count as u32))].into_boxed_slice(),
+        controls: vec![].into_boxed_slice(),
+        fixture_behaviors: FixtureBehaviors {
+            bindings: vec![].into_boxed_slice(),
+            rules: vec![].into_boxed_slice(),
+        },
+        patch: PreparedPatch {
+            steps: vec![
+                PatchStep::Source {
+                    output: 0,
+                    source: PatchSource {
+                        spans: vec![PatchSourceSpan {
+                            element: 0,
+                            cells: 0..count as u32,
+                        }]
+                        .into(),
+                    },
+                },
+                PatchStep::Filter {
+                    input: 0,
+                    output_start: 1,
+                    filter: PreparedFilter::PackRgb {
+                        lookup: None,
+                        cell_count: count as u32,
+                        order: [1, 0, 2],
+                    },
+                },
+                PatchStep::Sink {
+                    input: 1,
+                    frame: 0,
+                    start: 0,
+                    end: count as u32 * 3,
+                },
+            ]
+            .into_boxed_slice(),
+            value_layouts: vec![
+                PatchValueLayout::Color(count as u32),
+                PatchValueLayout::Slots(count as u32 * 3),
+            ]
+            .into_boxed_slice(),
+            fixture_programs: vec![].into_boxed_slice(),
+        },
+        output_widths: vec![count as u32 * 3].into_boxed_slice(),
+        color_spans: vec![(0, 0..count as u32)].into_boxed_slice(),
+    }
+}
+
+// Identical overlapping inputs have the same max-composited golden output.
+// This isolates coverage/layer cost without changing effect math or geometry.
+pub fn layered_show(
+    count: usize,
+    program: BytecodeProgram,
+    params: BoundParams,
+    layers: usize,
+) -> PreparedSequence {
+    assert!(layers > 0);
+    let mut show = show(count, program, params);
+    let sequence = &mut show.signals;
+    sequence.effects = vec![sequence.effects[0].clone(); layers].into();
+    sequence.layers = vec![PreparedLayer { enabled: true }; layers].into();
+    sequence.effects_by_layer = (0..layers).map(|i| vec![i].into()).collect();
+    let graph = &mut sequence.plan;
+    graph.nodes = (0..layers)
+        .map(|i| PreparedSignalNode {
+            kind: PreparedSignalKind::Layer { layer_index: i },
+        })
+        .chain(core::iter::once(PreparedSignalNode {
+            kind: PreparedSignalKind::Output {
+                inputs: (0..layers).collect(),
+            },
+        }))
+        .collect();
+    graph.output_index = layers;
+    // Match elaboration's single-input alias; multiple inputs need composition.
+    graph.frame_nodes = (0..if layers == 1 { 1 } else { layers + 1 }).collect();
+    graph.frame_slots = (0..=layers)
+        .map(|i| if layers == 1 { 0 } else { i as u16 })
+        .collect();
+    graph.frame_buffer_count = if layers == 1 { 1 } else { (layers + 1) as u16 };
+    show
+}

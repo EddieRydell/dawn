@@ -114,6 +114,7 @@ pub(crate) fn prepare_effect_inst(
             let target = sorted_sample_target(&target);
             let automation = (!automation.is_empty()).then(|| {
                 Box::new(PreparedEffectAutomation {
+                    workspace_slot: 0,
                     bindings: automation.into_boxed_slice(),
                 })
             });

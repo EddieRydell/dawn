@@ -67,9 +67,8 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
     assert!(!first.elements.is_empty());
     assert!(!first.controller_frames.is_empty());
     let preview_checksum = first.elements.iter().fold(0u64, |hash, element| {
-        element
-            .preview_colors()
-            .into_iter()
+        (0..)
+            .map_while(|cell| element.preview_color(cell))
             .fold(hash, |hash, color| {
                 hash.wrapping_mul(16777619)
                     ^ u64::from(color.red)
@@ -85,9 +84,8 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
     assert_eq!(
         preview_checksum,
         second.elements.iter().fold(0u64, |hash, element| {
-            element
-                .preview_colors()
-                .into_iter()
+            (0..)
+                .map_while(|cell| element.preview_color(cell))
                 .fold(hash, |hash, color| {
                     hash.wrapping_mul(16777619)
                         ^ u64::from(color.red)

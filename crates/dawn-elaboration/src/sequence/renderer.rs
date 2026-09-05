@@ -3,7 +3,7 @@ use dawn_language::element::ElementNodeId;
 use dawn_language::sequence::{MarkCollectionKey, SequenceId};
 use dawn_language::setup::SetupId;
 use dawn_runtime::dsl::RuntimeError;
-use dawn_runtime::sequence::EvaluationError;
+use dawn_runtime::signal::EvaluationError;
 
 pub const MAX_GENERATED_EFFECTS: usize = 4_096;
 

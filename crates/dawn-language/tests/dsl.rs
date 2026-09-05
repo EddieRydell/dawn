@@ -5,6 +5,21 @@ use dawn_language::dsl::{
 use dawn_language::effect::BuiltinEffect;
 use dawn_language::values::{SampleDuration, SampleTime};
 use indexmap::IndexMap;
+
+#[test]
+fn context_only_types_cannot_be_nested_in_parameters() {
+    for ty in ["Timeline", "Target", "TargetItems", "TargetItem"] {
+        for nested in [format!("array<{ty}>"), format!("array<array<{ty}>>")] {
+            let source = format!(
+                "effect Invalid {{ param {nested} stored; color sample() {{ return rgb(0.0, 0.0, 0.0); }} }}"
+            );
+            assert!(
+                compile_effects(&source).is_err(),
+                "accepted context-only parameter {nested}"
+            );
+        }
+    }
+}
 use std::sync::Arc;
 
 #[test]
@@ -16,6 +31,64 @@ fn declaration_kinds_are_source_specific() {
         .is_err()
     );
     assert!(compile_operators("effect Solid { color sample() { return #ffffff; } }").is_err());
+}
+
+#[test]
+fn assigned_parameters_are_invocation_local_across_branches_and_loops() {
+    let effect = compile_effects(
+        "effect Assigned {
+        param float amount = 0.25;
+        color sample() {
+            if (progress() > 0.5) { amount = amount + 0.25; }
+            for (int i = 0; i < 2; i = i + 1) { amount = amount + 0.1; }
+            return rgb(amount, 0.0, 0.0);
+        }
+    }",
+    )
+    .unwrap()
+    .remove(0);
+    let params = effect.bind_params(&IndexMap::new()).unwrap();
+    let mut workspace = VmWorkspace::default();
+    for (progress, red) in [(0.0, 115), (1.0, 179), (0.0, 115)] {
+        let context = OperatorRunContext {
+            progress,
+            time: SampleDuration::from_ticks(0),
+            duration: SampleDuration::from_ticks(1_000_000),
+            pixel_index: 0,
+            pixel_count: 1,
+            pixel_fraction: 0.0,
+        };
+        assert_eq!(
+            effect
+                .sample_bound(&params, &context, &mut workspace)
+                .unwrap(),
+            Color {
+                red,
+                green: 0,
+                blue: 0
+            }
+        );
+    }
+}
+
+#[test]
+fn compiler_tracks_pixel_dependency_including_branches_and_signal_samples() {
+    for (expression, expected) in [
+        ("rgb(progress(), sin(seconds()), 0.0)", false),
+        ("rgb(pixel_fraction(), 0.0, 0.0)", true),
+        ("rgb(pixel_count(), 0.0, 0.0)", true),
+        ("rgb(section_position(4.0), 0.0, 0.0)", true),
+    ] {
+        let source = format!("effect Dependency {{ color sample() {{ return {expression}; }} }}");
+        let effect = compile_effects(&source).unwrap().remove(0);
+        assert_eq!(effect.bytecode.uses_pixel_context, expected, "{expression}");
+    }
+    let operator = compile_operators("operator Identity { input Signal source; color sample() { return source.at(seconds()); } }")
+        .unwrap().remove(0);
+    assert!(operator.bytecode.uses_pixel_context);
+    let effect = compile_effects("effect Branch { color sample() { if (progress() > 0.5) { return rgb(pixel_index(), 0.0, 0.0); } return #000000; } }")
+        .unwrap().remove(0);
+    assert!(effect.bytecode.uses_pixel_context);
 }
 
 #[test]
@@ -463,6 +536,79 @@ fn required_parameters_and_integer_remainder_fail_without_panicking() {
 }
 
 struct ConstantSignal(Color);
+
+#[test]
+fn repeated_signal_reads_reuse_only_unchanged_values_in_one_block() {
+    #[derive(Default)]
+    struct Samples(Vec<(usize, u32)>);
+    impl SignalSampler for Samples {
+        fn sample_signal(&mut self, input: usize, time: SampleTime) -> Result<Color, RuntimeError> {
+            self.0.push((input, time.ticks()));
+            Ok(Color {
+                red: (time.ticks() / 1000).min(255) as u8,
+                green: input as u8,
+                blue: 0,
+            })
+        }
+    }
+    for (body, calls, red, green) in [
+        (
+            "float t = seconds(); color a = source.at(t); color b = other.at(t); return max(max(a, b), source.at(t));",
+            vec![(0, 250000), (1, 250000)],
+            250,
+            1,
+        ),
+        (
+            "float t = seconds(); float p = t - 0.125; color a = source.at(t); color b = source.at(p); color c = source.at(t); color d = source.at(p); return max(max(a,b), max(c,d));",
+            vec![(0, 250000), (0, 125000)],
+            250,
+            0,
+        ),
+        (
+            "float t = seconds(); color a = source.at(t); t = t + 0.125; return max(a, source.at(t));",
+            vec![(0, 250000), (0, 375000)],
+            255,
+            0,
+        ),
+        (
+            "float t = seconds(); color a = source.at(t); if (progress() > 0.5) { a = source.at(t); } return max(a, source.at(t));",
+            vec![(0, 250000); 3],
+            250,
+            0,
+        ),
+        (
+            "float t = seconds(); color a = rgb(0.0, 0.0, 0.0); for (int i = 0; i < 2; i = i + 1) { a = max(source.at(t), source.at(t)); } return a;",
+            vec![(0, 250000); 2],
+            250,
+            0,
+        ),
+    ] {
+        let operator = compile_operators(&format!("operator Reads {{ input Signal source; input Signal other; color sample() {{ {body} }} }}")).unwrap().remove(0);
+        let params = operator.bind_params(&IndexMap::new()).unwrap();
+        let context = OperatorRunContext {
+            progress: 1.0,
+            time: SampleDuration::from_ticks(250000),
+            duration: SampleDuration::from_ticks(1000000),
+            pixel_index: 0,
+            pixel_count: 1,
+            pixel_fraction: 0.0,
+        };
+        let mut samples = Samples::default();
+        let color = operator
+            .sample_bound(&params, &context, &mut samples, &mut VmWorkspace::default())
+            .unwrap();
+        assert_eq!(samples.0, calls, "{body}");
+        assert_eq!(
+            color,
+            Color {
+                red,
+                green,
+                blue: 0
+            },
+            "{body}"
+        );
+    }
+}
 
 impl SignalSampler for ConstantSignal {
     fn sample_signal(

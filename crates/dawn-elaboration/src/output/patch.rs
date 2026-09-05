@@ -11,7 +11,8 @@ use dawn_language::patch::{
     prepare_filter, prepare_fixture_encoding,
 };
 use dawn_runtime::patch::{
-    ColorEncoding, PatchSource, PatchSourceCell, PatchStep, PreparedFilter, PreparedPatch,
+    ColorEncoding, PatchSource, PatchSourceSpan, PatchStep, PatchValue, PreparedFilter,
+    PreparedPatch,
 };
 use std::collections::HashMap;
 
@@ -84,32 +85,41 @@ pub(crate) fn prepare_patch(
                         "patch source declares a derived value type".to_string(),
                     ));
                 }
-                let cells = addresses
-                    .into_iter()
-                    .map(|address| {
-                        Ok(PatchSourceCell {
-                            element: u32::try_from(
-                                *element_indexes.get(&address.node).ok_or_else(|| {
-                                    SequenceOutputPrepareError::InvalidPatch(
-                                        "patch source references a group or missing element"
-                                            .to_string(),
-                                    )
-                                })?,
+                let mut spans: Vec<PatchSourceSpan> = Vec::new();
+                for address in addresses {
+                    let element =
+                        u32::try_from(*element_indexes.get(&address.node).ok_or_else(|| {
+                            SequenceOutputPrepareError::InvalidPatch(
+                                "patch source references a group or missing element".to_string(),
                             )
-                            .map_err(|error| {
-                                SequenceOutputPrepareError::InvalidPatch(format!("{error:?}"))
-                            })?,
-                            cell: address.cell,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, SequenceOutputPrepareError>>()?;
+                        })?)
+                        .map_err(|error| {
+                            SequenceOutputPrepareError::InvalidPatch(format!("{error:?}"))
+                        })?;
+                    let end = address.cell.checked_add(1).ok_or_else(|| {
+                        SequenceOutputPrepareError::InvalidPatch(
+                            "patch cell index exceeds span range".into(),
+                        )
+                    })?;
+                    if let Some(last) = spans.last_mut()
+                        && last.element == element
+                        && last.cells.end == address.cell
+                    {
+                        last.cells.end = end;
+                    } else {
+                        spans.push(PatchSourceSpan {
+                            element,
+                            cells: address.cell..end,
+                        });
+                    }
+                }
                 let output = index32(value_types.len())?;
                 value_types.push(source.output.clone());
                 outputs.insert((id, PatchPortId(0)), output);
                 steps.push(PatchStep::Source {
                     output,
                     source: PatchSource {
-                        cells: cells.into_boxed_slice(),
+                        spans: spans.into_boxed_slice(),
                     },
                 });
             }
@@ -236,7 +246,7 @@ pub(crate) fn prepare_patch(
         }
     }
 
-    fuse_rgb_packing(&mut steps, value_types.len());
+    fuse_rgb_packing(&mut steps, value_types.len())?;
 
     // Keep a value through its last reader, including readers reached through fan-out.
     let mut last_read = vec![0; value_types.len()];
@@ -290,7 +300,10 @@ pub(crate) fn prepare_patch(
     })
 }
 
-fn fuse_rgb_packing(steps: &mut Vec<PatchStep>, value_count: usize) {
+fn fuse_rgb_packing(
+    steps: &mut Vec<PatchStep>,
+    value_count: usize,
+) -> Result<(), SequenceOutputPrepareError> {
     let mut producers = vec![None; value_count];
     let mut readers = vec![0; value_count];
     for (index, step) in steps.iter().enumerate() {
@@ -334,6 +347,16 @@ fn fuse_rgb_packing(steps: &mut Vec<PatchStep>, value_count: usize) {
                 PatchStep::Filter {
                     input,
                     filter:
+                        PreparedFilter::DimmingCurve { width: count, .. }
+                        | PreparedFilter::ScaleInvert { width: count, .. },
+                    ..
+                } if *count == width => {
+                    chain.push(producer);
+                    cursor = *input;
+                }
+                PatchStep::Filter {
+                    input,
+                    filter:
                         PreparedFilter::ComponentReorder {
                             components_per_cell: 3,
                             order: upstream,
@@ -362,10 +385,43 @@ fn fuse_rgb_packing(steps: &mut Vec<PatchStep>, value_count: usize) {
             }
         }
         if let Some((input, cell_count)) = packed {
+            // Every channel starts as one of 256 RGB8 values. Evaluate fixed
+            // component-wise transforms in their original order, using the same
+            // filter implementation as unfused playback. Reorders commute with
+            // these channel-independent transforms and are composed above.
+            let mut values =
+                PatchValue::Components((0..=255).map(|value| value as f32 / 255.0).collect());
+            let mut temporary = [PatchValue::Components(Vec::with_capacity(256))];
+            for &producer in chain.iter().rev() {
+                let PatchStep::Filter { filter, .. } = &steps[producer] else {
+                    unreachable!()
+                };
+                let mut filter = filter.clone();
+                match &mut filter {
+                    PreparedFilter::DimmingCurve { width, .. }
+                    | PreparedFilter::ScaleInvert { width, .. } => *width = 256,
+                    _ => continue,
+                }
+                filter.evaluate(&values, &mut temporary).map_err(|error| {
+                    SequenceOutputPrepareError::InvalidPatch(format!("{error:?}"))
+                })?;
+                std::mem::swap(&mut values, &mut temporary[0]);
+            }
+            let PatchValue::Components(values) = values else {
+                unreachable!()
+            };
+            let lookup = Box::new(std::array::from_fn(|index| {
+                dawn_runtime::fixture::quantize8(values[index])
+            }));
+            let lookup = (!lookup.iter().copied().eq(0..=255)).then_some(lookup);
             steps[index] = PatchStep::Filter {
                 input,
                 output_start: output,
-                filter: PreparedFilter::PackRgb { cell_count, order },
+                filter: PreparedFilter::PackRgb {
+                    cell_count,
+                    order,
+                    lookup,
+                },
             };
             for producer in chain {
                 removed[producer] = true;
@@ -378,4 +434,5 @@ fn fuse_rgb_packing(steps: &mut Vec<PatchStep>, value_count: usize) {
         index += 1;
         keep
     });
+    Ok(())
 }

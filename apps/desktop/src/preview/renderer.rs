@@ -314,9 +314,7 @@ impl PreviewRenderer {
                     .elements
                     .iter()
                     .find(|element| element.node() == binding.node)
-                    .and_then(|element| {
-                        element.preview_colors().get(binding.cell as usize).copied()
-                    });
+                    .and_then(|element| element.preview_color(binding.cell as usize));
                 if let Some(color) = color {
                     *target = PreviewColorGpu::from_color(color);
                 }

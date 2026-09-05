@@ -12,7 +12,6 @@ use crate::values::{
     Color, Curve, Gradient, Marks, SampleDuration, SampleTime, SampleTimeError,
     sample_duration_from_seconds_f32, sample_duration_seconds_f32, sample_time_with_seconds_offset,
 };
-use alloc::format;
 #[cfg(not(feature = "atomic"))]
 use alloc::rc::Rc as Arc;
 use alloc::string::String;
@@ -20,6 +19,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{boxed::Box, format};
 
 pub const MAX_VM_INSTRUCTIONS_PER_INVOCATION: usize = 10_000;
 
@@ -35,6 +35,8 @@ pub struct RunContext {
 
 pub type OperatorRunContext = RunContext;
 
+/// Samples an immutable signal for the current pixel. Identical input/time
+/// queries must produce the same result; compilation and evaluation may reuse it.
 pub trait SignalSampler {
     fn sample_signal(
         &mut self,
@@ -78,10 +80,6 @@ pub struct BoundParams {
 }
 
 impl BoundParams {
-    pub(crate) fn len(&self) -> usize {
-        self.values.len()
-    }
-
     pub(crate) fn clone_for_automation(&self) -> Self {
         Self {
             values: self
@@ -106,16 +104,8 @@ impl BoundParams {
         let Some(value) = self.values.get_mut(param_index) else {
             return;
         };
-        match (value, mapping) {
-            (BoundParamValue::Curve(value), AutomationMapping::Curve { .. }) => {
-                Arc::make_mut(value).reserve_window_capacity(curve.points.len());
-            }
-            (BoundParamValue::Enum(value), AutomationMapping::Enum { values }) => {
-                if let Some(len) = values.iter().map(|value| value.as_str().len()).max() {
-                    value.reserve_len(len);
-                }
-            }
-            _ => {}
+        if let (BoundParamValue::Curve(value), AutomationMapping::Curve { .. }) = (value, mapping) {
+            Arc::make_mut(value).reserve_window_capacity(curve.points.len());
         }
     }
 
@@ -461,6 +451,8 @@ impl PreparedCurve {
     }
 
     fn reserve_window_capacity(&mut self, point_count: usize) {
+        // Empty windows still emit one sampled fallback point.
+        let point_count = point_count.max(1);
         let raw = Arc::make_mut(&mut self.raw);
         if raw.points.capacity() < point_count {
             raw.points.reserve(point_count - raw.points.len());
@@ -502,35 +494,122 @@ impl PreparedGradient {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct VmWorkspace {
     registers: VmRegisters,
-    param_overrides: Vec<Option<RuntimeValue>>,
+    arrays: Option<Box<ArrayStorage>>,
 }
 
 impl VmWorkspace {
-    pub(crate) fn reserve(&mut self, bytecode: &BytecodeProgram, param_count: usize) {
+    pub(crate) fn reserve(&mut self, bytecode: &BytecodeProgram) {
         self.registers.reserve(bytecode.layout);
-        if self.param_overrides.capacity() < param_count {
-            self.param_overrides
-                .reserve(param_count - self.param_overrides.len());
+        self.reserve_arrays(bytecode);
+    }
+
+    fn reserve_arrays(&mut self, bytecode: &BytecodeProgram) {
+        if bytecode.array_capacity == 0 {
+            return;
         }
+        let (capacity, width) = self.arrays.as_ref().map_or((0, 0), |arrays| {
+            (arrays.references.len() as u32, arrays.width)
+        });
+        if capacity < bytecode.array_capacity || width < bytecode.array_width {
+            self.arrays = Some(Box::new(ArrayStorage::new(
+                capacity.max(bytecode.array_capacity),
+                width.max(bytecode.array_width),
+            )));
+        }
+    }
+}
+
+// Slots have a compiler-bounded width, so allocation cannot fragment the value
+// buffer. Counts represent register roots and array children, not temporary
+// borrowed handles returned by value()/index_value(). No atomics or GC pass.
+struct ArrayStorage {
+    allocator: offset_allocator::Allocator,
+    allocations: Vec<Option<offset_allocator::Allocation>>,
+    references: Vec<u32>,
+    lengths: Vec<u32>,
+    values: Vec<RuntimeValue>,
+    width: u32,
+}
+
+impl core::fmt::Debug for ArrayStorage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ArrayStorage")
+            .field("capacity", &self.references.len())
+            .field("width", &self.width)
+            .finish()
+    }
+}
+
+impl ArrayStorage {
+    fn new(capacity: u32, width: u32) -> Self {
+        Self {
+            allocator: offset_allocator::Allocator::with_max_allocs(capacity, capacity * 2 + 1),
+            allocations: vec![None; capacity as usize],
+            references: vec![0; capacity as usize],
+            lengths: vec![0; capacity as usize],
+            values: vec![RuntimeValue::Void; capacity as usize * width as usize],
+            width,
+        }
+    }
+
+    fn allocate(&mut self, len: usize) -> Result<u32, RuntimeError> {
+        if len > self.width as usize {
+            return Err(RuntimeError::new("array exceeds prepared width"));
+        }
+        let allocation = self
+            .allocator
+            .allocate(1)
+            .ok_or_else(|| RuntimeError::new("array storage exhausted"))?;
+        let index = allocation.offset as usize;
+        self.allocations[index] = Some(allocation);
+        self.references[index] = 1; // Construction root; transferred by set_ref.
+        self.lengths[index] = len as u32;
+        Ok(index as u32)
+    }
+
+    fn items(&self, index: u32) -> &[RuntimeValue] {
+        let start = index as usize * self.width as usize;
+        &self.values[start..start + self.lengths[index as usize] as usize]
+    }
+
+    fn retain(&mut self, value: &RuntimeValue) {
+        if let RuntimeValue::ArraySlot(index) = value {
+            self.references[*index as usize] += 1;
+        }
+    }
+
+    fn release(&mut self, value: RuntimeValue) {
+        let RuntimeValue::ArraySlot(index) = value else {
+            return;
+        };
+        self.references[index as usize] -= 1;
+        if self.references[index as usize] != 0 {
+            return;
+        }
+        let start = index as usize * self.width as usize;
+        for offset in start..start + self.lengths[index as usize] as usize {
+            let child = core::mem::replace(&mut self.values[offset], RuntimeValue::Void);
+            self.release(child);
+        }
+        self.lengths[index as usize] = 0;
+        self.allocator.free(
+            self.allocations[index as usize]
+                .take()
+                .expect("live array allocation"),
+        );
     }
 }
 
 #[derive(Clone, Debug, Default)]
 struct VmRegisters {
-    layout: Option<VmRegisterLayout>,
     ints: Vec<i32>,
     floats: Vec<f32>,
     bools: Vec<bool>,
     colors: Vec<Color>,
     refs: Vec<RuntimeValue>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VmRegisterLayout {
-    layout: SlotLayout,
 }
 
 impl VmRegisters {
@@ -543,11 +622,7 @@ impl VmRegisters {
     }
 
     fn prepare(&mut self, bytecode: &BytecodeProgram) {
-        let layout = VmRegisterLayout {
-            layout: bytecode.layout,
-        };
-        if self.layout == Some(layout)
-            && self.ints.len() == bytecode.layout.ints as usize
+        if self.ints.len() == bytecode.layout.ints as usize
             && self.floats.len() == bytecode.layout.floats as usize
             && self.bools.len() == bytecode.layout.bools as usize
             && self.colors.len() == bytecode.layout.colors as usize
@@ -555,7 +630,6 @@ impl VmRegisters {
         {
             return;
         }
-        self.layout = Some(layout);
         self.ints.clear();
         self.ints.resize(bytecode.layout.ints as usize, 0);
         self.floats.clear();
@@ -614,7 +688,7 @@ pub(crate) fn run_sample_effect(
     if effect.kind != EffectKind::Sample {
         return Err(RuntimeError::new("cannot sample generator effect"));
     }
-    run_sample_program(&effect.bytecode, params, context, workspace)
+    run_sample_program(&effect.bytecode, params, context, workspace, 0)
 }
 
 pub(super) fn run_sample_program(
@@ -622,6 +696,7 @@ pub(super) fn run_sample_program(
     params: &BoundParams,
     context: &RunContext,
     workspace: &mut VmWorkspace,
+    entry: usize,
 ) -> Result<Color, RuntimeError> {
     let mut vm = Vm::new(
         bytecode,
@@ -630,6 +705,7 @@ pub(super) fn run_sample_program(
         workspace,
         None,
         None,
+        entry,
     );
     vm.run_color()
 }
@@ -651,6 +727,7 @@ pub(crate) fn run_generator_effect(
         workspace,
         None,
         Some((effect, &mut generated)),
+        0,
     );
     let _ = vm.run()?;
     drop(vm);
@@ -664,7 +741,7 @@ pub(crate) fn run_operator(
     sampler: &mut dyn SignalSampler,
     workspace: &mut VmWorkspace,
 ) -> Result<Color, RuntimeError> {
-    run_operator_program(&operator.bytecode, params, context, sampler, workspace)
+    run_operator_program(&operator.bytecode, params, context, sampler, workspace, 0)
 }
 
 pub(super) fn run_operator_program(
@@ -673,6 +750,7 @@ pub(super) fn run_operator_program(
     context: &OperatorRunContext,
     sampler: &mut dyn SignalSampler,
     workspace: &mut VmWorkspace,
+    entry: usize,
 ) -> Result<Color, RuntimeError> {
     let mut vm = Vm::new(
         bytecode,
@@ -681,6 +759,7 @@ pub(super) fn run_operator_program(
         workspace,
         Some(sampler),
         None,
+        entry,
     );
     vm.run_color()
 }
@@ -702,6 +781,7 @@ enum RuntimeValue {
     PreparedCurve(Arc<PreparedCurve>),
     PreparedGradient(Arc<PreparedGradient>),
     Array(Arc<[Value]>),
+    ArraySlot(u32),
     Enum(Identifier),
 }
 
@@ -742,6 +822,7 @@ fn clone_runtime(value: &RuntimeValue) -> RuntimeValue {
         RuntimeValue::PreparedCurve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
         RuntimeValue::PreparedGradient(value) => RuntimeValue::PreparedGradient(Arc::clone(value)),
         RuntimeValue::Array(value) => RuntimeValue::Array(Arc::clone(value)),
+        RuntimeValue::ArraySlot(index) => RuntimeValue::ArraySlot(*index),
         RuntimeValue::Enum(value) => RuntimeValue::Enum(value.clone()),
     }
 }
@@ -769,15 +850,12 @@ impl Drop for Vm<'_> {
         // the next automation update needs exclusive access to its prepared curves.
         // Preserve register lengths/capacities so the next invocation reuses storage.
         // Assign directly: Clone-based slice fill produces unnecessary variant dispatch.
-        self.workspace
-            .registers
-            .refs
-            .iter_mut()
-            .for_each(|value| *value = RuntimeValue::Void);
-        self.workspace
-            .param_overrides
-            .iter_mut()
-            .for_each(|value| *value = None);
+        for value in &mut self.workspace.registers.refs {
+            let value = core::mem::replace(value, RuntimeValue::Void);
+            if let Some(arrays) = &mut self.workspace.arrays {
+                arrays.release(value);
+            }
+        }
     }
 }
 
@@ -789,18 +867,22 @@ impl<'a> Vm<'a> {
         workspace: &'a mut VmWorkspace,
         signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
         generated: Option<(&'a CompiledEffect, &'a mut Vec<GeneratedEffect>)>,
+        entry: usize,
     ) -> Self {
-        workspace.registers.prepare(bytecode);
-        if workspace.param_overrides.len() != params.values.len() {
-            workspace.param_overrides.clear();
-            workspace.param_overrides.resize(params.values.len(), None);
+        // A nonzero entry resumes a frame's initialized program/workspace.
+        // Independent samples and each frame's first pixel always start at zero.
+        if entry == 0 {
+            workspace.registers.prepare(bytecode);
+            if bytecode.array_capacity != 0 {
+                workspace.reserve_arrays(bytecode);
+            }
         }
         Self {
             bytecode,
             params,
             context,
             workspace,
-            ip: 0,
+            ip: entry,
             loop_iterations: 0,
             signal_sampler,
             generated,
@@ -850,13 +932,6 @@ impl<'a> Vm<'a> {
                     let value = self.generator_context_value(*slot)?;
                     self.set_value(*dst, value)?;
                 }
-                Instruction::StoreParam { param, src } => {
-                    let value = self.value(*src)?;
-                    let Some(slot) = self.workspace.param_overrides.get_mut(*param) else {
-                        return Err(RuntimeError::new("invalid param slot"));
-                    };
-                    *slot = Some(value);
-                }
                 Instruction::Move { dst, src } => {
                     self.copy_slot(*dst, *src)?;
                 }
@@ -865,17 +940,50 @@ impl<'a> Vm<'a> {
                         .bytecode
                         .value_operands(*items)
                         .ok_or_else(|| RuntimeError::new("invalid value operand span"))?;
-                    let values = items
-                        .iter()
-                        .map(|item| self.value(*item).map(runtime_to_value))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    self.set_ref(*dst, RuntimeValue::Array(Arc::from(values)))?;
+                    let index = self
+                        .workspace
+                        .arrays
+                        .as_mut()
+                        .ok_or_else(|| RuntimeError::new("missing prepared array storage"))?
+                        .allocate(items.len())?;
+                    let result = (|| {
+                        for (offset, item) in items.iter().enumerate() {
+                            let value = self.value(*item)?;
+                            let arrays = self
+                                .workspace
+                                .arrays
+                                .as_mut()
+                                .expect("prepared array storage");
+                            arrays.retain(&value);
+                            arrays.values[index as usize * arrays.width as usize + offset] = value;
+                        }
+                        self.set_ref(*dst, RuntimeValue::ArraySlot(index))
+                    })();
+                    self.workspace
+                        .arrays
+                        .as_mut()
+                        .expect("prepared array storage")
+                        .release(RuntimeValue::ArraySlot(index));
+                    result?;
                 }
                 Instruction::Index { dst, target, index } => {
                     let target = self.ref_value(*target)?;
                     let index = self.value(*index)?;
                     let value = self.index_value(target, &index)?;
                     self.set_value(*dst, value)?;
+                }
+                Instruction::Select { dst, items, index } => {
+                    let index = self.value(*index)?;
+                    let index = usize::try_from(to_int_runtime(&index, self.params)?)
+                        .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
+                    let source = self
+                        .bytecode
+                        .value_operands(*items)
+                        .ok_or_else(|| RuntimeError::new("invalid value operand span"))?
+                        .get(index)
+                        .copied()
+                        .ok_or_else(|| RuntimeError::new("array index out of bounds"))?;
+                    self.copy_slot(*dst, source)?;
                 }
                 Instruction::CurveParamSample {
                     dst,
@@ -892,15 +1000,8 @@ impl<'a> Vm<'a> {
                     position,
                 } => {
                     let position = self.float(*position)?;
-                    let color = match self.workspace.param_overrides.get(*param) {
-                        Some(Some(RuntimeValue::Gradient(gradient))) => {
-                            sample_gradient(gradient, position)?
-                        }
-                        _ => sample_prepared_gradient(
-                            self.prepared_gradient_param(*param)?,
-                            position,
-                        )?,
-                    };
+                    let color =
+                        sample_prepared_gradient(self.prepared_gradient_param(*param)?, position)?;
                     self.set_color(*dst, color)?;
                 }
                 Instruction::SignalSample {
@@ -1081,8 +1182,8 @@ impl<'a> Vm<'a> {
                 Instruction::FloatUnary { dst, op, value } => {
                     let value = self.float(*value)?;
                     let result = match op {
-                        FloatUnary::Sin => libm::sinf(value),
-                        FloatUnary::Cos => libm::cosf(value),
+                        FloatUnary::Sin => micromath::F32Ext::sin(value),
+                        FloatUnary::Cos => micromath::F32Ext::cos(value),
                         FloatUnary::Abs => value.abs(),
                         FloatUnary::Floor => libm::floorf(value),
                     };
@@ -1331,6 +1432,14 @@ impl<'a> Vm<'a> {
                     let value = match self.ref_value(*value)? {
                         RuntimeValue::Array(items) => i32::try_from(items.len())
                             .map_err(|_| RuntimeError::new("array length exceeds int range"))?,
+                        RuntimeValue::ArraySlot(index) => i32::try_from(
+                            self.workspace
+                                .arrays
+                                .as_ref()
+                                .expect("prepared array storage")
+                                .lengths[*index as usize],
+                        )
+                        .map_err(|_| RuntimeError::new("array length exceeds int range"))?,
                         RuntimeValue::Marks(marks) => i32::try_from(marks.marks.len())
                             .map_err(|_| RuntimeError::new("mark count exceeds int range"))?,
                         _ => return Err(RuntimeError::new("len requires array or marks")),
@@ -1651,7 +1760,13 @@ impl<'a> Vm<'a> {
     }
 
     fn set_ref(&mut self, slot: RefSlot, value: RuntimeValue) -> Result<(), RuntimeError> {
-        self.workspace.registers.refs[slot.0 as usize] = value;
+        if let Some(arrays) = &mut self.workspace.arrays {
+            arrays.retain(&value);
+        }
+        let old = core::mem::replace(&mut self.workspace.registers.refs[slot.0 as usize], value);
+        if let Some(arrays) = &mut self.workspace.arrays {
+            arrays.release(old);
+        }
         Ok(())
     }
 
@@ -1683,13 +1798,6 @@ impl<'a> Vm<'a> {
     }
 
     fn load_int_param(&mut self, slot: IntSlot, index: usize) -> Result<(), RuntimeError> {
-        if let Some(Some(value)) = self.workspace.param_overrides.get(index) {
-            return match value {
-                RuntimeValue::Int(value) => self.set_int(slot, *value),
-                RuntimeValue::Float(value) => self.set_int(slot, *value as i32),
-                _ => Err(RuntimeError::new("expected int")),
-            };
-        }
         match self.params.values.get(index) {
             Some(BoundParamValue::Int(value)) => self.set_int(slot, *value),
             Some(BoundParamValue::Float(value)) => self.set_int(slot, *value as i32),
@@ -1699,13 +1807,6 @@ impl<'a> Vm<'a> {
     }
 
     fn load_float_param(&mut self, slot: FloatSlot, index: usize) -> Result<(), RuntimeError> {
-        if let Some(Some(value)) = self.workspace.param_overrides.get(index) {
-            return match value {
-                RuntimeValue::Float(value) => self.set_float(slot, *value),
-                RuntimeValue::Int(value) => self.set_float(slot, *value as f32),
-                _ => Err(RuntimeError::new("expected float")),
-            };
-        }
         match self.params.values.get(index) {
             Some(BoundParamValue::Float(value)) => self.set_float(slot, *value),
             Some(BoundParamValue::Int(value)) => self.set_float(slot, *value as f32),
@@ -1715,12 +1816,6 @@ impl<'a> Vm<'a> {
     }
 
     fn load_bool_param(&mut self, slot: BoolSlot, index: usize) -> Result<(), RuntimeError> {
-        if let Some(Some(value)) = self.workspace.param_overrides.get(index) {
-            return match value {
-                RuntimeValue::Bool(value) => self.set_bool(slot, *value),
-                _ => Err(RuntimeError::new("expected bool")),
-            };
-        }
         match self.params.values.get(index) {
             Some(BoundParamValue::Bool(value)) => self.set_bool(slot, *value),
             Some(_) => Err(RuntimeError::new("expected bool")),
@@ -1729,12 +1824,6 @@ impl<'a> Vm<'a> {
     }
 
     fn load_color_param(&mut self, slot: ColorSlot, index: usize) -> Result<(), RuntimeError> {
-        if let Some(Some(value)) = self.workspace.param_overrides.get(index) {
-            return match value {
-                RuntimeValue::Color(value) => self.set_color(slot, *value),
-                _ => Err(RuntimeError::new("expected color")),
-            };
-        }
         match self.params.values.get(index) {
             Some(BoundParamValue::Color(value)) => self.set_color(slot, *value),
             Some(_) => Err(RuntimeError::new("expected color")),
@@ -1743,9 +1832,6 @@ impl<'a> Vm<'a> {
     }
 
     fn load_ref_param(&mut self, slot: RefSlot, index: usize) -> Result<(), RuntimeError> {
-        if let Some(Some(value)) = self.workspace.param_overrides.get(index) {
-            return self.set_ref(slot, clone_runtime(value));
-        }
         match self.params.values.get(index) {
             Some(value) => self.set_ref(slot, value.to_runtime()),
             None => Err(RuntimeError::new("invalid param slot")),
@@ -1847,6 +1933,18 @@ impl<'a> Vm<'a> {
         index: &RuntimeValue,
     ) -> Result<RuntimeValue, RuntimeError> {
         match target {
+            RuntimeValue::ArraySlot(array) => {
+                let index = usize::try_from(to_int_runtime(index, self.params)?)
+                    .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
+                self.workspace
+                    .arrays
+                    .as_ref()
+                    .expect("prepared array storage")
+                    .items(*array)
+                    .get(index)
+                    .map(clone_runtime)
+                    .ok_or_else(|| RuntimeError::new("array index out of bounds"))
+            }
             RuntimeValue::Array(items) => {
                 let index = usize::try_from(to_int_runtime(index, self.params)?)
                     .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
@@ -1890,14 +1988,6 @@ impl<'a> Vm<'a> {
     }
 
     fn prepared_curve_param(&self, param: usize) -> Result<&PreparedCurve, RuntimeError> {
-        match self.workspace.param_overrides.get(param) {
-            Some(Some(RuntimeValue::PreparedCurve(curve))) => return Ok(curve),
-            Some(Some(RuntimeValue::Curve(_))) => {
-                return Err(RuntimeError::new("unprepared curve param override"));
-            }
-            Some(Some(_)) => return Err(RuntimeError::new("expected curve")),
-            _ => {}
-        }
         match self.params.values.get(param) {
             Some(BoundParamValue::Curve(curve)) => Ok(curve),
             Some(_) => Err(RuntimeError::new("expected curve")),
@@ -1906,14 +1996,6 @@ impl<'a> Vm<'a> {
     }
 
     fn prepared_gradient_param(&self, param: usize) -> Result<&PreparedGradient, RuntimeError> {
-        match self.workspace.param_overrides.get(param) {
-            Some(Some(RuntimeValue::PreparedGradient(gradient))) => return Ok(gradient),
-            Some(Some(RuntimeValue::Gradient(_))) => {
-                return Err(RuntimeError::new("unprepared gradient param override"));
-            }
-            Some(Some(_)) => return Err(RuntimeError::new("expected gradient")),
-            _ => {}
-        }
         match self.params.values.get(param) {
             Some(BoundParamValue::Gradient(gradient)) => Ok(gradient),
             Some(_) => Err(RuntimeError::new("expected gradient")),
@@ -1927,11 +2009,6 @@ impl<'a> Vm<'a> {
             Some(_) => return Err(RuntimeError::new("expected enum constant")),
             None => return Err(RuntimeError::new("invalid constant slot")),
         };
-        match self.workspace.param_overrides.get(param) {
-            Some(Some(RuntimeValue::Enum(value))) => return Ok(value == expected),
-            Some(Some(_)) => return Err(RuntimeError::new("expected enum")),
-            _ => {}
-        }
         match self.params.values.get(param) {
             Some(BoundParamValue::Enum(value)) => Ok(value == expected),
             Some(_) => Err(RuntimeError::new("expected enum")),
@@ -1986,7 +2063,10 @@ impl<'a> Vm<'a> {
                 }
                 _ => {
                     let value = self.value(*slot)?;
-                    params.push((field.clone(), runtime_to_value(value)));
+                    params.push((
+                        field.clone(),
+                        runtime_to_value(value, self.workspace.arrays.as_deref()),
+                    ));
                 }
             }
         }
@@ -2041,7 +2121,7 @@ fn bind_param_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> BoundP
     }
 }
 
-fn runtime_to_value(value: RuntimeValue) -> Value {
+fn runtime_to_value(value: RuntimeValue, arrays: Option<&ArrayStorage>) -> Value {
     match value {
         RuntimeValue::Void => Value::Void,
         RuntimeValue::Int(value) => Value::Int(value),
@@ -2058,6 +2138,15 @@ fn runtime_to_value(value: RuntimeValue) -> Value {
         RuntimeValue::Gradient(value) => Value::Gradient(value),
         RuntimeValue::PreparedGradient(value) => Value::Gradient(value.raw()),
         RuntimeValue::Array(value) => Value::Array(value),
+        RuntimeValue::ArraySlot(index) => Value::Array(
+            arrays
+                .expect("prepared array storage")
+                .items(index)
+                .iter()
+                .map(|value| runtime_to_value(clone_runtime(value), arrays))
+                .collect::<Vec<_>>()
+                .into(),
+        ),
         RuntimeValue::Enum(value) => Value::Enum(value),
     }
 }

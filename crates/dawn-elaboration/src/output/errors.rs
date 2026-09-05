@@ -55,16 +55,16 @@ impl From<dawn_runtime::control::ControlError> for SequenceOutputRenderError {
     }
 }
 
-impl From<dawn_runtime::show::ShowError> for SequenceOutputRenderError {
-    fn from(error: dawn_runtime::show::ShowError) -> Self {
-        use dawn_runtime::show::ShowError;
+impl From<dawn_runtime::sequence::SequenceError> for SequenceOutputRenderError {
+    fn from(error: dawn_runtime::sequence::SequenceError) -> Self {
+        use dawn_runtime::sequence::SequenceError;
         match error {
-            ShowError::InvalidWorkspace => {
+            SequenceError::InvalidWorkspace => {
                 Self::Patch("evaluation workspace belongs to another prepared output".to_string())
             }
-            ShowError::Sequence(error) => Self::Render(error.into()),
-            ShowError::Control(error) => error.into(),
-            ShowError::Patch(error) => Self::Patch(format!("{error:?}")),
+            SequenceError::Signal(error) => Self::Render(error.into()),
+            SequenceError::Control(error) => error.into(),
+            SequenceError::Patch(error) => Self::Patch(format!("{error:?}")),
         }
     }
 }
