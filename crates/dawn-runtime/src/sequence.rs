@@ -9,6 +9,7 @@ use crate::signal::{EvaluationError, EvaluationWorkspace, PreparedSignalGraph};
 use crate::values::SampleTime;
 
 /// Frozen playback data; authoring, elaboration, networking, and pin timing are external.
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedSequence {
     pub workspace_key: u32,
     pub signals: PreparedSignalGraph,

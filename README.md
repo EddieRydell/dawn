@@ -172,6 +172,8 @@ Project IO loads reachable source files, validates imports and references, track
 
 After DSL compilation, `dawn-elaboration` validates the selected setup and sequence, expands generators, resolves targets, and lowers authored graphs into prepared numeric data. `dawn-runtime::sequence::PreparedSequence` is the complete playback artifact: its `signals` field holds a `PreparedSignalGraph`, alongside controls, fixture behavior, and the prepared patch. Create its workspace and output buffers once, then call `sequence.evaluate(time, &mut buffers, &mut workspace)` for each frame. The runtime evaluates logical colors, applies controls and fixture behavior, and executes the patch into those buffers. `dawn-runtime::signal::PreparedSignalGraph::evaluate` is the narrower logical-color interface; its `SignalPlan` contains the graph connections and preassigned buffer/VM schedule. Workspace creation reserves reusable VM, automation, array, and patch storage; prepared-frame allocation tests cover the playback hot path. Networking and physical pin timing remain outside the runtime. Preview and live output consume the same `RenderedSequenceFrame`; neither reinterprets colors, fixture channels, or patch ordering. Live output is opt-in for each application run and fails closed by blacking out active ports and terminating E1.31 streams.
 
+Use `PreparedSequenceOutput::prepare_selected` to prepare a compact sequence for selected controller ports. See [output selection](docs/output_selection.md) for the API, preserved sampling semantics, and measured memory reductions.
+
 The sequence-as-code validity rules, curve semantics, parser behavior, and runtime
 budgets are documented in [the sequence-as-code contract](docs/sequence_as_code.md).
 

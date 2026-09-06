@@ -11,6 +11,14 @@ pub enum SequenceOutputPrepareError {
     MissingElementTree,
     MissingSequence,
     InvalidEffectTree,
+    UnknownOutput {
+        controller: dawn_language::controller::ControllerId,
+        port: dawn_language::controller::ControllerPortId,
+    },
+    DuplicateOutput {
+        controller: dawn_language::controller::ControllerId,
+        port: dawn_language::controller::ControllerPortId,
+    },
     InvalidControl {
         clip: u32,
         reason: String,

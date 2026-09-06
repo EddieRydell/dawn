@@ -76,7 +76,7 @@ fn main() -> ! {
     let group = TimerGroup::new(peripherals.TIMG0);
     // SAFETY: no handler is enabled yet and this is the sole initialization.
     unsafe { TIMER = Some(group.timer0) };
-    // SAFETY: esp-hal 1.1.2's Xtensa dispatcher calls peripheral handlers with
+    // SAFETY: the pinned esp-hal Xtensa dispatcher calls peripheral handlers with
     // &mut TrapFrame, although InterruptHandler stores a zero-argument pointer.
     // Its handler macro currently fails to erase this signature itself.
     let handler =

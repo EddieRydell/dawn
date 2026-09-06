@@ -4,11 +4,23 @@ use alloc::vec::Vec;
 use crate::fixture::{FixtureState, quantize8};
 use crate::values::Color;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct ElementNodeId(pub u32);
 
 /// Mutable-state capacity required for an element, resolved before playback.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum ElementLayout {
     Color(u32),
     Scalar(u32),

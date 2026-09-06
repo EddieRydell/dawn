@@ -19,7 +19,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 enum GradientMode {
     ThroughEffect,
     AcrossItems,
@@ -36,7 +36,7 @@ pub enum BoundNativeEffect {
     MarkChase(MarkChase),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum NativeSample {
     Pulse {
         gradient: Arc<Gradient>,
@@ -74,7 +74,7 @@ pub struct MarkPulse {
     seed: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MarkPulseChild {
     base: Color,
     accent: Arc<Gradient>,
@@ -82,7 +82,9 @@ pub struct MarkPulseChild {
     hue_mix: f32,
     section_width_pixels: i32,
     section_edge_fade_pixels: f32,
+    #[rkyv(with = crate::wire::Microseconds)]
     parent_start: SampleTime,
+    #[rkyv(with = crate::wire::Microseconds)]
     parent_duration: SampleDuration,
 }
 
@@ -102,7 +104,7 @@ pub struct MarkChase {
     pulse_shape: Arc<Curve>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct MarkChaseChild {
     base: Color,
     gradient_mode: GradientMode,
@@ -113,11 +115,13 @@ pub struct MarkChaseChild {
     section_width_pixels: i32,
     chase_position: Arc<Curve>,
     pulse_shape: Arc<Curve>,
+    #[rkyv(with = crate::wire::Microseconds)]
     parent_start: SampleTime,
+    #[rkyv(with = crate::wire::Microseconds)]
     parent_duration: SampleDuration,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Chase {
     gradient: Arc<Gradient>,
     gradient_mode: GradientMode,

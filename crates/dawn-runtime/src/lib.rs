@@ -15,8 +15,11 @@ pub mod sampling;
 pub mod sequence;
 pub mod signal;
 pub mod values;
+pub mod wire;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum BuiltinEffect {
     Pulse,
     Chase,
@@ -25,7 +28,9 @@ pub enum BuiltinEffect {
     MarkChase,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum BuiltinOperator {
     Max,
     Add,

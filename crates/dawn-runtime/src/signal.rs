@@ -32,11 +32,12 @@ impl From<RuntimeError> for EvaluationError {
 }
 
 /// Frozen effects, operators, targets, and execution plan; evaluates logical colors.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedSignalGraph {
     pub workspace_key: u32,
     pub frame_rate: u32,
     pub frame_count: u32,
+    #[rkyv(with = crate::wire::Microseconds)]
     pub duration: SampleDuration,
     pub elements: Box<[PreparedElement]>,
     pub element_cell_offsets: Box<[usize]>,
@@ -50,7 +51,7 @@ pub struct PreparedSignalGraph {
     pub plan: SignalPlan,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedElement {
     pub id: u32,
     pub pixel_count: usize,
@@ -70,9 +71,11 @@ pub struct EvaluatedElement {
     pub pixels: Vec<Color>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedEffect {
+    #[rkyv(with = crate::wire::Microseconds)]
     pub start_time: SampleTime,
+    #[rkyv(with = crate::wire::Microseconds)]
     pub duration: SampleDuration,
     pub target: u32,
     pub implementation: PreparedEffectImplementation,
@@ -102,7 +105,7 @@ impl PreparedEffect {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedEffectImplementation {
     Dsl {
         program: u32,
@@ -114,21 +117,23 @@ pub enum PreparedEffectImplementation {
     },
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedLayer {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedEffectAutomation {
     /// Dense index in automated-effect order, assigned by elaboration.
     pub workspace_slot: u32,
     pub bindings: Box<[PreparedAutomation]>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedAutomation {
+    #[rkyv(with = crate::wire::Microseconds)]
     pub start: SampleTime,
+    #[rkyv(with = crate::wire::Microseconds)]
     pub duration: SampleDuration,
     pub curve: Arc<Curve>,
     pub mapping: AutomationMapping,
@@ -149,7 +154,7 @@ impl PreparedAutomation {
 }
 
 /// Graph connections and the buffer/VM schedule assigned during elaboration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct SignalPlan {
     pub output_index: usize,
     pub target: u32,
@@ -160,12 +165,12 @@ pub struct SignalPlan {
     pub frame_buffer_count: u16,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedSignalNode {
     pub kind: PreparedSignalKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedSignalKind {
     Layer {
         layer_index: usize,
@@ -181,13 +186,13 @@ pub enum PreparedSignalKind {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedOperator {
     Native(BuiltinOperator),
     Dsl(u32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedOperatorNode {
     /// Dense index among automated graph nodes; unused without bindings.
     pub automation_slot: u32,
@@ -195,14 +200,14 @@ pub struct PreparedOperatorNode {
     pub params: BoundParams,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedTarget {
     pub pixels: core::ops::Range<u32>,
     /// Zero disables sample reuse; otherwise this is the required cache width.
     pub sample_count: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedPixel {
     pub element_index: u16,
     pub element_cell_index: u16,

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use dawn_language::controller::{ControllerId, ControllerPortId};
 use dawn_language::element::ElementNodeKind;
 use dawn_language::fixture_profile::FixtureProfileStore;
 use dawn_language::model::DawnProject;
@@ -36,6 +37,26 @@ impl PreparedSequenceOutput {
         project: &DawnProject,
         setup_id: &SetupId,
         sequence_id: &SequenceId,
+    ) -> Result<Self, SequenceOutputPrepareError> {
+        Self::prepare_outputs(project, setup_id, sequence_id, None)
+    }
+
+    /// Prepare only these ports, in the requested order. An empty selection
+    /// produces an empty fragment. Pixel contexts keep their authored coordinates.
+    pub fn prepare_selected(
+        project: &DawnProject,
+        setup_id: &SetupId,
+        sequence_id: &SequenceId,
+        outputs: &[(ControllerId, ControllerPortId)],
+    ) -> Result<Self, SequenceOutputPrepareError> {
+        Self::prepare_outputs(project, setup_id, sequence_id, Some(outputs))
+    }
+
+    fn prepare_outputs(
+        project: &DawnProject,
+        setup_id: &SetupId,
+        sequence_id: &SequenceId,
+        outputs: Option<&[(ControllerId, ControllerPortId)]>,
     ) -> Result<Self, SequenceOutputPrepareError> {
         validate_project(project)
             .map_err(|error| SequenceOutputPrepareError::ProjectValidation(format!("{error:?}")))?;
@@ -95,6 +116,31 @@ impl PreparedSequenceOutput {
                 });
             }
         }
+        if let Some(outputs) = outputs {
+            let mut selected = Vec::with_capacity(outputs.len());
+            for (index, (controller, port)) in outputs.iter().enumerate() {
+                if outputs[..index]
+                    .iter()
+                    .any(|(previous_controller, previous_port)| {
+                        previous_controller == controller && previous_port == port
+                    })
+                {
+                    return Err(SequenceOutputPrepareError::DuplicateOutput {
+                        controller: controller.clone(),
+                        port: *port,
+                    });
+                }
+                let frame = controller_ports
+                    .iter()
+                    .find(|frame| frame.controller == *controller && frame.port == *port)
+                    .ok_or_else(|| SequenceOutputPrepareError::UnknownOutput {
+                        controller: controller.clone(),
+                        port: *port,
+                    })?;
+                selected.push(frame.clone());
+            }
+            controller_ports = selected;
+        }
         let patch = prepare_patch(&tree, patch, &profiles, &controller_ports)?;
         let mut elements = Vec::new();
         for (node_id, node) in &tree.nodes {
@@ -148,7 +194,7 @@ impl PreparedSequenceOutput {
             }
             offset = end;
         }
-        Ok(Self {
+        let mut output = Self {
             sequence: PreparedSequence {
                 workspace_key: NEXT_OUTPUT_ID.fetch_add(1, Ordering::Relaxed),
                 signals: sequence,
@@ -163,7 +209,12 @@ impl PreparedSequenceOutput {
                 color_spans: color_spans.into_boxed_slice(),
             },
             controller_ports: controller_ports.into_boxed_slice(),
-        })
+        };
+        if outputs.is_some() {
+            super::fragment::compact(&mut output.sequence)
+                .map_err(SequenceOutputPrepareError::Render)?;
+        }
+        Ok(output)
     }
 
     pub fn render_seconds(

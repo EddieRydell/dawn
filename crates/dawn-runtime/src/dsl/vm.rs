@@ -74,12 +74,44 @@ impl RuntimeError {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct BoundParams {
     values: Vec<BoundParamValue>,
 }
 
 impl BoundParams {
+    /// Conservative load-time budget for the detached automation copy, including
+    /// curve windows. This does not allocate or change frame evaluation.
+    pub(crate) fn automation_storage_estimate(
+        &self,
+        bindings: &[crate::signal::PreparedAutomation],
+    ) -> Option<usize> {
+        let mut bytes = self
+            .values
+            .len()
+            .checked_mul(core::mem::size_of::<BoundParamValue>() + 32)?;
+        for (index, value) in self.values.iter().enumerate() {
+            let extra = match value {
+                BoundParamValue::Curve(curve) => {
+                    let points = bindings
+                        .iter()
+                        .filter(|binding| usize::from(binding.param_index) == index)
+                        .map(|binding| binding.curve.points.len())
+                        .max()
+                        .unwrap_or(0)
+                        .max(curve.raw.points.len())
+                        .max(1);
+                    // Vec growth can double capacity; raw points + segments + crossings.
+                    points.checked_mul(128)?.checked_add(256)?
+                }
+                BoundParamValue::Enum(value) => value.as_str().len().checked_add(32)?,
+                _ => 0,
+            };
+            bytes = bytes.checked_add(extra)?;
+        }
+        Some(bytes)
+    }
+
     pub(crate) fn clone_for_automation(&self) -> Self {
         Self {
             values: self
@@ -287,7 +319,7 @@ pub struct DslBindCache {
     gradients: Vec<(usize, Arc<PreparedGradient>)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 enum BoundParamValue {
     Void,
     Int(i32),
@@ -383,20 +415,20 @@ impl DslBindCache {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct PreparedCurve {
     raw: Arc<Curve>,
     segments: Vec<CurveSegment>,
     crossings: PreparedCurveCrossings,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct PreparedGradient {
     raw: Arc<Gradient>,
     segments: Vec<GradientSegment>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct CurveSegment {
     start_position: f32,
     end_position: f32,
@@ -404,7 +436,7 @@ struct CurveSegment {
     end_value: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct GradientSegment {
     start_position: f32,
     end_position: f32,
@@ -412,14 +444,14 @@ struct GradientSegment {
     end_value: Color,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 enum PreparedCurveCrossings {
     Increasing(Vec<CrossingSegment>),
     Decreasing(Vec<CrossingSegment>),
     Mixed(Vec<CrossingSegment>),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct CrossingSegment {
     start_position: f32,
     end_position: f32,

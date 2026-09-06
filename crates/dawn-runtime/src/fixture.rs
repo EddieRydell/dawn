@@ -3,20 +3,46 @@ use alloc::vec::Vec;
 
 use crate::values::{Color, Curve};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct FixtureFunctionId(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct FixtureEntryId(pub u32);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum DimmingCurve {
     Linear,
     Gamma(f32),
     Custom(Curve),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum ColorComponent {
     Red,
     Green,
@@ -24,14 +50,14 @@ pub enum ColorComponent {
     White,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum FixtureControlValue {
     Normalized(f32),
     Indexed { entry: FixtureEntryId, range: f32 },
     Color(Color),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum FixtureBehavior {
     Color,
     Switch {
@@ -41,7 +67,7 @@ pub enum FixtureBehavior {
     ColorWheel(Box<[(Color, FixtureEntryId)]>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct FixtureBehaviors {
     pub bindings: Box<[(u32, core::ops::Range<u32>)]>,
     pub rules: Box<[(FixtureFunctionId, FixtureBehavior)]>,
@@ -127,14 +153,14 @@ pub fn quantize16(value: f32) -> u16 {
     libm::roundf(value.clamp(0.0, 1.0) * 65_535.0) as u16
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct FixtureProgram {
     pub functions: Box<[FixtureFunction]>,
     pub channels: Box<[FixtureChannel]>,
     pub slot_count: u32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct FixtureFunction {
     pub id: FixtureFunctionId,
     pub curve: DimmingCurve,
@@ -142,21 +168,21 @@ pub struct FixtureFunction {
     pub has_fine: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct FixtureEntry {
     pub id: FixtureEntryId,
     pub min: u16,
     pub max: u16,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct FixtureChannel {
     pub slot: u16,
     pub encoding: FixtureEncoding,
     pub curve: DimmingCurve,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum FixtureEncoding {
     Ignored,
     Color {

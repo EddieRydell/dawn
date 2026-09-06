@@ -3,17 +3,19 @@ use crate::fixture::{FixtureBehaviors, FixtureControlValue, FixtureEntryId, Fixt
 use crate::values::{Color, CurvePoint, GradientStop, SampleDuration, SampleTime};
 use alloc::{boxed::Box, vec::Vec};
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedControl {
     pub id: u32,
+    #[rkyv(with = crate::wire::Microseconds)]
     pub start: SampleTime,
+    #[rkyv(with = crate::wire::Microseconds)]
     pub duration: SampleDuration,
     pub kind: PreparedControlKind,
     pub value: PreparedControlValue,
     pub addresses: Box<[PreparedControlAddress]>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedControlKind {
     Scalar,
     Indexed,
@@ -30,13 +32,13 @@ impl PreparedControl {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedControlAddress {
     pub element: u32,
     pub cell: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedControlValue {
     ConstantNormalized(f32),
     NormalizedCurve(Box<[CurvePoint]>),

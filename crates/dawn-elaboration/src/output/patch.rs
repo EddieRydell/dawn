@@ -14,7 +14,7 @@ use dawn_runtime::patch::{
     ColorEncoding, PatchSource, PatchSourceSpan, PatchStep, PatchValue, PreparedFilter,
     PreparedPatch,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) fn prepare_patch(
     tree: &ElementTree,
@@ -37,6 +37,24 @@ pub(crate) fn prepare_patch(
         .iter()
         .map(|edge| (edge.to, (edge.from, edge.from_port)))
         .collect::<HashMap<_, _>>();
+    // Walk backward from the requested ports before lowering or assigning slots.
+    // Shared sources/filters are retained once, regardless of fan-out.
+    let mut required = HashSet::new();
+    for (id, node) in &patch.nodes {
+        if let PatchNode::Sink(sink) = node
+            && frames
+                .iter()
+                .any(|frame| frame.controller == sink.controller && frame.port == sink.port)
+        {
+            let mut cursor = *id;
+            while required.insert(cursor) {
+                let Some((source, _)) = incoming.get(&cursor) else {
+                    break;
+                };
+                cursor = *source;
+            }
+        }
+    }
     let element_indexes = tree
         .nodes
         .iter()
@@ -51,6 +69,9 @@ pub(crate) fn prepare_patch(
     let mut fixture_program_ids = HashMap::new();
 
     for id in order {
+        if !required.contains(&id) {
+            continue;
+        }
         let node = patch.nodes.get(&id).ok_or_else(|| {
             SequenceOutputPrepareError::InvalidPatch("validated patch node disappeared".to_string())
         })?;

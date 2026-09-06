@@ -4,7 +4,7 @@ use crate::dsl::Identifier;
 use crate::sampling::sample_curve;
 use crate::values::{Curve, CurvePoint};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum AutomationMapping {
     Float { min: f32, max: f32 },
     Int { min: i32, max: i32 },

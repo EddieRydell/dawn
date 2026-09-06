@@ -5,15 +5,35 @@ standalone Cargo workspace so its Xtensa toolchain, target configuration, board
 dependencies and lockfile do not affect desktop builds.
 
 Tested board: COM4, ESP32-D0WD-V3 revision 3.1, 40 MHz crystal, 4 MB flash.
-The old application was replaced without a backup, as requested. No LED GPIOs
-are configured. Wi-Fi and the second application CPU are not started.
+The old application was replaced without a backup, as requested. The normal
+profiling binaries do not start Wi-Fi or the second application CPU. The
+separate `loader` binary uses USB only for initial Wi-Fi provisioning and serves
+sequence uploads through `picoserve` HTTP; see
+[sequence loading](../../docs/esp32_loading.md) for its build, upload, and
+verification commands. Its opt-in `rmt-output` feature also starts the second CPU
+and drives four GPIOs continuously from the loaded sequence. The standalone
+`rmt_parallel` hardware diagnostic drives the same GPIOs without Wi-Fi, as
+described below.
 
 ## Build and capture (Windows)
 
 The installed tools are `espup` 0.17.1, `espflash` 4.5.0, Xtensa Rust
 1.97.0.0 (`rustc 1.97.0-nightly`, commit `8ea53bcd7`, LLVM 21.1.3), and
-Espressif GCC 15.2.0. The firmware lockfile pins the board crates, including
-`esp-hal` 1.1.2, `esp-alloc` 0.10.0 and `esp-println` 0.17.0.
+Espressif GCC 15.2.0. The firmware uses HAL 1.2.0, picoserve 0.20.0, esp-rtos 0.4.0,
+esp-radio-rtos-driver 0.4.1, esp-alloc 0.11.0, esp-println 0.18.0 and
+esp-bootloader-esp-idf 0.6.0 from upstream SDK revision
+`0eb3e53b4a2e555d2136ce9dc83e18c6692b9673`. Its esp-radio package still calls itself
+`1.0.0-beta.0`, but is newer than the published beta.0 that requires HAL 1.1.
+The published `esp-hal-smartled` 0.18.0 dependency is compiled against the same
+HAL.
+
+The manifest patches the SDK packages together to avoid mixing Git and registry
+copies of the HAL, allocator or scheduler. Cargo.lock also pins upstream's radio
+binary wrappers (`esp-wifi-sys` revision `2ea8e3e`) and peripheral register crates
+(`esp-pacs` revision `5cd68d2`). Builds use `--locked`, not floating `main`.
+Once the matching SDK is published, remove the patches together, update the
+version requirements/lockfile, and repeat the board checks; do not assume the
+published beta.0 is the same source just because its version string matches.
 
 From this directory:
 
@@ -39,8 +59,9 @@ changing collectors is not a proven fix. The checked-in collector uses pyserial
 
 ## Interrupted-PC profiling
 
-The optional `pc-profile` feature enables the timer API used by `pc_profile`.
-It affects this firmware workspace, not the shared runtime's dependencies.
+The optional `pc-profile` feature enables the `pc_profile` binary. HAL's unstable
+APIs are enabled for this firmware workspace, including the LED adapter; they do
+not affect the shared runtime's dependencies.
 
 ```powershell
 . C:/Users/eddie/export-esp.ps1
@@ -89,6 +110,34 @@ The root desktop toolchain remains Rust 1.96.0. Do not run desktop builds with
 cargo +1.96.0 fmt --check
 cargo +esp clippy --release --features pc-profile --bins --locked -- -D warnings
 ```
+
+## Parallel WS2812 RMT diagnostic
+
+`rmt_parallel` sends 200 RGB pixels concurrently on GPIO13, GPIO18, GPIO21 and
+GPIO25 using async RMT channels 0, 2, 4 and 6. Each output owns two of the
+classic ESP32's eight 64-word RMT memory blocks. No LEDs were connected for the
+measured run; this proves that the HAL completed real pin transmissions, but is
+not an oscilloscope-level waveform validation. The pins are driven directly at
+3.3 V.
+
+```powershell
+. C:/Users/eddie/export-esp.ps1
+cargo +esp build --release --features rmt-profile --bin rmt_parallel --locked
+espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/rmt_parallel
+espflash monitor --port COM4 --non-interactive target/xtensa-esp32-none-elf/release/rmt_parallel
+```
+
+After warmup, one 200-pixel output took 187-188 microseconds to prepare and
+6479-6480 microseconds total. Four outputs took 750-751 microseconds to prepare
+and 7078-7079 microseconds total, or about 141 complete four-output frames per
+second. The four encodes currently run sequentially on the CPU; the four RMT
+transfers then run concurrently. Each output's expanded pulse buffer is 19,208
+bytes, so four outputs reserve 76,832 bytes. Wi-Fi was disabled during this
+diagnostic. The integrated `rmt-output` loader isolates playback and RMT on core 1
+while Wi-Fi/HTTP runs on core 0. With the 113-pixel starter sequence padded to 200
+pixels on all four outputs, it averages about 8.10 ms/frame and usually misses
+0-3 of 120 deadlines at 120 Hz. See `docs/esp32_loading.md` for the exact memory
+and hardware measurements.
 
 ## Workloads and measurement boundaries
 

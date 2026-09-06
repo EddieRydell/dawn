@@ -6,7 +6,7 @@ use crate::fixture::{DimmingCurve, FixtureState, apply_dimming_curve, quantize8,
 use crate::fixture::{FixtureEncodingError, FixtureProgram};
 use crate::values::Color;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PatchValueLayout {
     Color(u32),
     Scalar(u32),
@@ -47,13 +47,13 @@ impl PatchValue {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum ByteOrder {
     CoarseFine,
     FineCoarse,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PreparedFilter {
     PackRgb {
         cell_count: u32,
@@ -95,7 +95,7 @@ pub enum PreparedFilter {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum ColorEncoding {
     Rgb,
     Rgbw,
@@ -314,12 +314,12 @@ fn check_width(expected: usize, actual: usize) -> Result<(), FilterError> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PatchSource {
     pub spans: Box<[PatchSourceSpan]>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PatchSourceSpan {
     pub element: u32,
     pub cells: core::ops::Range<u32>,
@@ -399,14 +399,14 @@ impl PatchSource {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct PreparedPatch {
     pub steps: Box<[PatchStep]>,
     pub value_layouts: Box<[PatchValueLayout]>,
     pub fixture_programs: Box<[FixtureProgram]>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum PatchStep {
     Source {
         output: u32,

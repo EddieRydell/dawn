@@ -12,12 +12,14 @@ struct CountingAllocator;
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
@@ -25,10 +27,12 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
@@ -36,6 +40,8 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        LIVE_BYTES.fetch_add(size, Ordering::Relaxed);
+        LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
@@ -64,6 +70,34 @@ fn prepared_controller_sampling_does_not_allocate() {
             output.frame_count().saturating_sub(1),
         ];
         assert_prepared_sampling_does_not_allocate(&output, &frames, sequence_id.0.object());
+        let setup = &session.project.setups[&session.project.root.setup];
+        let controller = &setup.controllers[0];
+        let port = session.project.controllers[controller].ports[0].id;
+        let mut selected = PreparedSequenceOutput::prepare_selected(
+            &session.project,
+            &session.project.root.setup,
+            sequence_id,
+            &[(controller.clone(), port)],
+        )
+        .unwrap();
+        let encoded = dawn_runtime::wire::encode_sequence(&selected.sequence).unwrap();
+        selected.sequence =
+            dawn_runtime::wire::decode_sequence(&encoded, Default::default()).unwrap();
+        assert_prepared_sampling_does_not_allocate(&selected, &frames, "selected output");
+        let measure = |output: &PreparedSequenceOutput| {
+            let before = LIVE_BYTES.load(Ordering::Relaxed);
+            let workspace = output.sequence.workspace();
+            let bytes = LIVE_BYTES.load(Ordering::Relaxed) - before;
+            drop(workspace);
+            bytes
+        };
+        let full_bytes = measure(&output);
+        let selected_bytes = measure(&selected);
+        assert!(selected_bytes < full_bytes);
+        println!(
+            "{} runtime workspace heap: {full_bytes} -> {selected_bytes} bytes",
+            sequence_id.0.object()
+        );
     }
 
     let mut project = session.project;

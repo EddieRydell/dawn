@@ -11,6 +11,8 @@ default = ["atomic"]
 atomic = []
 
 [dependencies]
+rkyv.workspace = true
+crc32fast.workspace = true
 fugit.workspace = true
 libm.workspace = true
 micromath.workspace = true

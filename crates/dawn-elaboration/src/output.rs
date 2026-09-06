@@ -1,5 +1,6 @@
 pub(crate) mod controls;
 pub(crate) mod errors;
+mod fragment;
 pub(crate) mod frame;
 pub(crate) mod patch;
 pub(crate) mod session;

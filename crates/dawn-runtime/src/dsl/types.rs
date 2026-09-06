@@ -8,7 +8,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Identifier(Arc<str>);
 
 impl Identifier {
@@ -51,7 +51,10 @@ pub enum IdentifierError {
     InvalidCharacter,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(serialize_bounds(__S: rkyv::ser::Writer + rkyv::ser::Allocator, __S::Error: rkyv::rancor::Source))]
+#[rkyv(deserialize_bounds(__D::Error: rkyv::rancor::Source))]
+#[rkyv(bytecheck(bounds(__C: rkyv::validation::ArchiveContext)))]
 pub enum Type {
     Void,
     Int,
@@ -66,11 +69,14 @@ pub enum Type {
     TargetItem,
     Curve,
     Gradient,
-    Array(Box<Type>),
+    Array(#[rkyv(omit_bounds)] Box<Type>),
     Enum(Vec<Identifier>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(serialize_bounds(__S: rkyv::ser::Writer + rkyv::ser::Allocator + rkyv::ser::Sharing, __S::Error: rkyv::rancor::Source))]
+#[rkyv(deserialize_bounds(__D: rkyv::de::Pooling, __D::Error: rkyv::rancor::Source))]
+#[rkyv(bytecheck(bounds(__C: rkyv::validation::ArchiveContext + rkyv::validation::SharedContext)))]
 pub enum Value {
     Void,
     Int(i32),
@@ -83,7 +89,7 @@ pub enum Value {
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<Curve>),
     Gradient(Arc<Gradient>),
-    Array(Arc<[Value]>),
+    Array(#[rkyv(omit_bounds)] Arc<[Value]>),
     Enum(Identifier),
 }
 
@@ -119,22 +125,22 @@ impl Type {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct TargetValue {
     pub groups: Vec<Arc<TargetItemValue>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct TargetItemsValue {
     pub groups: Vec<Arc<TargetItemValue>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct TargetItemValue {
     pub pixels: Arc<[TargetPixelValue]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct TargetPixelValue {
     pub element_index: i32,
     pub element_cell_index: i32,

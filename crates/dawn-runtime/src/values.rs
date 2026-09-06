@@ -187,7 +187,9 @@ impl Default for Scale3 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct Color {
     pub red: u8,
     pub green: u8,
@@ -211,12 +213,12 @@ impl Color {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Curve {
     pub points: Vec<CurvePoint>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct CurvePoint {
     pub position: f32,
     pub value: f32,
@@ -258,18 +260,19 @@ impl Curve {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Gradient {
     pub stops: Vec<GradientStop>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct GradientStop {
     pub position: f32,
     pub color: Color,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct Marks {
+    #[rkyv(with = rkyv::with::Map<crate::wire::Microseconds>)]
     pub marks: Vec<SampleDuration>,
 }

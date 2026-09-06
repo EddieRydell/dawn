@@ -251,6 +251,14 @@ pub(crate) fn prepare_signal_graph(
         });
     }
 
+    finish_signal_plan(prepared_nodes, output_index, full_target)
+}
+
+pub(crate) fn finish_signal_plan(
+    mut prepared_nodes: Vec<PreparedSignalNode>,
+    output_index: usize,
+    target: u32,
+) -> Result<SignalPlan, RenderError> {
     let mut vm_depths = Vec::with_capacity(prepared_nodes.len());
     let mut vm_workspace_count = 1;
     for node in &mut prepared_nodes {
@@ -300,7 +308,7 @@ pub(crate) fn prepare_signal_graph(
 
     Ok(SignalPlan {
         output_index,
-        target: full_target,
+        target,
         nodes: prepared_nodes.into_boxed_slice(),
         vm_workspace_count,
         frame_nodes,

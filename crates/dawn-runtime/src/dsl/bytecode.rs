@@ -6,7 +6,7 @@ pub type LocalId = ValueSlot;
 pub type ParamId = usize;
 pub type Target = usize;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub struct BytecodeProgram {
     pub instructions: Box<[Instruction]>,
     pub constants: Box<[Value]>,
@@ -88,7 +88,9 @@ impl BytecodeProgram {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct PoolSpan {
     pub start: u32,
     pub len: u32,
@@ -100,7 +102,18 @@ impl PoolSpan {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    PartialEq,
+    rkyv::Archive,
+    rkyv::Serialize,
+    rkyv::Deserialize,
+)]
 pub struct SlotLayout {
     pub ints: u32,
     pub floats: u32,
@@ -109,22 +122,34 @@ pub struct SlotLayout {
     pub refs: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct IntSlot(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct FloatSlot(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct BoolSlot(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct ColorSlot(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub struct RefSlot(pub u32);
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum ValueSlot {
     Int(IntSlot),
     Float(FloatSlot),
@@ -175,7 +200,7 @@ impl ValueSlot {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq)]
+#[derive(Clone, Debug, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 pub enum Instruction {
     LoadConst {
         dst: ValueSlot,
@@ -464,7 +489,9 @@ pub enum Instruction {
     ReturnColor(ColorSlot),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum TargetMember {
     ElementIndex,
     ElementCellIndex,
@@ -473,7 +500,9 @@ pub enum TargetMember {
     PixelFraction,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum GeneratorContextId {
     Timeline,
     Target,
@@ -491,7 +520,9 @@ mod representation_tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum ContextRead {
     Progress,
     Seconds,
@@ -501,7 +532,9 @@ pub enum ContextRead {
     PixelFraction,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum FloatUnary {
     Sin,
     Cos,
@@ -509,14 +542,18 @@ pub enum FloatUnary {
     Floor,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum ColorBinary {
     Add,
     Multiply,
     Max,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum ArithmeticOp {
     Add,
     Subtract,
@@ -525,7 +562,9 @@ pub enum ArithmeticOp {
     Remainder,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum IntArithmeticOp {
     Add,
     Subtract,
@@ -533,7 +572,9 @@ pub enum IntArithmeticOp {
     Remainder,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum CompareOp {
     Less,
     LessEqual,
@@ -541,13 +582,17 @@ pub enum CompareOp {
     GreaterEqual,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum FloatBinary {
     Min,
     Max,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum MarkOp {
     Count,
     At,
@@ -558,7 +603,9 @@ pub enum MarkOp {
     Phase,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
 pub enum TargetItemsOp {
     Fixtures,
     Pixels,
