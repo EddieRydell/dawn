@@ -2,10 +2,10 @@
 #[path = "../../dawn-language/benches/fixtures/mod.rs"]
 mod fixtures;
 #[allow(dead_code)]
-#[path = "../../../firmware/dawn-profile/src/mark_workload.rs"]
+#[path = "../../../firmware/esp32/src/mark_workload.rs"]
 mod mark_workload;
 #[allow(dead_code)]
-#[path = "../../../firmware/dawn-profile/src/workload.rs"]
+#[path = "../../../firmware/esp32/src/workload.rs"]
 mod workload;
 
 use dawn_runtime::BuiltinOperator;

@@ -91,10 +91,10 @@ memory improvement for substantially larger fragments.
 Export the selected first four controller outputs from the repository root:
 
 ```powershell
-cargo run -p dawn-elaboration --example export_sequence -- examples/starter firmware/dawn-profile/target/loaded-sequence.dawnseq
+cargo run -p dawn-elaboration --example export_sequence -- examples/starter firmware/esp32/target/loaded-sequence.dawnseq
 ```
 
-Then run from `firmware/dawn-profile`:
+Then run from `firmware/esp32`:
 
 ```powershell
 . ./export-esp.ps1
@@ -144,7 +144,7 @@ bad version, oversized declared payload, bad checksum, and interrupted body. It
 also rejected a concurrent upload. It then evaluated 200 host-selected frames
 correctly with zero evaluation allocations, proving that failed uploads retained
 the active sequence. See the
-[capture](../firmware/dawn-profile/results/2026-09-05-picoserve-http-final3.txt).
+[capture](../firmware/esp32/results/2026-09-05-picoserve-http-final3.txt).
 
 The `/frame` timing includes radio interrupts, HTTP handling immediately before
 evaluation, and cold instruction-cache effects. Continuous Wi-Fi-free profiling
@@ -154,7 +154,7 @@ as the indication of that migration's steady playback performance. Historical me
 and their limitations remain in `runtime_optimization_2026-09-05.md`.
 
 The firmware currently pins the coordinated esp-rs SDK revision documented in
-`firmware/dawn-profile/README.md`.
+`firmware/esp32/README.md`.
 
 That dual-core Wi-Fi/I2S image had ELF SHA256
 `32a4312b56bb6644f714ced974a2e69bd7545aa06a7468518467874ad9827e2a`.
@@ -179,9 +179,9 @@ about 3.8-4.8 ms and stay under the deadline. Frame evaluation still allocates
 nothing. These remaining misses are runtime effect cost, not I2S refill jitter.
 No LEDs or oscilloscope were connected, so this verifies real I2S DMA completion
 on the GPIO peripheral but not external waveform voltage or LED behavior. See the
-[current combined capture](../firmware/dawn-profile/results/2026-09-05-temporal-frame-cache-final.txt),
-[previous playback capture](../firmware/dawn-profile/results/2026-09-05-i2s-full-playback.txt),
-and [previous HTTP verification](../firmware/dawn-profile/results/2026-09-05-i2s-http-200.txt).
+[current combined capture](../firmware/esp32/results/2026-09-05-temporal-frame-cache-final.txt),
+[previous playback capture](../firmware/esp32/results/2026-09-05-i2s-full-playback.txt),
+and [previous HTTP verification](../firmware/esp32/results/2026-09-05-i2s-http-200.txt).
 
 The subsequent shared-runtime geometry hoist computes Chase/Spin section count,
 revolution scale, pulse duration, reciprocal duration and extension bounds once
@@ -194,4 +194,4 @@ windows improved from 6.476/5.526 ms to 6.014/5.142 ms evaluation, and the later
 about 1.84-1.86 ms. The first hot region remains just over the full deadline after
 the unchanged 2.46-ms encoder: 8.538 ms average total. The measured image SHA256 is
 `d791c8042d2ed0ceae4eecbd94782e0cb29c2c3e791c6bd00601007b13b7488d`; see the
-[geometry-hoist capture](../firmware/dawn-profile/results/2026-09-05-hoisted-native-geometry.txt).
+[geometry-hoist capture](../firmware/esp32/results/2026-09-05-hoisted-native-geometry.txt).

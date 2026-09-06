@@ -12,10 +12,10 @@ use std::time::Duration;
 #[path = "../../dawn-language/benches/fixtures/mod.rs"]
 mod effect_fixtures;
 #[allow(dead_code)]
-#[path = "../../../firmware/dawn-profile/src/mark_workload.rs"]
+#[path = "../../../firmware/esp32/src/mark_workload.rs"]
 mod mark_workload;
 #[allow(dead_code)]
-#[path = "../../../firmware/dawn-profile/src/workload.rs"]
+#[path = "../../../firmware/esp32/src/workload.rs"]
 mod workload;
 
 const BENCHMARK_SEQUENCE_DOCUMENT: &str = "sequences/layer_test.sequence.dawn";

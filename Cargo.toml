@@ -1,6 +1,6 @@
 [workspace]
 members = ["apps/desktop", "crates/dawn-runtime", "crates/dawn-language", "crates/dawn-elaboration", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-package", "crates/dawn-cli"]
-exclude = ["vendor/offset-allocator", "firmware/dawn-profile"]
+exclude = ["firmware/esp32"]
 resolver = "2"
 
 [workspace.package]

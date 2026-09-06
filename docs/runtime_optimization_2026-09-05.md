@@ -1,5 +1,9 @@
 # Runtime optimization second pass
 
+> Historical record. Names, implementation details, and measurements describe
+> the 2026-09-05 image. For current runtime boundaries and validated ESP32
+> measurements, see [the execution audit](execution_audit_2026-09-06.md).
+
 ## Scope and gates
 
 Keep one stateless runtime, with general compiler/elaboration solutions rather
@@ -163,7 +167,7 @@ aliasing, interrupt masking and leaf-only attribution remain limitations.
 ### Division placement control in progress
 
 The original profiler ELF was preserved as
-`firmware/dawn-profile/target/pc-profile-flash-division.elf` with the hash above.
+`firmware/esp32/target/pc-profile-flash-division.elf` with the hash above.
 The linker hook now places the f32 division implementation and wrapper, including
 their literals, in IRAM. This is a board-placement experiment, not altered math
 or a new runtime path. The rebuilt image passes release compilation and resolves
@@ -174,7 +178,7 @@ It has not yet been flashed; the direct-to-disk original-image capture is still
 running. No performance benefit from this control is claimed yet.
 
 The original-image repeat subsequently completed successfully. The directly saved
-`firmware/dawn-profile/results/2026-09-05-pc-repeat.txt` contains all 36 validated
+`firmware/esp32/results/2026-09-05-pc-repeat.txt` contains all 36 validated
 case windows, 27,110 raw interrupted PCs, and the final `DAWN PC END` marker.
 The IRAM-division control is now flashing; it is not yet a measured result.
 
@@ -1142,7 +1146,7 @@ Ordinary playback remains 1.87-1.90 ms evaluation with about 2.47 ms encoding an
 evaluation and can still exceed the 8.333-ms total deadline after encoding; later
 high-revolution windows average roughly 3.8-4.8 ms and meet it. The loaded heap is
 81,620 bytes free versus 83,008 before the added 452-pixel frame buffer. The capture
-`firmware/dawn-profile/results/2026-09-05-temporal-frame-cache-final.txt` passed
+`firmware/esp32/results/2026-09-05-temporal-frame-cache-final.txt` passed
 three Wi-Fi replacements, every rejection test, 200 checksum-checked frame requests,
 and zero evaluation-allocation checks. The exact firmware ELF SHA256 is
 `32a4312b56bb6644f714ced974a2e69bd7545aa06a7468518467874ad9827e2a`.
@@ -1164,6 +1168,6 @@ and the later high-revolution window improved 4.819 -> 4.470 ms. Normal evaluati
 is 1.84-1.86 ms, heap remains 81,620 bytes free, and 200 checked frames reported
 zero evaluation allocations. The first hot region still totals 8.538 ms after the
 2.464-ms encoder and therefore remains slightly above the 8.333-ms deadline. The
-accepted capture is `firmware/dawn-profile/results/2026-09-05-hoisted-native-geometry.txt`;
+accepted capture is `firmware/esp32/results/2026-09-05-hoisted-native-geometry.txt`;
 firmware ELF SHA256 is
 `d791c8042d2ed0ceae4eecbd94782e0cb29c2c3e791c6bd00601007b13b7488d`.

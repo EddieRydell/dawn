@@ -43,10 +43,10 @@ That makes the project useful as a technical showcase for:
 ```text
 apps/desktop/                 Tauri desktop app
 apps/desktop/src/             Rust desktop service, app state, commands, persistence
-apps/desktop/src/state/       Desktop audio, workspace, GUI edit, project, render, and filesystem workflows
+apps/desktop/src/desktop_state/ Desktop audio, workspace, GUI edit, project, render, and filesystem workflows
 apps/desktop/src/gui/         Typed GUI projection, edit, selection, and domain-conversion modules
-apps/desktop/src/state_tasks.rs Background save/render scheduling and GUI history
-apps/desktop/src/gui_geometry.rs Read-only preview-prop geometry projection
+apps/desktop/src/state_tasks/ Background save/render scheduling and GUI history
+apps/desktop/src/preview/geometry.rs Read-only preview-prop geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
 apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
 crates/dawn-language/         Dawn authoring model and effect/operator compiler
@@ -58,8 +58,9 @@ crates/dawn-project-io/src/loader/  Project loading, import resolution, and docu
 crates/dawn-project-io/src/serialization/  Domain-specific Dawn document serialization
 crates/dawn-output/           E1.31 and Art-Net socket/codec lifecycle
 crates/dawn-cli/              Standalone `dawn` package and project CLI
+firmware/esp32/               ESP32 loader, Wi-Fi transport, parallel I2S output, and profiling harness
 examples/                     Example Dawn projects and props
-docs/                         Performance and regression tracking notes
+docs/                         Architecture, loading, performance, and regression notes
 tools/                        Repository tooling
 ```
 
@@ -100,6 +101,11 @@ examples/starter/dawn-package.json
 
 ## Development Commands
 
+`apps/desktop/frontend/src/generated/bindings.ts` and
+`apps/desktop/gen/schemas/` are committed generated API artifacts. Generate
+bindings with the command below; generate schemas through Tauri tooling. Do not
+edit either by hand.
+
 ```bash
 pnpm generate:bindings
 ```
@@ -129,6 +135,15 @@ pnpm bench:effect-vm
 ```
 
 Runs the full Criterion benchmark set.
+
+## ESP32 Firmware
+
+`firmware/esp32` is a separate Cargo workspace for the classic ESP32. It loads
+prepared sequences over Wi-Fi and can drive four parallel WS281x outputs with
+I2S DMA; it also contains the profiling harness used during runtime work. Its
+toolchain and lockfile are isolated from desktop builds. See
+[ESP32 loading](docs/esp32_loading.md) for the loader and
+[firmware instructions](firmware/esp32/README.md) for build and board commands.
 
 ## Package and CLI workflow
 

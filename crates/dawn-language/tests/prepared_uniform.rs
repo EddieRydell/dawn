@@ -1,5 +1,5 @@
 #[allow(dead_code)]
-#[path = "../../../firmware/dawn-profile/src/workload.rs"]
+#[path = "../../../firmware/esp32/src/workload.rs"]
 mod workload;
 
 #[allow(dead_code)]

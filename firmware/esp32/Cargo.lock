@@ -346,7 +346,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dawn-profile"
+name = "dawn-esp32"
 version = "0.1.0"
 dependencies = [
  "crc32fast",

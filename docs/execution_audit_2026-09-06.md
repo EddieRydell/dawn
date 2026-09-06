@@ -117,13 +117,13 @@ Final laptop measurements after uniform broadcast and hue hoisting:
 | Workload | Initial | Final | Interpretation |
 | --- | ---: | ---: | --- |
 | Seven selected starter frames | 917 us | 985-1,064 us | 7-16% slower |
-| Controller output, 60 dense frames | 7.127 ms | 7.966-7.983 ms | 12% slower |
+| Controller output, 60 dense frames | 7.127 ms quick baseline | 7.32-7.52 ms later controlled reruns | baseline was too weak to support a 12% claim |
 | 16 uniform layers | 8.79 us | 10.50 us | 1.71 us more per frame |
 | 200-pixel mark pulse | 12.41 us | 4.29-4.36 us | 65% less time |
 | 200-pixel mark chase | 226.4 us | 185.0-188.5 us | 17-18% less time |
 | 200-pixel mark pulse with edge fade | 13.20 us | 11.98-12.09 us | 8-9% less time |
 | Full-layout generated mark pulse | 502.6 us | 282.8 us | 44% less time |
-| Full-layout generated mark chase | 4.596 ms | 5.14-5.17 ms | 12% slower |
+| Full-layout generated mark chase | 4.596 ms | 5.14-5.17 ms | initial comparison only; not a stable regression attribution |
 | 16 chase/pulse layers, 200 pixels | 40.14 us | 43.83 us | 9% slower |
 
 Percentages use the displayed point estimates, not Criterion's bootstrap change
@@ -137,8 +137,11 @@ from mark effects. Other paths do not benefit from these shortcuts. Sharing one
 sampler changes setup/dispatch and code generation; removing forward tables trades
 their precomputed arithmetic for less retained data. Controlled inlining and
 borrowed-versus-owned sampler experiments identify part of that cost, not a
-complete cycle attribution of every difference. The remaining desktop slowdowns
-are recorded as tradeoffs, not dismissed as noise or hidden behind the mark gains.
+complete cycle attribution of every difference. The original two-sample quick
+baseline was inadequate for a percentage regression claim: subsequent 30-sample
+controlled reruns measured 7.32-7.52 ms, only 3-6% above it and with comparable
+run-to-run variation. No original executable was retained, so the exact causal
+difference remains unproven.
 
 The scoped physical Rust line count (runtime, language, elaboration, profiling
 firmware; including tests and benches, excluding generated target files) is
@@ -163,9 +166,10 @@ incomplete evidence, not an accepted playback capture.
 
 ## ESP32 evidence
 
-The final tested loader ELF is `firmware/dawn-profile/target/audit-loader-verified.elf`,
+The final tested loader ELF is `firmware/esp32/target/audit-loader-verified.elf`,
 SHA256 `512f3c39d4e37b4815411c97ca7352ddc57916d33f0f62982b84fc30765ab67c`.
-All files below are under `firmware/dawn-profile/results/`.
+All files below are under `firmware/esp32/results/`; see that directory's
+`README.md` for accepted, superseded, and failed-capture status.
 
 ### Starter show with Wi-Fi and parallel I2S
 

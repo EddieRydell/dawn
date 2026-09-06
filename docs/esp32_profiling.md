@@ -1,6 +1,10 @@
 # Dawn: measured classic ESP32 baseline
 
-This is the original baseline. See the [active optimization checkpoint](runtime_optimization_2026-09-04.md)
+> Historical baseline. Its terminology and measurements describe the original
+> profiling image; use [the execution audit](execution_audit_2026-09-06.md) for
+> current runtime and ESP32 claims.
+
+This is the original baseline. See the [execution audit](execution_audit_2026-09-06.md)
 for newer math/compiler/IRAM results and the remaining overhaul work.
 
 Measured September 4, 2026 (local time) on the user's COM4 board:
@@ -96,7 +100,7 @@ partition). A subsequent rustfmt-only change altered only 65 image bytes:
 the 32-byte embedded ELF hash, one checksum byte and the trailing 32-byte
 image digest. All other image bytes, including executable code and workload
 data, match. The before/after images are local Cargo build artifacts under
-`firmware/dawn-profile/target/`.
+`firmware/esp32/target/`.
 
 ## What this does not cover
 
@@ -120,5 +124,5 @@ lines for sharing desktop fixtures, excluding documentation, capture tooling
 and lockfiles. This adds board/profiling integration, not a duplicate runtime
 or a completed runtime simplification.
 
-See [firmware instructions](../firmware/dawn-profile/README.md) and the
-[complete baseline transcript](../firmware/dawn-profile/results/esp32-v3.1-2026-09-04.txt).
+See [firmware instructions](../firmware/esp32/README.md) and the
+[complete baseline transcript](../firmware/esp32/results/esp32-v3.1-2026-09-04.txt).

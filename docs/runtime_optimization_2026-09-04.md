@@ -1,5 +1,9 @@
 # Runtime optimization results — 2026-09-04
 
+> Historical record. Names, implementation details, and measurements describe
+> the 2026-09-04 image. For current runtime boundaries and validated ESP32
+> measurements, see [the execution audit](execution_audit_2026-09-06.md).
+
 ## Current consolidated result
 
 The optimization implementation and laptop/ESP32 measurements are complete.
@@ -7,7 +11,7 @@ The sections after this summary are historical checkpoints: their pending-work
 lists describe that checkpoint, not the current runtime.
 
 The latest saved board capture is
-[`2026-09-04-array-storage.txt`](../firmware/dawn-profile/results/2026-09-04-array-storage.txt):
+[`2026-09-04-array-storage.txt`](../firmware/esp32/results/2026-09-04-array-storage.txt):
 160 cases, matching host checksums, zero timed allocations, zero prepared
 first-frame allocations, and all 163,840 configured heap bytes recovered.
 Its firmware ELF SHA-256 is
@@ -116,7 +120,7 @@ tradeoff of this optimization, not an unreported simplification success.
 
 ## Measurement evidence
 
-Original baseline is `firmware/dawn-profile/results/esp32-v3.1-2026-09-04.txt`.
+Original baseline is `firmware/esp32/results/esp32-v3.1-2026-09-04.txt`.
 Intermediate complete captures are `2026-09-04-math-iram.txt`, `2026-09-04-compiler-iram.txt`, and `2026-09-04-layered.txt` in the same directory. The latter predates the shared-Identifier change.
 
 The subsequent `2026-09-04-shared-enums.txt` capture records the shared-Identifier checkpoint:
@@ -205,7 +209,7 @@ incomplete and are not checked in as successful results. Early intact records
 show ScanSweep at 5.944 ms for 200 pixels, zero allocations/checksum mismatches;
 this was not full-run or array-workload verification. The fourth attempt
 completed unchanged firmware and passed all 80 records; the corruption's cause
-is not established. Complete capture: `firmware/dawn-profile/results/2026-09-04-calculated-arrays.txt`.
+is not established. Complete capture: `firmware/esp32/results/2026-09-04-calculated-arrays.txt`.
 
 The flashed ELF SHA256 is
 `efd4869c49b58f9c0456820f5996fdab959a6e46276f8b9450a4a3f6333ba61a`.
@@ -246,7 +250,7 @@ length guard. Firmware release build/clippy/format pass. The guard-only rebuild
 is byte-for-byte identical to the flashed image:
 `2d0cf6bde4888b17bf4fac89da67a16fd8cd7d44125b13561f997ca587f0f38a`.
 
-Complete board capture: `firmware/dawn-profile/results/2026-09-04-array-lowering.txt`.
+Complete board capture: `firmware/esp32/results/2026-09-04-array-lowering.txt`.
 All 96 cases pass host checksums with zero timed allocations, and all prepared
 first frames allocate zero too. The full heap is recovered after the run.
 
@@ -295,7 +299,7 @@ checks that an unused array containing integer division-by-zero still fails.
 ArrayRamp has five instructions, one float constant, three float registers and
 one color register; it has no reference/integer registers or operand storage.
 
-Complete board capture: `firmware/dawn-profile/results/2026-09-04-bytecode-cleanup.txt`.
+Complete board capture: `firmware/esp32/results/2026-09-04-bytecode-cleanup.txt`.
 All 96 cases pass checksums with zero timed allocations. Prepared first-frame
 allocation counts are also zero, and all 163,840 heap bytes return at the end.
 ELF SHA256: `f6750ea85fc908d7566212225c22864cd8b1a5f18edd3d0de702d1146190ed3b`.
@@ -1278,7 +1282,7 @@ prepared workspace creation performs that allocation before the first frame.
 
 ## LOC accounting
 
-A pre-edit snapshot counted 15,088 nonblank Rust lines across the 52 files under runtime/src, language/src/dsl, elaboration/src, and firmware/dawn-profile/src. At the shared-Identifier checkpoint this same set contains 15,101 (+13), including the new layered firmware fixture and in-module tests. This is not whole-repository net LOC: standalone tests, benchmark fixtures, build script, linker config and documentation are outside that count. VM override machinery and identifier reservation code were removed; the overall request is not yet a demonstrated net-removal refactor.
+A pre-edit snapshot counted 15,088 nonblank Rust lines across the 52 files under runtime/src, language/src/dsl, elaboration/src, and firmware/esp32/src. At the shared-Identifier checkpoint this same set contains 15,101 (+13), including the new layered firmware fixture and in-module tests. This is not whole-repository net LOC: standalone tests, benchmark fixtures, build script, linker config and documentation are outside that count. VM override machinery and identifier reservation code were removed; the overall request is not yet a demonstrated net-removal refactor.
 
 The calculated-array checkpoint contains 15,312 lines in that same set (+224
 versus the original snapshot, +211 versus shared identifiers). The increase

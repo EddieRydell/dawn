@@ -1,7 +1,7 @@
 # Effect VM Performance
 
-Current embedded optimization work and measurement limitations are recorded in
-the [September 4 checkpoint](runtime_optimization_2026-09-04.md).
+This is a historical optimization notebook. Current embedded measurements and
+limitations are recorded in the [execution audit](execution_audit_2026-09-06.md).
 
 Dawn uses Criterion for Effect DSL VM and real-project render benchmarks. Timing deltas are
 advisory; benchmark assertions fail only when the VM or renderer changes output.
@@ -780,13 +780,16 @@ to the system allocator. They are not total show RAM or ESP32 layout measurement
 `pnpm check` passes; the zero-allocation assertion remains explicitly ignored and fails when
 run directly. No allocator dependency has been added; approval for vendoring remains pending.
 
-## Approved offset-allocator no_std port (2026-09-04)
+## Historical offset-allocator experiment (2026-09-04)
 
-Following explicit dependency approval, `offset-allocator` 0.2.0 is vendored under
-`vendor/offset-allocator` and declared in the workspace and runtime manifests.
-The upstream license, source provenance/archive checksum, exact local changes,
-and integration constraints are recorded in `vendor/offset-allocator/DAWN.md`.
-The allocator algorithm is unchanged: imports use `core`/`alloc`, `nonmax` has
+This experiment was removed from the current runtime. Calculated arrays use a
+reserved free-slot stack instead; the vendored allocator and its manifest entries
+were removed. The remaining text records the prior experiment.
+
+Following explicit dependency approval, `offset-allocator` 0.2.0 was vendored and
+declared in the workspace and runtime manifests. Its upstream license, source
+provenance/archive checksum, exact local changes, and integration constraints were
+recorded beside that source. The allocator algorithm was unchanged: imports used `core`/`alloc`, `nonmax` had
 default features disabled, and debug logging plus its dependency are removed.
 No application-wide logging flags are changed.
 

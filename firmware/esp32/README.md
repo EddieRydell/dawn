@@ -1,4 +1,4 @@
-# Dawn profiling on the classic ESP32
+# Dawn ESP32 firmware
 
 This firmware runs the existing `dawn-runtime`, not a second interpreter. It is a
 standalone Cargo workspace so its Xtensa toolchain, target configuration, board
@@ -35,9 +35,9 @@ From this directory:
 
 ```powershell
 . ./export-esp.ps1
-cargo +esp build --release --bin dawn-profile --locked
-espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/dawn-profile
-uvx --from esptool python capture.py target/xtensa-esp32-none-elf/release/dawn-profile --raw-output results/profile.txt
+cargo +esp build --release --bin dawn-esp32 --locked
+espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/dawn-esp32
+uvx --from esptool python capture.py target/xtensa-esp32-none-elf/release/dawn-esp32 --raw-output results/profile.txt
 ```
 
 Flashing overwrites the application, bootloader and partition table. The capture
@@ -155,8 +155,8 @@ waveform or LED behavior.
 The four DSL sources and parameter sets are shared with the desktop Criterion
 benchmark in `crates/dawn-language/benches/fixtures/mod.rs`. `build.rs` uses the
 real host compiler and generates Rust constructors for its bytecode/resources
-in Cargo's `OUT_DIR`. This is benchmark fixture emission, **not** Dawn's future
-serialized prepared-show format. Unsupported resource values fail the build.
+in Cargo's `OUT_DIR`. This is benchmark fixture emission, separate from Dawn's
+serialized prepared-sequence archive format. Unsupported resource values fail the build.
 
 For each effect, the firmware measures 200, 400, 800 and 1600 pixels. Four added
 fixtures, UniformFade, PixelRamp, ArrayRamp and DynamicArray, also measure 4 and
@@ -221,7 +221,7 @@ the 160 KiB configured heap is internal RAM, not PSRAM. One warmup frame precede
 the 32 timed frames. The VM interpreter and specialized show evaluator are now
 placed in instruction RAM through `rwtext_hook.x`; remaining code executes from
 flash. UART printing is outside the timing windows. Host checksum
-generation independently compares the prepared-show output with direct VM
+generation independently compares the prepared-sequence output with direct VM
 output. Both device paths then check every measured frame against those host
 checksums, outside the timed regions.
 
@@ -244,6 +244,6 @@ See [the measured baseline](../../docs/esp32_profiling.md). The firmware remains
 installed; resetting the board reruns the suite. The capture process releases
 COM4 when finished.
 
-See the [active optimization checkpoint](../../docs/runtime_optimization_2026-09-04.md)
-for newer results, intentional math changes, allocation limitations and remaining
-work. The baseline is historical, not the current firmware's performance.
+See the [execution audit](../../docs/execution_audit_2026-09-06.md) for current
+validated loader and I2S measurements. Historical optimization notes remain under
+`docs/`; their measurements do not describe the current firmware.

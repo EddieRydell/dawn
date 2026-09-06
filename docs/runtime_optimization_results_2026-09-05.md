@@ -1,5 +1,8 @@
 # Runtime optimization results
 
+> Historical record. These results predate the final execution audit; use
+> [the execution audit](execution_audit_2026-09-06.md) for current claims.
+
 Status: complete. Normal ESP32 validation, full desktop comparison, final PC
 profiling and repository checks passed. Validated normal firmware is restored.
 This report distinguishes measured results from remaining work.
@@ -8,8 +11,8 @@ This report distinguishes measured results from remaining work.
 
 Classic ESP32, one 240 MHz core, Wi-Fi off, no LEDs or physical output. These are
 compute-only times for evaluating and patching a prepared show, not wire-rate FPS.
-Baseline: `firmware/dawn-profile/results/2026-09-04-array-storage.txt`.
-Current: `firmware/dawn-profile/results/2026-09-05-normal-uniform-loop.txt`.
+Baseline: `firmware/esp32/results/2026-09-04-array-storage.txt`.
+Current: `firmware/esp32/results/2026-09-05-normal-uniform-loop.txt`.
 Current ELF SHA256:
 `e0654c710d0f3f4b6507d5a05b0ccfcba70de214efc02bdca38b7ccf239ce07a`.
 
@@ -91,7 +94,7 @@ It does not reconstruct dynamic call stacks or produce a true stack flame graph.
 No profiling instrumentation was added to the portable runtime.
 
 Accepted 15-fixture, 60-window evidence:
-`firmware/dawn-profile/results/2026-09-05-pc-final.txt`, ELF SHA256
+`firmware/esp32/results/2026-09-05-pc-final.txt`, ELF SHA256
 `43b04ae797d3c335ed62400121733861f09007320c86f710f233e5dccff3f23d`.
 Each fixture runs disabled / 997-us sampling / 1999-us sampling / disabled,
 finishing whole 32-frame cycles. Sampling overhead is 0.355–0.408% and
