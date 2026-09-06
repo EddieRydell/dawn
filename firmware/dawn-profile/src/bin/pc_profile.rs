@@ -111,11 +111,14 @@ fn main() -> ! {
             )
         } else {
             let index = case - fixtures::NAMES.len() - workload::CHASE_PULSE_CASES.len();
-            let (program, _) = fixtures::case(workload::GAMMA_CASE);
-            let (name, pulse, fade) = workload::MARK_CASES[index];
+            let (name, _, _) = workload::MARK_CASES[index];
             (
                 name,
-                workload::mark_show(200, pulse, fade, program),
+                dawn_runtime::wire::decode_sequence(
+                    fixtures::MARK_SEQUENCES[index],
+                    Default::default(),
+                )
+                .unwrap(),
                 &fixtures::MARK_GOLDEN[index],
             )
         };

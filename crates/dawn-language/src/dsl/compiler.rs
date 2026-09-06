@@ -584,6 +584,7 @@ impl FunctionCompiler {
                     dst: self.color_slot(dst),
                     input,
                     seconds,
+                    frame_cache: u32::MAX,
                 });
                 dst
             }

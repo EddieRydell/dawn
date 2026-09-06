@@ -1109,3 +1109,61 @@ No `f64` or `std::` use is present in runtime source. Final source/check boundar
 semantic tests, memory limits, benchmark baselines, regression experiments and
 profiler limitations are recorded in the concise results report. All required
 validation processes have completed; no runtime edits or device actions remain.
+
+## Prepared-sequence temporal frame reuse
+
+The later real-show I2S investigation found a separate graph-level multiplier.
+The starter TimeWarp operator asks its upstream signal for one time that is
+identical for every output pixel. Recursive operator sampling nevertheless used
+the scalar path, so four fixtures with identical 113-pixel local geometry sampled
+the same native Spin work 452 times. At 25 revolutions this meant 11,300 Spin-loop
+iterations per frame. The 66-second frame measured 39.840 ms on average over 20
+HTTP requests (38.126-44.827 ms), with zero allocations.
+
+Signal-sample bytecode now records a frame-cache slot only when the compiler's
+existing uniform analysis proves that the time expression is pixel-independent.
+At evaluation, that read fills a preallocated full-frame buffer through the normal
+graph frame path and reuses it for later pixels. Pixel-dependent time expressions
+retain scalar semantics. Separate slots preserve independent reads, cache keys
+include upstream node and sample time, and keys are cleared at each top-level frame
+because controls may have changed. Workspace admission includes these buffers and
+the archive version is 2. No memory is allocated while evaluating a frame.
+
+Spin also computes reciprocal scales once per pixel, tests the active interval
+before sampling pulse shape, and avoids division for the common normalized
+two-point curve span. These are algebraic changes to the existing general native
+effect, not a new runtime effect class.
+
+On the laptop, `render_representative_frames` fell from 2.924 ms before the change
+to 1.001 ms (0.990-1.011 ms), about 65.8% faster. On the ESP32, the same 66-second
+frame now averages 6.210 ms over 20 requests (5.624-8.830 ms), about 84.4% faster.
+Ordinary playback remains 1.87-1.90 ms evaluation with about 2.47 ms encoding and
+6.35 ms total. The most expensive continuous Spin window now averages 6.476 ms
+evaluation and can still exceed the 8.333-ms total deadline after encoding; later
+high-revolution windows average roughly 3.8-4.8 ms and meet it. The loaded heap is
+81,620 bytes free versus 83,008 before the added 452-pixel frame buffer. The capture
+`firmware/dawn-profile/results/2026-09-05-temporal-frame-cache-final.txt` passed
+three Wi-Fi replacements, every rejection test, 200 checksum-checked frame requests,
+and zero evaluation-allocation checks. The exact firmware ELF SHA256 is
+`32a4312b56bb6644f714ced974a2e69bd7545aa06a7468518467874ad9827e2a`.
+
+Native Chase/Spin geometry and timing were then hoisted inside the same shared
+runtime. `NativeSampleCache` lives on the evaluator stack for one active effect,
+rebuilds only when fixture pixel count changes, and retains no heap memory. It
+precomputes section count, revolution scale, pulse duration, reciprocal duration,
+and extension bounds while preserving the original per-pixel position division
+and exact output checksums. Public scalar sampling uses the same implementation
+with a one-sample cache; there is no ESP32-specific evaluator.
+
+The laptop representative benchmark improved from 1.001 ms to 0.951 ms
+(0.945-0.956 ms), about 5%. ESP32 direct evaluation at 66 seconds improved from
+6.210 to 5.674 ms average and from 6.302 to 5.343 ms median over 20 HTTP samples.
+The trimmed mean excluding the two largest radio-interrupted samples improved from
+6.018 to 5.452 ms. Continuous hot windows improved 6.476/5.526 -> 6.014/5.142 ms,
+and the later high-revolution window improved 4.819 -> 4.470 ms. Normal evaluation
+is 1.84-1.86 ms, heap remains 81,620 bytes free, and 200 checked frames reported
+zero evaluation allocations. The first hot region still totals 8.538 ms after the
+2.464-ms encoder and therefore remains slightly above the 8.333-ms deadline. The
+accepted capture is `firmware/dawn-profile/results/2026-09-05-hoisted-native-geometry.txt`;
+firmware ELF SHA256 is
+`d791c8042d2ed0ceae4eecbd94782e0cb29c2c3e791c6bd00601007b13b7488d`.

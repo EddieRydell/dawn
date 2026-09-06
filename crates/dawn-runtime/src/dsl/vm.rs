@@ -8,6 +8,9 @@ use super::types::{Identifier, Type, Value};
 use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue};
 use super::{CompiledEffect, CompiledOperator, EffectKind, ParamDecl};
 use crate::automation::{AutomationMapping, AutomationValue, automation_value_at_position};
+use crate::sampling::{
+    add_colors, color_intensity, invert_color, max_colors, mix_colors, multiply_colors, scale_color,
+};
 use crate::values::{
     Color, Curve, Gradient, Marks, SampleDuration, SampleTime, SampleTimeError,
     sample_duration_from_seconds_f32, sample_duration_seconds_f32, sample_time_with_seconds_offset,
@@ -42,6 +45,7 @@ pub trait SignalSampler {
         &mut self,
         input: usize,
         sample_time: SampleTime,
+        frame_cache: Option<usize>,
     ) -> Result<Color, RuntimeError>;
 }
 
@@ -89,7 +93,7 @@ impl BoundParams {
         let mut bytes = self
             .values
             .len()
-            .checked_mul(core::mem::size_of::<BoundParamValue>() + 32)?;
+            .checked_mul(size_of::<BoundParamValue>())?;
         for (index, value) in self.values.iter().enumerate() {
             let extra = match value {
                 BoundParamValue::Curve(curve) => {
@@ -101,10 +105,18 @@ impl BoundParams {
                         .unwrap_or(0)
                         .max(curve.raw.points.len())
                         .max(1);
-                    // Vec growth can double capacity; raw points + segments + crossings.
-                    points.checked_mul(128)?.checked_add(256)?
+                    // Three detached shared allocations; forward samples use the raw points.
+                    points
+                        .checked_mul(
+                            size_of::<crate::values::CurvePoint>() + size_of::<CrossingSegment>(),
+                        )?
+                        .checked_add(
+                            size_of::<PreparedCurve>()
+                                + size_of::<Curve>()
+                                + size_of::<PreparedCurveCrossings>()
+                                + 6 * size_of::<usize>(),
+                        )?
                 }
-                BoundParamValue::Enum(value) => value.as_str().len().checked_add(32)?,
                 _ => 0,
             };
             bytes = bytes.checked_add(extra)?;
@@ -264,9 +276,19 @@ impl BoundParams {
         }
     }
 
+    pub(crate) fn prepared_curve_crossings(
+        &self,
+        index: usize,
+    ) -> Result<Arc<PreparedCurveCrossings>, RuntimeError> {
+        match self.values.get(index) {
+            Some(BoundParamValue::Curve(value)) => Ok(Arc::clone(&value.crossings)),
+            _ => Err(RuntimeError::new("expected curve parameter")),
+        }
+    }
+
     pub fn gradient(&self, index: usize) -> Result<Arc<Gradient>, RuntimeError> {
         match self.values.get(index) {
-            Some(BoundParamValue::Gradient(value)) => Ok(value.raw()),
+            Some(BoundParamValue::Gradient(value)) => Ok(Arc::clone(value)),
             _ => Err(RuntimeError::new("expected gradient parameter")),
         }
     }
@@ -302,12 +324,12 @@ impl BoundParams {
             Some(BoundParamValue::Curve(value)) => value,
             _ => return Err(RuntimeError::new("expected curve parameter")),
         };
-        curve_crossing(curve, value, fallback)
+        prepared_curve_crossing(&curve.crossings, value, fallback)
     }
 
     pub fn sample_gradient(&self, index: usize, position: f32) -> Result<Color, RuntimeError> {
         match self.values.get(index) {
-            Some(BoundParamValue::Gradient(value)) => sample_prepared_gradient(value, position),
+            Some(BoundParamValue::Gradient(value)) => sample_gradient(value, position),
             _ => Err(RuntimeError::new("expected gradient parameter")),
         }
     }
@@ -316,7 +338,6 @@ impl BoundParams {
 #[derive(Debug, Default)]
 pub struct DslBindCache {
     curves: Vec<(usize, Arc<PreparedCurve>)>,
-    gradients: Vec<(usize, Arc<PreparedGradient>)>,
 }
 
 #[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -331,7 +352,7 @@ enum BoundParamValue {
     TargetItems(Arc<TargetItemsValue>),
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<PreparedCurve>),
-    Gradient(Arc<PreparedGradient>),
+    Gradient(Arc<Gradient>),
     Array(Arc<[Value]>),
     Enum(Identifier),
 }
@@ -349,7 +370,7 @@ impl BoundParamValue {
             Value::TargetItems(value) => Self::TargetItems(value),
             Value::TargetItem(value) => Self::TargetItem(value),
             Value::Curve(value) => Self::Curve(cache.prepared_curve(value)),
-            Value::Gradient(value) => Self::Gradient(cache.prepared_gradient(value)),
+            Value::Gradient(value) => Self::Gradient(value),
             Value::Array(value) => Self::Array(value),
             Value::Enum(value) => Self::Enum(value),
         }
@@ -367,7 +388,7 @@ impl BoundParamValue {
             Self::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
             Self::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
             Self::Curve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
-            Self::Gradient(value) => RuntimeValue::PreparedGradient(Arc::clone(value)),
+            Self::Gradient(value) => RuntimeValue::Gradient(Arc::clone(value)),
             Self::Array(value) => RuntimeValue::Array(Arc::clone(value)),
             Self::Enum(value) => RuntimeValue::Enum(value.clone()),
         }
@@ -399,75 +420,33 @@ impl DslBindCache {
         self.curves.push((key, Arc::clone(&curve)));
         curve
     }
-
-    fn prepared_gradient(&mut self, raw: Arc<Gradient>) -> Arc<PreparedGradient> {
-        let key = Arc::as_ptr(&raw).cast::<()>() as usize;
-        if let Some((_, gradient)) = self
-            .gradients
-            .iter()
-            .find(|(candidate, _)| *candidate == key)
-        {
-            return Arc::clone(gradient);
-        }
-        let gradient = Arc::new(PreparedGradient::new(raw));
-        self.gradients.push((key, Arc::clone(&gradient)));
-        gradient
-    }
 }
 
 #[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct PreparedCurve {
     raw: Arc<Curve>,
-    segments: Vec<CurveSegment>,
-    crossings: PreparedCurveCrossings,
+    crossings: Arc<PreparedCurveCrossings>,
 }
 
 #[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-struct PreparedGradient {
-    raw: Arc<Gradient>,
-    segments: Vec<GradientSegment>,
-}
-
-#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-struct CurveSegment {
-    start_position: f32,
-    end_position: f32,
-    start_value: f32,
-    end_value: f32,
-}
-
-#[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-struct GradientSegment {
-    start_position: f32,
-    end_position: f32,
-    start_value: Color,
-    end_value: Color,
-}
-
-#[derive(Clone, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-enum PreparedCurveCrossings {
+pub(crate) enum PreparedCurveCrossings {
     Increasing(Vec<CrossingSegment>),
     Decreasing(Vec<CrossingSegment>),
     Mixed(Vec<CrossingSegment>),
 }
 
 #[derive(Clone, Copy, Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-struct CrossingSegment {
-    start_position: f32,
-    end_position: f32,
-    start_value: f32,
-    end_value: f32,
+pub(crate) struct CrossingSegment {
+    position_bias: f32,
+    position_scale: f32,
+    min_value: f32,
+    max_value: f32,
 }
 
 impl PreparedCurve {
     fn new(raw: Arc<Curve>) -> Self {
-        let segments = prepare_float_segments(&raw);
-        let crossings = prepare_curve_crossings(&segments);
-        Self {
-            raw,
-            segments,
-            crossings,
-        }
+        let crossings = Arc::new(prepare_curve_crossings(&raw));
+        Self { raw, crossings }
     }
 
     fn raw(&self) -> Arc<Curve> {
@@ -477,8 +456,7 @@ impl PreparedCurve {
     fn detached_clone(&self) -> Self {
         Self {
             raw: Arc::new((*self.raw).clone()),
-            segments: self.segments.clone(),
-            crossings: self.crossings.clone(),
+            crossings: Arc::new((*self.crossings).clone()),
         }
     }
 
@@ -487,18 +465,15 @@ impl PreparedCurve {
         let point_count = point_count.max(1);
         let raw = Arc::make_mut(&mut self.raw);
         if raw.points.capacity() < point_count {
-            raw.points.reserve(point_count - raw.points.len());
+            raw.points.reserve_exact(point_count - raw.points.len());
         }
-        if self.segments.capacity() < point_count {
-            self.segments.reserve(point_count - self.segments.len());
-        }
-        let crossings = match &mut self.crossings {
+        let crossings = match Arc::make_mut(&mut self.crossings) {
             PreparedCurveCrossings::Increasing(values)
             | PreparedCurveCrossings::Decreasing(values)
             | PreparedCurveCrossings::Mixed(values) => values,
         };
         if crossings.capacity() < point_count {
-            crossings.reserve(point_count - crossings.len());
+            crossings.reserve_exact(point_count - crossings.len());
         }
     }
 
@@ -510,19 +485,7 @@ impl PreparedCurve {
             max,
             position,
         );
-        prepare_float_segments_into(&self.raw, &mut self.segments);
-        prepare_curve_crossings_into(&self.segments, &mut self.crossings);
-    }
-}
-
-impl PreparedGradient {
-    fn new(raw: Arc<Gradient>) -> Self {
-        let segments = prepare_gradient_segments(&raw);
-        Self { raw, segments }
-    }
-
-    fn raw(&self) -> Arc<Gradient> {
-        Arc::clone(&self.raw)
+        prepare_curve_crossings_into(&self.raw, Arc::make_mut(&mut self.crossings));
     }
 }
 
@@ -533,6 +496,35 @@ pub struct VmWorkspace {
 }
 
 impl VmWorkspace {
+    pub(crate) fn storage_estimate(
+        registers: [usize; 5],
+        capacity: usize,
+        width: usize,
+    ) -> Option<usize> {
+        let sizes = [
+            size_of::<i32>(),
+            size_of::<f32>(),
+            size_of::<bool>(),
+            size_of::<Color>(),
+            size_of::<RuntimeValue>(),
+        ];
+        let mut bytes = size_of::<Self>();
+        for (count, size) in registers.into_iter().zip(sizes) {
+            bytes = bytes.checked_add(count.checked_mul(size)?)?;
+        }
+        if capacity != 0 {
+            bytes = bytes
+                .checked_add(size_of::<ArrayStorage>())?
+                .checked_add(capacity.checked_mul(3 * size_of::<u32>())?)?
+                .checked_add(
+                    capacity
+                        .checked_mul(width)?
+                        .checked_mul(size_of::<RuntimeValue>())?,
+                )?;
+        }
+        Some(bytes)
+    }
+
     pub(crate) fn reserve(&mut self, bytecode: &BytecodeProgram) {
         self.registers.reserve(bytecode.layout);
         self.reserve_arrays(bytecode);
@@ -558,8 +550,7 @@ impl VmWorkspace {
 // buffer. Counts represent register roots and array children, not temporary
 // borrowed handles returned by value()/index_value(). No atomics or GC pass.
 struct ArrayStorage {
-    allocator: offset_allocator::Allocator,
-    allocations: Vec<Option<offset_allocator::Allocation>>,
+    free: Vec<u32>,
     references: Vec<u32>,
     lengths: Vec<u32>,
     values: Vec<RuntimeValue>,
@@ -578,8 +569,7 @@ impl core::fmt::Debug for ArrayStorage {
 impl ArrayStorage {
     fn new(capacity: u32, width: u32) -> Self {
         Self {
-            allocator: offset_allocator::Allocator::with_max_allocs(capacity, capacity * 2 + 1),
-            allocations: vec![None; capacity as usize],
+            free: (0..capacity).rev().collect(),
             references: vec![0; capacity as usize],
             lengths: vec![0; capacity as usize],
             values: vec![RuntimeValue::Void; capacity as usize * width as usize],
@@ -591,12 +581,11 @@ impl ArrayStorage {
         if len > self.width as usize {
             return Err(RuntimeError::new("array exceeds prepared width"));
         }
-        let allocation = self
-            .allocator
-            .allocate(1)
+        let slot = self
+            .free
+            .pop()
             .ok_or_else(|| RuntimeError::new("array storage exhausted"))?;
-        let index = allocation.offset as usize;
-        self.allocations[index] = Some(allocation);
+        let index = slot as usize;
         self.references[index] = 1; // Construction root; transferred by set_ref.
         self.lengths[index] = len as u32;
         Ok(index as u32)
@@ -627,11 +616,7 @@ impl ArrayStorage {
             self.release(child);
         }
         self.lengths[index as usize] = 0;
-        self.allocator.free(
-            self.allocations[index as usize]
-                .take()
-                .expect("live array allocation"),
-        );
+        self.free.push(index);
     }
 }
 
@@ -678,7 +663,7 @@ impl VmRegisters {
 
 fn reserve<T>(values: &mut Vec<T>, capacity: usize) {
     if values.capacity() < capacity {
-        values.reserve(capacity - values.len());
+        values.reserve_exact(capacity - values.len());
     }
 }
 
@@ -811,7 +796,6 @@ enum RuntimeValue {
     Curve(Arc<Curve>),
     Gradient(Arc<Gradient>),
     PreparedCurve(Arc<PreparedCurve>),
-    PreparedGradient(Arc<PreparedGradient>),
     Array(Arc<[Value]>),
     ArraySlot(u32),
     Enum(Identifier),
@@ -852,7 +836,6 @@ fn clone_runtime(value: &RuntimeValue) -> RuntimeValue {
         RuntimeValue::Curve(value) => RuntimeValue::Curve(Arc::clone(value)),
         RuntimeValue::Gradient(value) => RuntimeValue::Gradient(Arc::clone(value)),
         RuntimeValue::PreparedCurve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
-        RuntimeValue::PreparedGradient(value) => RuntimeValue::PreparedGradient(Arc::clone(value)),
         RuntimeValue::Array(value) => RuntimeValue::Array(Arc::clone(value)),
         RuntimeValue::ArraySlot(index) => RuntimeValue::ArraySlot(*index),
         RuntimeValue::Enum(value) => RuntimeValue::Enum(value.clone()),
@@ -1032,14 +1015,14 @@ impl<'a> Vm<'a> {
                     position,
                 } => {
                     let position = self.float(*position)?;
-                    let color =
-                        sample_prepared_gradient(self.prepared_gradient_param(*param)?, position)?;
+                    let color = sample_gradient(self.prepared_gradient_param(*param)?, position)?;
                     self.set_color(*dst, color)?;
                 }
                 Instruction::SignalSample {
                     dst,
                     input,
                     seconds,
+                    frame_cache,
                 } => {
                     let seconds = self.float(*seconds)?;
                     let color = match crate::values::sample_time_from_seconds_f32(seconds) {
@@ -1047,7 +1030,11 @@ impl<'a> Vm<'a> {
                             .signal_sampler
                             .as_deref_mut()
                             .ok_or_else(|| RuntimeError::new("Signal sampler is unavailable"))?
-                            .sample_signal(*input, sample_time)?,
+                            .sample_signal(
+                                *input,
+                                sample_time,
+                                (*frame_cache != u32::MAX).then_some(*frame_cache as usize),
+                            )?,
                         Err(SampleTimeError::Negative) => black(),
                         Err(_) => {
                             return Err(RuntimeError::new("Signal sample time is out of range"));
@@ -1428,7 +1415,7 @@ impl<'a> Vm<'a> {
                     } else {
                         let position = self.float(*position)?;
                         let gradient = self.prepared_gradient_param(*param)?;
-                        let color = sample_prepared_gradient(gradient, position)?;
+                        let color = sample_gradient(gradient, position)?;
                         self.set_color(*dst, scale_color(color, scale))?;
                     }
                 }
@@ -1458,7 +1445,10 @@ impl<'a> Vm<'a> {
                         .transpose()?
                         .unwrap_or(value);
                     let curve = self.prepared_curve_param(*param)?;
-                    self.set_float(*dst, curve_crossing(curve, value, fallback)?)?;
+                    self.set_float(
+                        *dst,
+                        prepared_curve_crossing(&curve.crossings, value, fallback)?,
+                    )?;
                 }
                 Instruction::Len { dst, value } => {
                     let value = match self.ref_value(*value)? {
@@ -2007,12 +1997,6 @@ impl<'a> Vm<'a> {
                 let position = to_float_runtime(index, self.params)?;
                 Ok(RuntimeValue::Color(sample_gradient(gradient, position)?))
             }
-            RuntimeValue::PreparedGradient(gradient) => {
-                let position = to_float_runtime(index, self.params)?;
-                Ok(RuntimeValue::Color(sample_prepared_gradient(
-                    gradient, position,
-                )?))
-            }
             _ => Err(RuntimeError::new(
                 "index target is not an array, curve, or gradient",
             )),
@@ -2027,7 +2011,7 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn prepared_gradient_param(&self, param: usize) -> Result<&PreparedGradient, RuntimeError> {
+    fn prepared_gradient_param(&self, param: usize) -> Result<&Gradient, RuntimeError> {
         match self.params.values.get(param) {
             Some(BoundParamValue::Gradient(gradient)) => Ok(gradient),
             Some(_) => Err(RuntimeError::new("expected gradient")),
@@ -2168,7 +2152,6 @@ fn runtime_to_value(value: RuntimeValue, arrays: Option<&ArrayStorage>) -> Value
         RuntimeValue::Curve(value) => Value::Curve(value),
         RuntimeValue::PreparedCurve(value) => Value::Curve(value.raw()),
         RuntimeValue::Gradient(value) => Value::Gradient(value),
-        RuntimeValue::PreparedGradient(value) => Value::Gradient(value.raw()),
         RuntimeValue::Array(value) => Value::Array(value),
         RuntimeValue::ArraySlot(index) => Value::Array(
             arrays
@@ -2276,7 +2259,6 @@ fn to_gradient_runtime<'a>(
     let _ = params;
     match value {
         RuntimeValue::Gradient(gradient) => Ok(gradient),
-        RuntimeValue::PreparedGradient(gradient) => Ok(&gradient.raw),
         _ => Err(RuntimeError::new("expected gradient")),
     }
 }
@@ -2409,54 +2391,13 @@ fn runtime_refs_equal(left: &RuntimeValue, right: &RuntimeValue) -> bool {
     }
 }
 
-fn prepare_float_segments(curve: &Curve) -> Vec<CurveSegment> {
-    let mut segments = Vec::with_capacity(curve.points.len());
-    prepare_float_segments_into(curve, &mut segments);
-    segments
-}
-
-fn prepare_float_segments_into(curve: &Curve, segments: &mut Vec<CurveSegment>) {
-    segments.clear();
-    let Some(first) = curve.points.first() else {
-        return;
-    };
-    let mut previous = first;
-    for point in &curve.points {
-        segments.push(CurveSegment {
-            start_position: previous.position,
-            end_position: point.position,
-            start_value: previous.value,
-            end_value: point.value,
-        });
-        previous = point;
-    }
-}
-
-fn prepare_gradient_segments(gradient: &Gradient) -> Vec<GradientSegment> {
-    let Some(first) = gradient.stops.first() else {
-        return Vec::new();
-    };
-    let mut previous = first;
-    let mut segments = Vec::with_capacity(gradient.stops.len());
-    for stop in &gradient.stops {
-        segments.push(GradientSegment {
-            start_position: previous.position,
-            end_position: stop.position,
-            start_value: previous.color,
-            end_value: stop.color,
-        });
-        previous = stop;
-    }
-    segments
-}
-
-fn prepare_curve_crossings(segments: &[CurveSegment]) -> PreparedCurveCrossings {
-    let mut crossings = PreparedCurveCrossings::Increasing(Vec::with_capacity(segments.len()));
-    prepare_curve_crossings_into(segments, &mut crossings);
+fn prepare_curve_crossings(curve: &Curve) -> PreparedCurveCrossings {
+    let mut crossings = PreparedCurveCrossings::Increasing(Vec::with_capacity(curve.points.len()));
+    prepare_curve_crossings_into(curve, &mut crossings);
     crossings
 }
 
-fn prepare_curve_crossings_into(segments: &[CurveSegment], output: &mut PreparedCurveCrossings) {
+fn prepare_curve_crossings_into(curve: &Curve, output: &mut PreparedCurveCrossings) {
     let mut crossings =
         match core::mem::replace(output, PreparedCurveCrossings::Increasing(Vec::new())) {
             PreparedCurveCrossings::Increasing(values)
@@ -2464,106 +2405,74 @@ fn prepare_curve_crossings_into(segments: &[CurveSegment], output: &mut Prepared
             | PreparedCurveCrossings::Mixed(values) => values,
         };
     crossings.clear();
-    crossings.extend(segments.iter().map(|segment| CrossingSegment {
-        start_position: segment.start_position,
-        end_position: segment.end_position,
-        start_value: segment.start_value,
-        end_value: segment.end_value,
-    }));
-    let increasing = crossings
-        .windows(2)
-        .all(|pair| pair[0].end_value <= pair[1].end_value);
-    let decreasing = crossings
-        .windows(2)
-        .all(|pair| pair[0].end_value >= pair[1].end_value);
-    if increasing {
-        *output = PreparedCurveCrossings::Increasing(crossings);
-    } else if decreasing {
-        *output = PreparedCurveCrossings::Decreasing(crossings);
-    } else {
-        *output = PreparedCurveCrossings::Mixed(crossings);
+    let mut increasing = true;
+    let mut decreasing = true;
+    for pair in curve.points.windows(2) {
+        let (start, end) = (&pair[0], &pair[1]);
+        increasing &= start.value <= end.value;
+        decreasing &= start.value >= end.value;
+        let span = end.value - start.value;
+        let position_scale = if span.abs() <= 1e-9 {
+            0.0
+        } else {
+            (end.position - start.position) / span
+        };
+        crossings.push(CrossingSegment {
+            position_bias: start.position - start.value * position_scale,
+            position_scale,
+            min_value: start.value.min(end.value),
+            max_value: start.value.max(end.value),
+        });
     }
+    if let [point] = curve.points.as_slice() {
+        crossings.push(CrossingSegment {
+            position_bias: point.position,
+            position_scale: 0.0,
+            min_value: point.value,
+            max_value: point.value,
+        });
+    }
+    *output = if increasing {
+        PreparedCurveCrossings::Increasing(crossings)
+    } else if decreasing {
+        PreparedCurveCrossings::Decreasing(crossings)
+    } else {
+        PreparedCurveCrossings::Mixed(crossings)
+    };
 }
 
 fn sample_prepared_curve(curve: &PreparedCurve, position: f32) -> Result<f32, RuntimeError> {
-    let Some(segment) = find_position_segment(&curve.segments, position) else {
-        return Ok(0.0);
-    };
-    Ok(mix_float_segment(
-        segment.start_position,
-        segment.end_position,
-        segment.start_value,
-        segment.end_value,
-        position,
-    ))
+    Ok(sample_curve(&curve.raw, position))
 }
 
-fn sample_prepared_gradient(
-    gradient: &PreparedGradient,
-    position: f32,
-) -> Result<Color, RuntimeError> {
-    let Some(segment) = find_position_segment(&gradient.segments, position) else {
-        return Err(RuntimeError::new("cannot sample empty gradient"));
-    };
-    Ok(mix_colors(
-        segment.start_value,
-        segment.end_value,
-        segment_t(segment.start_position, segment.end_position, position),
-    ))
-}
-
-trait PositionSegment {
-    fn end_position(&self) -> f32;
-}
-
-impl PositionSegment for CurveSegment {
-    fn end_position(&self) -> f32 {
-        self.end_position
+pub(crate) fn prepared_curve_crossing(
+    crossings: &PreparedCurveCrossings,
+    value: f32,
+    fallback: f32,
+) -> Result<f32, RuntimeError> {
+    match crossings.segments() {
+        [] => return Ok(fallback),
+        [segment] => return Ok(crossing_at(segment, value).unwrap_or(fallback)),
+        _ => {}
     }
-}
-
-impl PositionSegment for GradientSegment {
-    fn end_position(&self) -> f32 {
-        self.end_position
-    }
-}
-
-fn find_position_segment<T: PositionSegment>(segments: &[T], position: f32) -> Option<&T> {
-    if segments.is_empty() {
-        return None;
-    }
-    let index = segments.partition_point(|segment| segment.end_position() <= position);
-    segments.get(index).or_else(|| segments.last())
-}
-
-fn mix_float_segment(
-    start_position: f32,
-    end_position: f32,
-    start_value: f32,
-    end_value: f32,
-    position: f32,
-) -> f32 {
-    start_value + (end_value - start_value) * segment_t(start_position, end_position, position)
-}
-
-fn segment_t(start_position: f32, end_position: f32, position: f32) -> f32 {
-    let span = (end_position - start_position).max(0.000000001);
-    ((position - start_position) / span).clamp(0.0, 1.0)
-}
-
-fn curve_crossing(curve: &PreparedCurve, value: f32, fallback: f32) -> Result<f32, RuntimeError> {
-    Ok(match &curve.crossings {
+    Ok(match crossings {
         PreparedCurveCrossings::Increasing(segments) => {
-            let index = segments.partition_point(|segment| segment.end_value < value);
-            crossing_at(segments.get(index), value).unwrap_or(fallback)
+            let index = segments.partition_point(|segment| segment.max_value < value);
+            segments
+                .get(index)
+                .and_then(|segment| crossing_at(segment, value))
+                .unwrap_or(fallback)
         }
         PreparedCurveCrossings::Decreasing(segments) => {
-            let index = segments.partition_point(|segment| segment.end_value > value);
-            crossing_at(segments.get(index), value).unwrap_or(fallback)
+            let index = segments.partition_point(|segment| segment.min_value > value);
+            segments
+                .get(index)
+                .and_then(|segment| crossing_at(segment, value))
+                .unwrap_or(fallback)
         }
         PreparedCurveCrossings::Mixed(segments) => segments
             .iter()
-            .find_map(|segment| crossing_at(Some(segment), value))
+            .find_map(|segment| crossing_at(segment, value))
             .unwrap_or(fallback),
     })
 }
@@ -2572,19 +2481,78 @@ fn curve_crossing_raw(curve: &Curve, value: f32, fallback: f32) -> f32 {
     crate::sampling::curve_crossing(curve, value, fallback)
 }
 
-fn crossing_at(segment: Option<&CrossingSegment>, value: f32) -> Option<f32> {
-    let segment = segment?;
-    let min = segment.start_value.min(segment.end_value);
-    let max = segment.start_value.max(segment.end_value);
-    if value < min || value > max {
+#[inline(always)]
+fn crossing_at(segment: &CrossingSegment, value: f32) -> Option<f32> {
+    if value < segment.min_value || value > segment.max_value {
         return None;
     }
-    let span = segment.end_value - segment.start_value;
-    if span.abs() <= 0.000000001 {
-        return Some(segment.start_position);
+    Some(segment.position_bias + value * segment.position_scale)
+}
+
+impl PreparedCurveCrossings {
+    fn segments(&self) -> &[CrossingSegment] {
+        match self {
+            Self::Increasing(segments) | Self::Decreasing(segments) | Self::Mixed(segments) => {
+                segments
+            }
+        }
     }
-    let t = ((value - segment.start_value) / span).clamp(0.0, 1.0);
-    Some(segment.start_position + (segment.end_position - segment.start_position) * t)
+}
+
+#[cfg(test)]
+mod curve_crossing_tests {
+    use super::{Arc, PreparedCurve, prepared_curve_crossing};
+    use crate::sampling::curve_crossing;
+    use crate::values::{Curve, CurvePoint};
+    use alloc::vec;
+
+    fn prepared(points: &[(f32, f32)]) -> PreparedCurve {
+        PreparedCurve::new(Arc::new(Curve {
+            points: points
+                .iter()
+                .map(|&(position, value)| CurvePoint { position, value })
+                .collect(),
+        }))
+    }
+
+    #[test]
+    fn prepared_crossing_matches_raw_curves() {
+        for points in [
+            vec![(0.0, 0.0), (1.0, 1.0)],
+            vec![(0.0, 1.0), (0.25, 0.8), (0.6, 0.3), (1.0, 0.0)],
+            vec![(0.0, 0.0), (0.3, 1.0), (0.7, 0.2), (1.0, 0.8)],
+            vec![(0.0, 0.0), (0.4, 0.0), (0.4, 1.0), (1.0, 1.0)],
+        ] {
+            let curve = Curve {
+                points: points
+                    .iter()
+                    .map(|&(position, value)| CurvePoint { position, value })
+                    .collect(),
+            };
+            let prepared = prepared(&points);
+            for value in [-0.1, 0.0, 0.1, 0.2, 0.5, 0.8, 1.0, 1.1] {
+                let expected = curve_crossing(&curve, value, -7.0);
+                let actual = prepared_curve_crossing(&prepared.crossings, value, -7.0).unwrap();
+                assert!(
+                    (actual - expected).abs() <= 0.000001,
+                    "{points:?} at {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_crossing_preserves_single_point_behavior() {
+        let curve = prepared(&[(0.25, 0.75)]);
+        assert_eq!(
+            prepared_curve_crossing(&curve.crossings, 0.75, -1.0),
+            Ok(0.25)
+        );
+        assert_eq!(
+            prepared_curve_crossing(&curve.crossings, 0.5, -1.0),
+            Ok(-1.0)
+        );
+    }
 }
 
 fn sample_curve(curve: &Curve, position: f32) -> f32 {
@@ -2594,58 +2562,6 @@ fn sample_curve(curve: &Curve, position: f32) -> f32 {
 fn sample_gradient(gradient: &Gradient, position: f32) -> Result<Color, RuntimeError> {
     crate::sampling::sample_gradient(gradient, position)
         .ok_or_else(|| RuntimeError::new("cannot sample empty gradient"))
-}
-
-fn mix_colors(left: Color, right: Color, t: f32) -> Color {
-    Color {
-        red: channel_byte(left.red as f32 + (right.red as f32 - left.red as f32) * t),
-        green: channel_byte(left.green as f32 + (right.green as f32 - left.green as f32) * t),
-        blue: channel_byte(left.blue as f32 + (right.blue as f32 - left.blue as f32) * t),
-    }
-}
-
-fn scale_color(color: Color, scale: f32) -> Color {
-    Color {
-        red: channel_byte(color.red as f32 * scale),
-        green: channel_byte(color.green as f32 * scale),
-        blue: channel_byte(color.blue as f32 * scale),
-    }
-}
-
-fn add_colors(left: Color, right: Color) -> Color {
-    Color {
-        red: left.red.saturating_add(right.red),
-        green: left.green.saturating_add(right.green),
-        blue: left.blue.saturating_add(right.blue),
-    }
-}
-
-fn multiply_colors(left: Color, right: Color) -> Color {
-    Color {
-        red: ((u16::from(left.red) * u16::from(right.red) + 127) / 255) as u8,
-        green: ((u16::from(left.green) * u16::from(right.green) + 127) / 255) as u8,
-        blue: ((u16::from(left.blue) * u16::from(right.blue) + 127) / 255) as u8,
-    }
-}
-
-fn max_colors(left: Color, right: Color) -> Color {
-    Color {
-        red: left.red.max(right.red),
-        green: left.green.max(right.green),
-        blue: left.blue.max(right.blue),
-    }
-}
-
-fn color_intensity(color: Color) -> f32 {
-    f32::from(color.red.max(color.green).max(color.blue)) / 255.0
-}
-
-fn invert_color(color: Color) -> Color {
-    Color {
-        red: 255 - color.red,
-        green: 255 - color.green,
-        blue: 255 - color.blue,
-    }
 }
 
 fn channel(value: f32) -> u8 {

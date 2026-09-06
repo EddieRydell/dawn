@@ -44,6 +44,13 @@ pub enum BuiltinOperator {
 }
 
 impl BuiltinOperator {
+    pub const fn input_count(self) -> usize {
+        match self {
+            Self::Max | Self::Add | Self::Multiply | Self::IntensityModulate => 2,
+            Self::Dim | Self::Invert | Self::Colorize | Self::Delay | Self::Echo => 1,
+        }
+    }
+
     pub const ALL: [Self; 9] = [
         Self::Max,
         Self::Add,

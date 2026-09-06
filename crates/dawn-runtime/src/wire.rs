@@ -3,14 +3,14 @@
 
 use crate::sequence::PreparedSequence;
 use crate::values::{SampleDuration, SampleTime};
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec, vec::Vec};
 use rkyv::rancor::Fallible;
 use rkyv::with::{ArchiveWith, DeserializeWith, SerializeWith};
 use rkyv::{Archive, Archived, Place};
 
 pub const HEADER_BYTES: usize = 16;
 const MAGIC: [u8; 4] = *b"DAWN";
-const VERSION: u32 = 1;
+const VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadError {
@@ -120,13 +120,24 @@ pub fn decode_sequence(bytes: &[u8], limits: LoadLimits) -> Result<PreparedSeque
 }
 
 fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<(), LoadError> {
-    use crate::element::ElementLayout;
+    use crate::dsl::{BoundParams, VmWorkspace};
+    use crate::element::{ElementLayout, RenderedElementState};
+    use crate::fixture::{FixtureControlValue, FixtureFunctionId, FixtureState};
     use crate::patch::{PatchStep, PatchValueLayout};
-    use crate::signal::{PreparedEffectImplementation, PreparedOperator, PreparedSignalKind};
+    use crate::signal::{
+        CachedEffectSample, CachedSignal, CachedSignalFrame, CachedVmSample,
+        EffectAutomationWorkspace,
+    };
+    use crate::signal::{
+        PreparedEffectImplementation, PreparedOperator, PreparedOperatorNode, PreparedSignalKind,
+    };
+    use crate::values::Color;
     let bad = LoadError::InvalidSequence;
     let signal = &sequence.signals;
     let plan = &signal.plan;
     if signal.frame_rate == 0
+        || signal.duration.ticks() == 0
+        || signal.frame_count == 0
         || plan.output_index >= plan.nodes.len()
         || plan.target as usize >= signal.targets.len()
         || signal.element_cell_offsets.len() != signal.elements.len()
@@ -145,7 +156,11 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
         }
         Ok(())
     };
-    reserve(signal.pixel_count, usize::from(plan.frame_buffer_count) * 3)?;
+    reserve(1, size_of::<crate::sequence::SequenceWorkspace>())?;
+    reserve(
+        signal.pixel_count,
+        usize::from(plan.frame_buffer_count) * size_of::<Color>(),
+    )?;
     // All VM slots reserve the component-wise largest layouts they can execute.
     // Budgeting that maximum for every slot also covers a program reused by
     // several operators, and array capacity/width maxima from different programs.
@@ -168,27 +183,56 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
         }
         array_capacity = array_capacity.max(program.array_capacity as usize);
         array_width = array_width.max(program.array_width as usize);
-    }
-    for _ in 0..=plan.vm_workspace_count {
-        reserve(1, 512)?;
-        for count in registers {
-            reserve(count, 64)?;
-        }
-        if array_capacity != 0 {
-            reserve(1, 4096)?; // Offset allocator's fixed bin table and array metadata.
-            reserve(array_capacity, 128)?; // Allocation nodes, free list and references.
-            reserve(
-                array_capacity,
-                array_width.checked_mul(64).ok_or(LoadError::Limit)?,
-            )?;
+        if program.frame_cache_count() > program.instructions.len() {
+            return Err(bad);
         }
     }
-    reserve(plan.nodes.len(), 32)?;
-    reserve(sequence.elements.len(), 64)?;
-    reserve(sequence.patch.value_layouts.len(), 64)?;
-    for control in &sequence.controls {
-        reserve(control.explicit_fixture_count(), 16)?;
+    let mut operator_frame_counts = vec![0usize; plan.vm_workspace_count];
+    for node in &plan.nodes {
+        let PreparedSignalKind::Operator {
+            operator:
+                PreparedOperatorNode {
+                    implementation: PreparedOperator::Dsl(program),
+                    ..
+                },
+            vm_slot,
+            ..
+        } = &node.kind
+        else {
+            continue;
+        };
+        let Some(slot) = operator_frame_counts.get_mut(usize::from(*vm_slot)) else {
+            return Err(bad);
+        };
+        let Some(program) = signal.programs.get(*program as usize) else {
+            return Err(bad);
+        };
+        *slot = (*slot).max(program.frame_cache_count());
     }
+    for count in operator_frame_counts {
+        reserve(
+            signal.pixel_count,
+            count
+                .checked_mul(size_of::<Color>())
+                .ok_or(LoadError::Limit)?,
+        )?;
+        reserve(count, size_of::<CachedSignalFrame>())?;
+    }
+    reserve(
+        plan.vm_workspace_count,
+        size_of::<Vec<CachedSignalFrame>>() + size_of::<Option<CachedVmSample>>(),
+    )?;
+    reserve(
+        1 + plan.vm_workspace_count,
+        VmWorkspace::storage_estimate(registers, array_capacity, array_width)
+            .ok_or(LoadError::Limit)?,
+    )?;
+    reserve(plan.nodes.len(), size_of::<Option<CachedSignal>>())?;
+    reserve(sequence.elements.len(), size_of::<RenderedElementState>())?;
+    reserve(
+        sequence.patch.value_layouts.len(),
+        size_of::<crate::patch::PatchValue>(),
+    )?;
     for &width in &sequence.output_widths {
         reserve(width as usize, 1)?;
     }
@@ -201,9 +245,14 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
         }
     };
     for &(_, layout) in &sequence.elements {
-        reserve(cells(layout), 32)?;
-        if let ElementLayout::Fixture(functions) = layout {
-            reserve(functions as usize, 32)?;
+        match layout {
+            ElementLayout::Color(n) => reserve(n as usize, size_of::<Color>())?,
+            ElementLayout::Scalar(n) => reserve(n as usize, size_of::<f32>())?,
+            ElementLayout::Indexed(n) => reserve(n as usize, size_of::<u32>())?,
+            ElementLayout::Fixture(n) => reserve(
+                n as usize,
+                size_of::<(FixtureFunctionId, FixtureControlValue)>(),
+            )?,
         }
     }
     let mut count = 0usize;
@@ -233,6 +282,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
             if pixel.element_cell_index as usize >= element.pixel_count
                 || pixel.pixel_count == 0
                 || pixel.pixel_index >= pixel.pixel_count
+                || (target.sample_count != 0 && pixel.pixel_index >= target.sample_count)
                 || !pixel.pixel_fraction.is_finite()
                 || previous.is_some_and(|old| old >= address)
             {
@@ -240,18 +290,27 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
             }
             previous = Some(address);
         }
-        reserve(target.sample_count as usize, 8)?;
     }
     if signal.target(plan.target).len() != signal.pixel_count {
         return Err(bad);
     }
+    reserve(
+        signal
+            .targets
+            .iter()
+            .map(|target| target.sample_count as usize)
+            .max()
+            .unwrap_or(0),
+        size_of::<CachedEffectSample>(),
+    )?;
     let mut automation_slot = 0;
     for effect in &signal.effects {
         if effect.target as usize >= signal.targets.len()
+            || effect.duration.ticks() == 0
             || effect
                 .start_time
                 .checked_add_duration(effect.duration)
-                .is_none()
+                .is_none_or(|end| end.ticks() > signal.duration.ticks())
         {
             return Err(bad);
         }
@@ -261,7 +320,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
             return Err(bad);
         }
         if let Some(automation) = &effect.automation {
-            reserve(1, 256)?;
+            reserve(1, size_of::<EffectAutomationWorkspace>())?;
             match &effect.implementation {
                 PreparedEffectImplementation::Dsl { bound_params, .. }
                 | PreparedEffectImplementation::Native {
@@ -275,7 +334,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
                             .ok_or(LoadError::Limit)?,
                     )?;
                 }
-                _ => {}
+                _ => return Err(bad),
             }
             if automation.workspace_slot != automation_slot {
                 return Err(bad);
@@ -309,7 +368,9 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
                 automation,
                 vm_slot,
             } => {
-                if *vm_slot as usize >= plan.vm_workspace_count {
+                if matches!(operator.implementation, PreparedOperator::Dsl(_))
+                    && *vm_slot as usize >= plan.vm_workspace_count
+                {
                     return Err(bad);
                 }
                 if let PreparedOperator::Dsl(program) = operator.implementation
@@ -318,7 +379,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
                     return Err(bad);
                 }
                 if !automation.is_empty() {
-                    reserve(1, 256)?;
+                    reserve(1, size_of::<(BoundParams, Option<SampleTime>)>())?;
                     reserve(
                         1,
                         operator
@@ -332,13 +393,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
                     automation_slot += 1;
                 }
                 let required = match operator.implementation {
-                    PreparedOperator::Native(
-                        crate::BuiltinOperator::Max
-                        | crate::BuiltinOperator::Add
-                        | crate::BuiltinOperator::Multiply
-                        | crate::BuiltinOperator::IntensityModulate,
-                    ) => 2,
-                    PreparedOperator::Native(_) => 1,
+                    PreparedOperator::Native(operator) => operator.input_count(),
                     PreparedOperator::Dsl(_) => inputs.len(),
                 };
                 if inputs.len() != required {
@@ -362,6 +417,14 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
             return Err(bad);
         }
     }
+    reserve(
+        signal.frame_scratch_count(),
+        signal
+            .pixel_count
+            .checked_mul(size_of::<Color>())
+            .and_then(|bytes| bytes.checked_add(size_of::<Box<[Color]>>()))
+            .ok_or(LoadError::Limit)?,
+    )?;
     if plan.frame_slots[plan.output_index] >= plan.frame_buffer_count {
         return Err(bad);
     }
@@ -399,16 +462,17 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
     let patch = &sequence.patch;
     for layout in &patch.value_layouts {
         match *layout {
-            PatchValueLayout::Color(n)
-            | PatchValueLayout::Scalar(n)
-            | PatchValueLayout::Indexed(n)
-            | PatchValueLayout::Components(n)
-            | PatchValueLayout::Slots(n) => reserve(n as usize, 32)?,
+            PatchValueLayout::Color(n) => reserve(n as usize, size_of::<Color>())?,
+            PatchValueLayout::Scalar(n) | PatchValueLayout::Components(n) => {
+                reserve(n as usize, size_of::<f32>())?
+            }
+            PatchValueLayout::Indexed(n) => reserve(n as usize, size_of::<u32>())?,
+            PatchValueLayout::Slots(n) => reserve(n as usize, size_of::<u8>())?,
             PatchValueLayout::Fixture { width, functions } => reserve(
                 width as usize,
                 (functions as usize)
-                    .checked_add(1)
-                    .and_then(|n| n.checked_mul(32))
+                    .checked_mul(size_of::<(FixtureFunctionId, FixtureControlValue)>())
+                    .and_then(|n| n.checked_add(size_of::<FixtureState>()))
                     .ok_or(LoadError::Limit)?,
             )?,
         }

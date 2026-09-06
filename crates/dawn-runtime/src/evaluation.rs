@@ -2,15 +2,148 @@ use crate::BuiltinOperator;
 use crate::dsl::{
     BoundParams, OperatorRunContext, RunContext, RuntimeError, SignalSampler, VmWorkspace,
 };
-use crate::native_effect::{self, NativeSample};
+use crate::native_effect::{self, NativeSample, NativeSampleCache};
+use crate::sampling::{
+    add_colors as add_color, color_intensity as intensity, invert_color, max_colors as max_color,
+    multiply_colors as multiply_color, scale_color,
+};
 use crate::signal::{
-    CachedSignal, CachedVmSample, EffectAutomationWorkspace, EvaluationError, EvaluationWorkspace,
-    PreparedEffect, PreparedEffectImplementation, PreparedOperator, PreparedOperatorNode,
-    PreparedPixel, PreparedSignalGraph, PreparedSignalKind,
+    CachedSignal, CachedSignalFrame, CachedVmSample, EffectAutomationWorkspace, EvaluationError,
+    EvaluationWorkspace, PreparedEffect, PreparedEffectImplementation, PreparedOperator,
+    PreparedOperatorNode, PreparedSignalGraph, PreparedSignalKind,
 };
 use crate::values::{Color, SampleDuration, SampleTime, sample_duration_from_seconds_f32};
-use alloc::format;
 use alloc::string::ToString;
+use alloc::{boxed::Box, format};
+
+enum SampleImplementation<'a> {
+    Dsl(&'a crate::dsl::bytecode::BytecodeProgram, &'a BoundParams),
+    Native(&'a NativeSample),
+}
+
+/// One effect at one time, sampled over any selection of pixel coordinates.
+/// Both sequence playback and sparse editor rasters use this evaluator.
+pub struct EffectSampler<'a> {
+    implementation: SampleImplementation<'a>,
+    context: RunContext,
+    sample_time: SampleTime,
+    native_cache: NativeSampleCache,
+    reuse_uniform: bool,
+}
+
+impl PreparedEffect {
+    #[inline(always)]
+    pub fn with_sampler<P: core::borrow::Borrow<crate::dsl::bytecode::BytecodeProgram>, R>(
+        &self,
+        programs: &[P],
+        sample_time: SampleTime,
+        automation: Option<&mut EffectAutomationWorkspace>,
+        run: impl FnOnce(&mut EffectSampler<'_>) -> Result<R, RuntimeError>,
+    ) -> Result<R, EvaluationError> {
+        if self.automation.is_some() && automation.is_none() {
+            return Err(EvaluationError::InvalidWorkspace);
+        }
+        // This local owns automated resources only for the duration of sampling.
+        // The pixel loop always sees a plain borrow, never an ownership branch.
+        let prepared_native;
+        let implementation = match &self.implementation {
+            PreparedEffectImplementation::Dsl {
+                program,
+                bound_params,
+            } => {
+                let params = match automation {
+                    Some(state) => prepare_effect_params(self, sample_time, state)?,
+                    None => bound_params,
+                };
+                SampleImplementation::Dsl(programs[*program as usize].borrow(), params)
+            }
+            PreparedEffectImplementation::Native { sample, params } => {
+                let sample = match automation {
+                    Some(state) => {
+                        let builtin = params
+                            .as_ref()
+                            .ok_or_else(|| EvaluationError::InvalidGraph {
+                                message: "automated native effect has no bound parameters"
+                                    .to_string(),
+                            })?
+                            .0;
+                        let params = prepare_effect_params(self, sample_time, state)?;
+                        prepared_native = native_effect::prepare_sample(builtin, params)?;
+                        &prepared_native
+                    }
+                    None => sample,
+                };
+                SampleImplementation::Native(sample)
+            }
+        };
+        let mut sampler = EffectSampler {
+            implementation,
+            context: RunContext {
+                progress: self.progress(sample_time),
+                time: self.local_time(sample_time),
+                duration: self.duration,
+                pixel_index: 0,
+                pixel_count: 0,
+                pixel_fraction: 0.0,
+            },
+            sample_time,
+            native_cache: NativeSampleCache::default(),
+            reuse_uniform: false,
+        };
+        run(&mut sampler).map_err(EvaluationError::from)
+    }
+
+    pub fn automation_workspace(&self) -> Option<EffectAutomationWorkspace> {
+        let automation = self.automation.as_ref()?;
+        let params = match &self.implementation {
+            PreparedEffectImplementation::Dsl { bound_params, .. }
+            | PreparedEffectImplementation::Native {
+                params: Some((_, bound_params)),
+                ..
+            } => Some(crate::signal::automation_params(
+                bound_params,
+                &automation.bindings,
+            )),
+            PreparedEffectImplementation::Native { params: None, .. } => None,
+        };
+        Some(EffectAutomationWorkspace {
+            params,
+            sample_time: None,
+        })
+    }
+}
+
+impl EffectSampler<'_> {
+    fn uniform(&self) -> bool {
+        match &self.implementation {
+            SampleImplementation::Dsl(program, _) => !program.uses_pixel_context,
+            SampleImplementation::Native(sample) => !sample.uses_pixel_context(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn sample(
+        &mut self,
+        pixel_index: usize,
+        pixel_count: usize,
+        pixel_fraction: f32,
+        workspace: &mut VmWorkspace,
+    ) -> Result<Color, RuntimeError> {
+        self.context.pixel_index = pixel_index as i32;
+        self.context.pixel_count = pixel_count as i32;
+        self.context.pixel_fraction = pixel_fraction;
+        let result = match &self.implementation {
+            SampleImplementation::Dsl(program, params) => {
+                program.sample_effect_from(params, &self.context, workspace, self.reuse_uniform)
+            }
+            SampleImplementation::Native(sample) => {
+                sample.sample_cached(&self.context, self.sample_time, &mut self.native_cache)
+            }
+        };
+        self.reuse_uniform = result.is_ok();
+        result
+    }
+}
 
 // Keep graph loops separate from patch/output loops; combining them worsens
 // Xtensa code generation even though it removes one call per frame.
@@ -29,6 +162,11 @@ pub(crate) fn sample_signal_graph<'a>(
     }
     for (_, time) in &mut workspace.operator_automation {
         *time = None;
+    }
+    for frames in &mut workspace.operator_frames {
+        for frame in frames {
+            frame.key = None;
+        }
     }
     // Recursive signal sampling uses the VM and caches, not these frame buffers.
     // Keep the fixed storage separate while evaluating, and restore it on errors too.
@@ -85,6 +223,7 @@ pub(crate) fn sample_signal_graph<'a>(
                         destination,
                         &mut buffers,
                         workspace,
+                        vm_slot,
                         &mut vm_workspace.0,
                     );
                     if uses_vm {
@@ -166,92 +305,63 @@ fn sample_layer_frame(
         if !effect.is_active(sample_time) {
             continue;
         }
-        let progress = effect.progress(sample_time);
-        let local_time = effect.local_time(sample_time);
         let sample_count = renderer.targets[effect.target as usize].sample_count as usize;
         for sample in &mut workspace.effect_samples[..sample_count] {
             sample.pixel_count = 0;
         }
-        let (params, native_sample) = if let Some(automation) = &effect.automation {
-            let state = &mut workspace.effect_automation[automation.workspace_slot as usize];
-            match &effect.implementation {
-                PreparedEffectImplementation::Native { .. } => (
-                    None,
-                    Some(prepare_native_sample(effect, sample_time, state)?),
-                ),
-                PreparedEffectImplementation::Dsl { .. } => (
-                    Some(prepare_effect_params(effect, sample_time, state)?),
-                    None,
-                ),
-            }
-        } else {
-            (None, None)
-        };
-        let uniform = match &effect.implementation {
-            PreparedEffectImplementation::Dsl { program, .. } => {
-                !renderer.programs[*program as usize].uses_pixel_context
-            }
-            PreparedEffectImplementation::Native { sample, .. } => {
-                matches!(sample, NativeSample::Pulse { .. })
-            }
-        };
-        let target = renderer.target(effect.target);
-        if uniform {
-            if let Some(pixel) = target.first() {
-                let color = sample_effect_pixel(
-                    &renderer.programs,
-                    effect,
-                    params,
-                    native_sample,
-                    pixel,
-                    progress,
-                    local_time,
-                    &mut workspace.effect_vm,
-                    false,
-                )?;
-                for pixel in target {
-                    let flat_index = renderer.element_cell_offsets[pixel.element_index()]
-                        + pixel.element_cell_index();
-                    compose_max(&mut rendered[flat_index], color);
-                }
-            }
-            continue;
-        }
-        // This traversal keeps one program, parameter set and sample time.
-        // Scalar registers survive VM cleanup; restart initialization for
-        // every effect/time, including backward seeks and automation edits.
-        let mut reuse_uniform = false;
-        for pixel in target {
-            // Pixel indices are already dense. The count distinguishes
-            // fixtures of different sizes sharing the same index.
-            let cached =
-                (sample_count != 0).then(|| &mut workspace.effect_samples[pixel.pixel_index()]);
-            let color = match cached {
-                Some(sample) if sample.pixel_count == pixel.pixel_count => sample.color,
-                cached => {
-                    let color = sample_effect_pixel(
-                        &renderer.programs,
-                        effect,
-                        params,
-                        native_sample,
-                        pixel,
-                        progress,
-                        local_time,
+        let state = effect
+            .automation
+            .as_ref()
+            .map(|automation| &mut workspace.effect_automation[automation.workspace_slot as usize]);
+        effect.with_sampler(&renderer.programs, sample_time, state, |sampler| {
+            let uniform = sampler.uniform();
+            let target = renderer.target(effect.target);
+            if uniform {
+                if let Some(pixel) = target.first() {
+                    let color = sampler.sample(
+                        pixel.pixel_index(),
+                        pixel.pixel_count(),
+                        pixel.pixel_fraction,
                         &mut workspace.effect_vm,
-                        reuse_uniform,
                     )?;
-                    reuse_uniform = true;
-                    if let Some(sample) = cached {
-                        sample.pixel_count = pixel.pixel_count;
-                        sample.color = color;
+                    for pixel in target {
+                        let flat_index = renderer.element_cell_offsets[pixel.element_index()]
+                            + pixel.element_cell_index();
+                        compose_max(&mut rendered[flat_index], color);
                     }
-                    color
                 }
-            };
-            let flat_index =
-                renderer.element_cell_offsets[pixel.element_index()] + pixel.element_cell_index();
-            compose_max(&mut rendered[flat_index], color);
-        }
+                return Ok(());
+            }
+            // This traversal keeps one program, parameter set and sample time.
+            // Scalar registers survive VM cleanup; restart initialization for
+            // every effect/time, including backward seeks and automation edits.
+            for pixel in target {
+                // Pixel indices are already dense. The count distinguishes
+                // fixtures of different sizes sharing the same index.
+                let cached =
+                    (sample_count != 0).then(|| &mut workspace.effect_samples[pixel.pixel_index()]);
+                let color = match cached {
+                    Some(sample) if sample.pixel_count == pixel.pixel_count => sample.color,
+                    cached => {
+                        let color = sampler.sample(
+                            pixel.pixel_index(),
+                            pixel.pixel_count(),
+                            pixel.pixel_fraction,
+                            &mut workspace.effect_vm,
+                        )?;
+                        if let Some(sample) = cached {
+                            sample.pixel_count = pixel.pixel_count;
+                            sample.color = color;
+                        }
+                        color
+                    }
+                };
+                let flat_index = renderer.element_cell_offsets[pixel.element_index()]
+                    + pixel.element_cell_index();
+                compose_max(&mut rendered[flat_index], color);
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -266,6 +376,7 @@ fn sample_operator_frame(
     destination: core::ops::Range<usize>,
     buffers: &mut [Color],
     workspace: &mut EvaluationWorkspace,
+    frame_slot: usize,
     vm_workspace: &mut VmWorkspace,
 ) -> Result<(), EvaluationError> {
     let params = automation.unwrap_or(&operator.params);
@@ -300,6 +411,7 @@ fn sample_operator_frame(
                 inputs,
                 cache: &mut cache,
                 flat_pixel_index,
+                frame_slot,
                 duration: renderer.duration,
                 workspace,
             };
@@ -324,6 +436,32 @@ fn sample_operator_frame(
         return Ok(());
     };
 
+    if matches!(builtin, BuiltinOperator::Delay | BuiltinOperator::Echo) {
+        let mut cache = core::mem::take(&mut workspace.signal_cache);
+        let result = match builtin {
+            BuiltinOperator::Delay => sample_delay_frame(
+                renderer,
+                inputs[0],
+                params,
+                sample_time,
+                &mut buffers[destination],
+                &mut cache,
+                workspace,
+            ),
+            BuiltinOperator::Echo => sample_echo_frame(
+                renderer,
+                inputs[0],
+                params,
+                sample_time,
+                &mut buffers[destination],
+                &mut cache,
+                workspace,
+            ),
+            _ => unreachable!(),
+        };
+        workspace.signal_cache = cache;
+        return result;
+    }
     match builtin {
         BuiltinOperator::Max => binary_graph_op(renderer, inputs, destination, buffers, max_color),
         BuiltinOperator::Add => binary_graph_op(renderer, inputs, destination, buffers, add_color),
@@ -350,22 +488,7 @@ fn sample_operator_frame(
                 scale_color(tint, intensity(color))
             })
         }
-        BuiltinOperator::Delay => sample_delay_frame(
-            renderer,
-            inputs[0],
-            params,
-            sample_time,
-            &mut buffers[destination],
-            workspace,
-        ),
-        BuiltinOperator::Echo => sample_echo_frame(
-            renderer,
-            inputs[0],
-            params,
-            sample_time,
-            &mut buffers[destination],
-            workspace,
-        ),
+        BuiltinOperator::Delay | BuiltinOperator::Echo => unreachable!(),
     }
 }
 
@@ -404,43 +527,34 @@ fn sample_echo_frame(
     params: &BoundParams,
     sample_time: SampleTime,
     output: &mut [Color],
+    cache: &mut [Option<CachedSignal>],
     workspace: &mut EvaluationWorkspace,
 ) -> Result<(), EvaluationError> {
     let delay = operator_delay(params, "echo")?;
     let repeats = params.int(1)?.clamp(1, 32);
     let decay = params.float(2)?.clamp(0.0, 1.0);
     output.fill(black());
-    let mut cache = core::mem::take(&mut workspace.signal_cache);
-    for (flat_pixel_index, output_pixel) in output.iter_mut().enumerate() {
-        cache.fill(None);
+    let mut frame = workspace
+        .frame_scratch
+        .pop()
+        .ok_or(EvaluationError::InvalidWorkspace)?;
+    let result = (|| {
         for repeat in 0..=repeats {
             let Some(delayed_time) = sample_time.checked_sub_duration(SampleDuration::from_ticks(
                 delay.ticks().saturating_mul(repeat as u32),
             )) else {
                 continue;
             };
-            let sampled = sample_signal_pixel(
-                renderer,
-                input,
-                delayed_time,
-                flat_pixel_index,
-                &mut cache,
-                workspace,
-            );
-            match sampled {
-                Ok(source) => compose_max(
-                    output_pixel,
-                    scale_color(source, powi_nonnegative(decay, repeat as u32)),
-                ),
-                Err(error) => {
-                    workspace.signal_cache = cache;
-                    return Err(error);
-                }
+            sample_signal_frame(renderer, input, delayed_time, &mut frame, cache, workspace)?;
+            let amount = powi_nonnegative(decay, repeat as u32);
+            for (target, source) in output.iter_mut().zip(frame.iter()) {
+                compose_max(target, scale_color(*source, amount));
             }
         }
-    }
-    workspace.signal_cache = cache;
-    Ok(())
+        Ok(())
+    })();
+    workspace.frame_scratch.push(frame);
+    result
 }
 
 fn sample_delay_frame(
@@ -449,6 +563,7 @@ fn sample_delay_frame(
     params: &BoundParams,
     sample_time: SampleTime,
     output: &mut [Color],
+    cache: &mut [Option<CachedSignal>],
     workspace: &mut EvaluationWorkspace,
 ) -> Result<(), EvaluationError> {
     output.fill(black());
@@ -456,26 +571,7 @@ fn sample_delay_frame(
     else {
         return Ok(());
     };
-    let mut cache = core::mem::take(&mut workspace.signal_cache);
-    for (flat_pixel_index, output_pixel) in output.iter_mut().enumerate() {
-        cache.fill(None);
-        match sample_signal_pixel(
-            renderer,
-            input,
-            delayed_time,
-            flat_pixel_index,
-            &mut cache,
-            workspace,
-        ) {
-            Ok(color) => *output_pixel = color,
-            Err(error) => {
-                workspace.signal_cache = cache;
-                return Err(error);
-            }
-        }
-    }
-    workspace.signal_cache = cache;
-    Ok(())
+    sample_signal_frame(renderer, input, delayed_time, output, cache, workspace)
 }
 
 fn operator_delay(params: &BoundParams, operator: &str) -> Result<SampleDuration, EvaluationError> {
@@ -566,6 +662,7 @@ fn sample_signal_pixel(
                 flat_pixel_index,
                 cache,
                 workspace,
+                vm_slot,
                 &mut vm_workspace.0,
                 reuse_uniform,
                 progress,
@@ -677,32 +774,20 @@ fn sample_layer_pixel(
                 || (effect.progress(sample_time), effect.local_time(sample_time)),
                 |(sample, local_time, _)| (sample.progress, local_time),
             );
-            let (params, native_sample) = if let Some(automation) = &effect.automation {
-                let state = &mut workspace.effect_automation[automation.workspace_slot as usize];
-                match &effect.implementation {
-                    PreparedEffectImplementation::Native { .. } => (
-                        None,
-                        Some(prepare_native_sample(effect, sample_time, state)?),
-                    ),
-                    PreparedEffectImplementation::Dsl { .. } => (
-                        Some(prepare_effect_params(effect, sample_time, state)?),
-                        None,
-                    ),
-                }
-            } else {
-                (None, None)
-            };
-            let color = sample_effect_pixel(
-                &renderer.programs,
-                effect,
-                params,
-                native_sample,
-                effect_pixel,
-                progress,
-                local_time,
-                &mut workspace.effect_vm,
-                reuse_uniform,
-            )?;
+            let state = effect.automation.as_ref().map(|automation| {
+                &mut workspace.effect_automation[automation.workspace_slot as usize]
+            });
+            let color = effect.with_sampler(&renderer.programs, sample_time, state, |sampler| {
+                sampler.context.progress = progress;
+                sampler.context.time = local_time;
+                sampler.reuse_uniform = reuse_uniform;
+                sampler.sample(
+                    effect_pixel.pixel_index(),
+                    effect_pixel.pixel_count(),
+                    effect_pixel.pixel_fraction,
+                    &mut workspace.effect_vm,
+                )
+            })?;
             workspace.effect_vm_sample = Some((
                 CachedVmSample {
                     index: *effect_index,
@@ -728,6 +813,7 @@ fn sample_operator_pixel(
     flat_pixel_index: usize,
     cache: &mut [Option<CachedSignal>],
     workspace: &mut EvaluationWorkspace,
+    frame_slot: usize,
     vm_workspace: &mut VmWorkspace,
     reuse_uniform: bool,
     progress: f32,
@@ -753,6 +839,7 @@ fn sample_operator_pixel(
             inputs,
             cache,
             flat_pixel_index,
+            frame_slot,
             duration: renderer.duration,
             workspace,
         };
@@ -840,6 +927,7 @@ struct GraphSignalSampler<'a> {
     inputs: &'a [usize],
     cache: &'a mut [Option<CachedSignal>],
     flat_pixel_index: usize,
+    frame_slot: usize,
     duration: SampleDuration,
     workspace: &'a mut EvaluationWorkspace,
 }
@@ -849,6 +937,7 @@ impl SignalSampler for GraphSignalSampler<'_> {
         &mut self,
         input: usize,
         sample_time: SampleTime,
+        frame_cache: Option<usize>,
     ) -> Result<Color, RuntimeError> {
         if sample_time.ticks() >= self.duration.ticks() {
             return Ok(black());
@@ -860,6 +949,52 @@ impl SignalSampler for GraphSignalSampler<'_> {
             .ok_or_else(|| RuntimeError {
                 message: "Signal input index is out of bounds".to_string(),
             })?;
+        if let Some(frame_cache) = frame_cache {
+            let Some(frames) = self.workspace.operator_frames.get_mut(self.frame_slot) else {
+                return Err(RuntimeError {
+                    message: "Signal frame cache slot is out of bounds".to_string(),
+                });
+            };
+            let Some(stored) = frames.get_mut(frame_cache) else {
+                return Err(RuntimeError {
+                    message: "Signal frame cache index is out of bounds".to_string(),
+                });
+            };
+            let mut stored = core::mem::replace(
+                stored,
+                CachedSignalFrame {
+                    key: None,
+                    colors: Box::new([]),
+                },
+            );
+            if stored.key != Some((node, sample_time)) {
+                stored.key = None;
+                let sampled = sample_signal_frame(
+                    self.renderer,
+                    node,
+                    sample_time,
+                    &mut stored.colors,
+                    self.cache,
+                    self.workspace,
+                );
+                if let Err(error) = sampled {
+                    self.workspace.operator_frames[self.frame_slot][frame_cache] = stored;
+                    return Err(RuntimeError {
+                        message: format!("failed to sample Signal frame: {error:?}"),
+                    });
+                }
+                stored.key = Some((node, sample_time));
+            }
+            let color = stored
+                .colors
+                .get(self.flat_pixel_index)
+                .copied()
+                .ok_or_else(|| RuntimeError {
+                    message: "Signal frame pixel is out of bounds".to_string(),
+                });
+            self.workspace.operator_frames[self.frame_slot][frame_cache] = stored;
+            return color;
+        }
         sample_signal_pixel(
             self.renderer,
             node,
@@ -874,47 +1009,181 @@ impl SignalSampler for GraphSignalSampler<'_> {
     }
 }
 
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-fn sample_effect_pixel(
-    programs: &[crate::dsl::bytecode::BytecodeProgram],
-    effect: &PreparedEffect,
-    params: Option<&BoundParams>,
-    native_sample: Option<&NativeSample>,
-    pixel: &PreparedPixel,
-    progress: f32,
-    local_time: SampleDuration,
-    workspace: &mut VmWorkspace,
-    reuse_uniform: bool,
-) -> Result<Color, RuntimeError> {
-    let context = RunContext {
-        progress,
-        time: local_time,
-        duration: effect.duration,
-        pixel_index: pixel.pixel_index() as i32,
-        pixel_count: pixel.pixel_count() as i32,
-        pixel_fraction: pixel.pixel_fraction,
-    };
-    match &effect.implementation {
-        PreparedEffectImplementation::Dsl {
-            program,
-            bound_params,
-        } => programs[*program as usize].sample_effect_from(
-            params.unwrap_or(bound_params),
-            &context,
-            workspace,
-            reuse_uniform,
-        ),
-        PreparedEffectImplementation::Native { sample, .. } => {
-            let sample_time = effect
-                .start_time
-                .checked_add_duration(local_time)
-                .unwrap_or(effect.start_time);
-            native_sample
-                .unwrap_or(sample)
-                .sample(&context, sample_time)
+fn sample_signal_frame(
+    renderer: &PreparedSignalGraph,
+    node_index: usize,
+    sample_time: SampleTime,
+    output: &mut [Color],
+    cache: &mut [Option<CachedSignal>],
+    workspace: &mut EvaluationWorkspace,
+) -> Result<(), EvaluationError> {
+    if output.len() != renderer.pixel_count {
+        return Err(EvaluationError::InvalidWorkspace);
+    }
+    let node =
+        renderer
+            .plan
+            .nodes
+            .get(node_index)
+            .ok_or_else(|| EvaluationError::InvalidGraph {
+                message: "graph node index is out of bounds".to_string(),
+            })?;
+    match &node.kind {
+        PreparedSignalKind::Layer { layer_index } => {
+            return sample_layer_frame(renderer, *layer_index, sample_time, output, workspace);
+        }
+        PreparedSignalKind::Operator {
+            operator,
+            inputs,
+            automation,
+            ..
+        } => {
+            if let PreparedOperator::Native(builtin) = operator.implementation {
+                let slot = operator.automation_slot as usize;
+                let mut state = (!automation.is_empty())
+                    .then(|| core::mem::take(&mut workspace.operator_automation[slot]));
+                let result = (|| {
+                    if let Some((params, time)) = &mut state {
+                        apply_bound_automation(params, automation, sample_time)?;
+                        *time = Some(sample_time);
+                    }
+                    let params = state
+                        .as_ref()
+                        .map_or(&operator.params, |(params, _)| params);
+                    match builtin {
+                        BuiltinOperator::Delay => {
+                            return sample_delay_frame(
+                                renderer,
+                                inputs[0],
+                                params,
+                                sample_time,
+                                output,
+                                cache,
+                                workspace,
+                            );
+                        }
+                        BuiltinOperator::Echo => {
+                            return sample_echo_frame(
+                                renderer,
+                                inputs[0],
+                                params,
+                                sample_time,
+                                output,
+                                cache,
+                                workspace,
+                            );
+                        }
+                        _ => {}
+                    }
+                    sample_signal_frame(
+                        renderer,
+                        inputs[0],
+                        sample_time,
+                        output,
+                        cache,
+                        workspace,
+                    )?;
+                    match builtin {
+                        BuiltinOperator::Dim => {
+                            let amount = params.float(0)?.clamp(0.0, 1.0);
+                            for color in output {
+                                *color = scale_color(*color, amount);
+                            }
+                        }
+                        BuiltinOperator::Invert => {
+                            for color in output {
+                                *color = invert_color(*color);
+                            }
+                        }
+                        BuiltinOperator::Colorize => {
+                            let tint = params.color(0)?;
+                            for color in output {
+                                *color = scale_color(tint, intensity(*color));
+                            }
+                        }
+                        _ => {
+                            let mut right = workspace
+                                .frame_scratch
+                                .pop()
+                                .ok_or(EvaluationError::InvalidWorkspace)?;
+                            let sampled = sample_signal_frame(
+                                renderer,
+                                inputs[1],
+                                sample_time,
+                                &mut right,
+                                cache,
+                                workspace,
+                            );
+                            if sampled.is_ok() {
+                                let op = match builtin {
+                                    BuiltinOperator::Max => max_color,
+                                    BuiltinOperator::Add => add_color,
+                                    BuiltinOperator::Multiply => multiply_color,
+                                    BuiltinOperator::IntensityModulate => {
+                                        |a, b| scale_color(a, intensity(b))
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                for (a, b) in output.iter_mut().zip(right.iter()) {
+                                    *a = op(*a, *b);
+                                }
+                            }
+                            workspace.frame_scratch.push(right);
+                            sampled?;
+                        }
+                    }
+                    Ok(())
+                })();
+                if let Some(state) = state {
+                    workspace.operator_automation[slot] = state;
+                }
+                return result;
+            }
+        }
+        PreparedSignalKind::Output { inputs } => {
+            output.fill(black());
+            if let Some((&first, rest)) = inputs.split_first() {
+                sample_signal_frame(renderer, first, sample_time, output, cache, workspace)?;
+                if !rest.is_empty() {
+                    let mut frame = workspace
+                        .frame_scratch
+                        .pop()
+                        .ok_or(EvaluationError::InvalidWorkspace)?;
+                    let result = (|| {
+                        for &input in rest {
+                            sample_signal_frame(
+                                renderer,
+                                input,
+                                sample_time,
+                                &mut frame,
+                                cache,
+                                workspace,
+                            )?;
+                            for (a, b) in output.iter_mut().zip(frame.iter()) {
+                                compose_max(a, *b);
+                            }
+                        }
+                        Ok(())
+                    })();
+                    workspace.frame_scratch.push(frame);
+                    return result;
+                }
+            }
+            return Ok(());
         }
     }
+    for (flat_pixel_index, color) in output.iter_mut().enumerate() {
+        cache.fill(None);
+        *color = sample_signal_pixel(
+            renderer,
+            node_index,
+            sample_time,
+            flat_pixel_index,
+            cache,
+            workspace,
+        )?;
+    }
+    Ok(())
 }
 
 fn prepare_effect_params<'a>(
@@ -928,13 +1197,8 @@ fn prepare_effect_params<'a>(
         .ok_or_else(|| EvaluationError::InvalidGraph {
             message: "automated effect is missing its prepared automation".to_string(),
         })?;
-    if workspace.params.is_none() {
-        workspace.params = Some(implementation_params(&effect.implementation)?.clone());
-    }
     if workspace.sample_time != Some(sample_time) {
         workspace.sample_time = None;
-        // Release raw curve references before automation mutates their storage.
-        workspace.native_sample = None;
         let params = workspace
             .params
             .as_mut()
@@ -952,41 +1216,7 @@ fn prepare_effect_params<'a>(
         })
 }
 
-fn prepare_native_sample<'a>(
-    effect: &PreparedEffect,
-    sample_time: SampleTime,
-    workspace: &'a mut EffectAutomationWorkspace,
-) -> Result<&'a NativeSample, EvaluationError> {
-    let builtin = match &effect.implementation {
-        PreparedEffectImplementation::Native {
-            params: Some((builtin, _)),
-            ..
-        } => *builtin,
-        _ => {
-            return Err(EvaluationError::InvalidGraph {
-                message: "automated native effect has no bound parameters".to_string(),
-            });
-        }
-    };
-    prepare_effect_params(effect, sample_time, workspace)?;
-    if workspace.native_sample.is_none() {
-        let params = workspace
-            .params
-            .as_ref()
-            .ok_or_else(|| EvaluationError::InvalidGraph {
-                message: "automated effect parameters are missing".to_string(),
-            })?;
-        workspace.native_sample = Some(native_effect::prepare_sample(builtin, params)?);
-    }
-    workspace
-        .native_sample
-        .as_ref()
-        .ok_or_else(|| EvaluationError::InvalidGraph {
-            message: "automated native effect sample is missing".to_string(),
-        })
-}
-
-fn apply_bound_automation(
+pub fn apply_bound_automation(
     params: &mut BoundParams,
     automation: &[crate::signal::PreparedAutomation],
     sample_time: SampleTime,
@@ -1002,79 +1232,10 @@ fn apply_bound_automation(
     Ok(())
 }
 
-fn implementation_params(
-    implementation: &PreparedEffectImplementation,
-) -> Result<&BoundParams, EvaluationError> {
-    match implementation {
-        PreparedEffectImplementation::Dsl { bound_params, .. } => Ok(bound_params),
-        PreparedEffectImplementation::Native {
-            params: Some((_, params)),
-            ..
-        } => Ok(params),
-        PreparedEffectImplementation::Native { params: None, .. } => {
-            Err(EvaluationError::InvalidGraph {
-                message: "automation requires a parameterized sample effect".to_string(),
-            })
-        }
-    }
-}
-
-#[inline(always)]
 fn compose_max(target: &mut Color, source: Color) {
     target.red = target.red.max(source.red);
     target.green = target.green.max(source.green);
     target.blue = target.blue.max(source.blue);
-}
-
-#[inline(always)]
-fn max_color(left: Color, right: Color) -> Color {
-    Color {
-        red: left.red.max(right.red),
-        green: left.green.max(right.green),
-        blue: left.blue.max(right.blue),
-    }
-}
-
-#[inline(always)]
-fn add_color(left: Color, right: Color) -> Color {
-    Color {
-        red: left.red.saturating_add(right.red),
-        green: left.green.saturating_add(right.green),
-        blue: left.blue.saturating_add(right.blue),
-    }
-}
-
-#[inline(always)]
-fn multiply_color(left: Color, right: Color) -> Color {
-    Color {
-        red: ((u16::from(left.red) * u16::from(right.red)) / 255) as u8,
-        green: ((u16::from(left.green) * u16::from(right.green)) / 255) as u8,
-        blue: ((u16::from(left.blue) * u16::from(right.blue)) / 255) as u8,
-    }
-}
-
-#[inline(always)]
-fn invert_color(color: Color) -> Color {
-    Color {
-        red: 255 - color.red,
-        green: 255 - color.green,
-        blue: 255 - color.blue,
-    }
-}
-
-#[inline(always)]
-fn scale_color(color: Color, amount: f32) -> Color {
-    let scale = |value: u8| (f32::from(value) * amount.clamp(0.0, 1.0) + 0.5) as u8;
-    Color {
-        red: scale(color.red),
-        green: scale(color.green),
-        blue: scale(color.blue),
-    }
-}
-
-#[inline(always)]
-fn intensity(color: Color) -> f32 {
-    f32::from(color.red.max(color.green).max(color.blue)) / 255.0
 }
 
 #[inline]

@@ -80,6 +80,20 @@ fn selected_sequences_roundtrip_and_corrupt_uploads_are_rejected() {
             Err(LoadError::Limit)
         ));
         let mut invalid = original;
+        let saved_count = invalid.signals.targets[0].sample_count;
+        let saved_pixel = invalid.signals.target_pixels[0].clone();
+        invalid.signals.targets[0].sample_count = 1;
+        invalid.signals.target_pixels[0].pixel_index = 1;
+        invalid.signals.target_pixels[0].pixel_count = 2;
+        assert!(
+            matches!(
+                decode_sequence(&encode_sequence(&invalid).unwrap(), LoadLimits::default()),
+                Err(LoadError::InvalidSequence)
+            ),
+            "an upload must not be able to index past the prepared sample cache"
+        );
+        invalid.signals.targets[0].sample_count = saved_count;
+        invalid.signals.target_pixels[0] = saved_pixel;
         invalid.signals.plan.output_index = usize::MAX;
         let invalid_bytes = encode_sequence(&invalid).unwrap();
         assert!(matches!(

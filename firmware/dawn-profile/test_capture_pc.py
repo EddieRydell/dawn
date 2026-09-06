@@ -13,6 +13,7 @@ import capture_pc
 class Port:
     def __init__(self, lines):
         self.lines = iter(lines)
+        self.finished = False
 
     def __enter__(self):
         return self
@@ -23,11 +24,16 @@ class Port:
     def open(self):
         pass
 
+    def set_buffer_size(self, rx_size):
+        assert rx_size >= 4096 * len(b"PC 40000000\n")
+
     def reset_input_buffer(self):
         pass
 
     def read_until(self, delimiter):
-        return next(self.lines)
+        line = next(self.lines)
+        self.finished = line == b"DAWN PC END\n"
+        return line
 
 
 def records():
@@ -44,8 +50,12 @@ def records():
 class CollectorTests(unittest.TestCase):
     def collect(self, lines):
         output = io.StringIO()
-        with patch.object(capture_pc.serial, "Serial", return_value=Port(lines)), patch.object(capture_pc, "symbols", return_value=[(0x40000000, 256, "sample_effect")]), patch.object(capture_pc.time, "sleep"), contextlib.redirect_stdout(output):
-            with patch.object(capture_pc.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "0x40000010\nsample_effect\neffect.rs:12\n")):
+        port = Port(lines)
+        def resolve(*args, **kwargs):
+            self.assertTrue(port.finished, "symbolization must not stall serial reception")
+            return subprocess.CompletedProcess([], 0, "0x40000010\nsample_effect\neffect.rs:12\n")
+        with patch.object(capture_pc.serial, "Serial", return_value=port), patch.object(capture_pc, "symbols", return_value=[(0x40000000, 256, "sample_effect")]), patch.object(capture_pc.time, "sleep"), contextlib.redirect_stdout(output):
+            with patch.object(capture_pc.subprocess, "run", side_effect=resolve):
                 capture_pc.capture(pathlib.Path(__file__))
         return output.getvalue()
 

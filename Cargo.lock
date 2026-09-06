@@ -1139,7 +1139,6 @@ dependencies = [
  "fugit",
  "libm",
  "micromath",
- "offset-allocator",
  "rkyv",
 ]
 
@@ -3069,12 +3068,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nonmax"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
-
-[[package]]
 name = "num-conv"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3380,13 +3373,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "offset-allocator"
-version = "0.2.0"
-dependencies = [
- "nonmax",
 ]
 
 [[package]]

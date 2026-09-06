@@ -7,13 +7,7 @@ publish = false
 [features]
 pc-profile = []
 loader = ["dep:esp-radio", "dep:esp-rtos", "dep:esp-radio-rtos-driver", "dep:embassy-executor", "dep:embassy-net", "dep:embassy-sync", "dep:embassy-time", "dep:embedded-io-async", "dep:heapless", "dep:picoserve", "dep:static_cell"]
-rmt-profile = ["dep:embassy-futures", "dep:smart-leds-trait", "dep:static_cell"]
-rmt-output = [
-    "loader",
-    "dep:embassy-futures",
-    "dep:smart-leds-trait",
-    "dawn-runtime/atomic",
-]
+i2s-output = ["loader", "dawn-runtime/atomic"]
 
 [[bin]]
 name = "loader"
@@ -25,11 +19,6 @@ name = "pc_profile"
 path = "src/bin/pc_profile.rs"
 required-features = ["pc-profile"]
 
-[[bin]]
-name = "rmt_parallel"
-path = "src/bin/rmt_parallel.rs"
-required-features = ["rmt-profile"]
-
 [workspace]
 resolver = "2"
 
@@ -38,7 +27,6 @@ esp-radio-rtos-driver = { version = "0.4.1", optional = true }
 esp-radio = { version = "1.0.0-beta.0", features = ["esp32", "wifi", "unstable"], optional = true }
 esp-rtos = { version = "0.4.0", features = ["esp32", "esp-radio", "embassy", "esp-alloc"], optional = true }
 embassy-executor = { version = "0.10.0", optional = true }
-embassy-futures = { version = "0.1.2", optional = true }
 embassy-net = { version = "0.9.1", features = ["tcp", "dhcpv4", "medium-ethernet"], optional = true }
 embassy-sync = { version = "0.8.0", optional = true }
 embassy-time = { version = "0.5.1", optional = true }
@@ -46,17 +34,15 @@ embedded-io-async = { version = "0.7.0", optional = true }
 heapless = { version = "0.9.3", optional = true }
 picoserve = { version = "0.20.0", default-features = false, features = ["embassy"], optional = true }
 static_cell = { version = "2.1.1", optional = true }
-smart-leds-trait = { version = "0.3.2", optional = true }
 crc32fast = { version = "1.5.1", default-features = false }
 dawn-runtime = { path = "../../crates/dawn-runtime", default-features = false }
 esp-hal = { version = "~1.2.0", features = ["esp32", "unstable"] }
-esp-hal-smartled = "0.18.0"
 esp-alloc = { version = "0.11.0", features = ["esp32", "alloc-hooks"] }
 esp-println = { version = "0.18.0", default-features = false, features = ["esp32", "uart", "critical-section"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32"] }
 
 # Published esp-radio beta.0 targets HAL 1.1; this upstream revision targets 1.2.
-# Keep the SDK on one source, including the HAL used by the published LED driver.
+# Keep the SDK on one source so every radio/runtime package uses the same HAL.
 # Remove these patches together once a compatible radio stack is published.
 [patch.crates-io]
 esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "0eb3e53b4a2e555d2136ce9dc83e18c6692b9673" }
@@ -68,6 +54,8 @@ esp-println = { git = "https://github.com/esp-rs/esp-hal", rev = "0eb3e53b4a2e55
 esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal", rev = "0eb3e53b4a2e555d2136ce9dc83e18c6692b9673" }
 
 [build-dependencies]
+crc32fast = "1.5.1"
+dawn-elaboration = { path = "../../crates/dawn-elaboration" }
 dawn-language = { path = "../../crates/dawn-language" }
 dawn-runtime = { path = "../../crates/dawn-runtime" }
 indexmap = "2.14.0"

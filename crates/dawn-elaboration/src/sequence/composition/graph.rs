@@ -260,7 +260,7 @@ pub(crate) fn finish_signal_plan(
     target: u32,
 ) -> Result<SignalPlan, RenderError> {
     let mut vm_depths = Vec::with_capacity(prepared_nodes.len());
-    let mut vm_workspace_count = 1;
+    let mut vm_workspace_count = 0;
     for node in &mut prepared_nodes {
         let (inputs, is_dsl, vm_slot) = match &mut node.kind {
             PreparedSignalKind::Layer { .. } => {

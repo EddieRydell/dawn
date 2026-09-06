@@ -27,6 +27,12 @@ parser.add_argument(
 parser.add_argument("--repeat", type=int, default=1)
 parser.add_argument("--uploads", type=int, default=1)
 parser.add_argument(
+    "--monitor-seconds",
+    type=float,
+    default=0,
+    help="Capture PLAYBACK records from USB serial after HTTP verification",
+)
+parser.add_argument(
     "--exercise-rejections",
     action="store_true",
     help="Test invalid uploads, authorization, and interrupted HTTP bodies",
@@ -42,8 +48,8 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-if args.repeat < 1 or args.uploads < 1:
-    parser.error("--repeat and --uploads must be positive")
+if args.repeat < 1 or args.uploads < 1 or args.monitor_seconds < 0:
+    parser.error("--repeat and --uploads must be positive; --monitor-seconds cannot be negative")
 if not args.ssid and not args.windows_profile:
     parser.error("provide --ssid or --windows-profile")
 
@@ -136,8 +142,9 @@ def provision():
             if not line:
                 continue
             transcript.append(line)
-            text = line.decode("ascii", errors="replace").strip()
-            if text.startswith("WIFI READY "):
+            marker = line.find(b"WIFI READY ")
+            if marker >= 0:
+                text = line[marker:].decode("ascii").strip()
                 _, _, address, http_port, *_ = text.split()
                 logging.info(text)
                 return address, int(http_port), token
@@ -242,3 +249,21 @@ for ticks, checksum in expected * args.repeat:
 
 logging.info("VERIFIED %s frames; zero evaluation allocations", len(expected) * args.repeat)
 connection.close()
+
+if args.monitor_seconds:
+    playback_records = 0
+    with serial.Serial(port=None, baudrate=115200, timeout=0.25) as monitor:
+        monitor.port = args.port
+        monitor.dtr = False
+        monitor.rts = False
+        monitor.open()
+        deadline = time.monotonic() + args.monitor_seconds
+        while time.monotonic() < deadline:
+            line = monitor.readline()
+            marker = line.find(b"PLAYBACK ")
+            if marker >= 0:
+                logging.info(line[marker:].decode("ascii").strip())
+                playback_records += 1
+    if playback_records == 0:
+        raise RuntimeError("No PLAYBACK records received during monitor window")
+    logging.info("CAPTURED %s playback windows", playback_records)

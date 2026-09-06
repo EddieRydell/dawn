@@ -241,8 +241,7 @@ impl PreparedSequenceOutput {
                 reason: "audio seconds exceed the runtime clock range".to_string(),
             })
         })?;
-        let frame = frame_at_or_before(sample_time, self.frame_rate())
-            .min(self.frame_count().saturating_sub(1));
+        let frame = frame_at_or_before(sample_time, self.frame_rate());
         self.render_at(frame, sample_time, workspace)
     }
 
@@ -251,7 +250,6 @@ impl PreparedSequenceOutput {
         frame: u32,
     ) -> Result<RenderedSequenceFrame, SequenceOutputRenderError> {
         let mut workspace = self.workspace();
-        let frame = frame.min(self.frame_count().saturating_sub(1));
         let sample_time = sample_time_for_frame(frame, self.frame_rate())
             .map_err(SequenceOutputRenderError::Render)?;
         self.render_at(frame, sample_time, &mut workspace)

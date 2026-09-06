@@ -75,6 +75,8 @@ def capture(elf, raw=None):
         port.dtr = False
         port.rts = False
         port.open()
+        # Leave room for host scheduling stalls while the board dumps its samples.
+        port.set_buffer_size(rx_size=65536)
         port.rts = True
         time.sleep(0.1)
         port.reset_input_buffer()
@@ -82,6 +84,7 @@ def capture(elf, raw=None):
         started = False
         pending = bytearray()
         cases = []
+        profiles = []
         pcs = []
         expected = 0
         deadline = time.monotonic() + 600
@@ -107,7 +110,7 @@ def capture(elf, raw=None):
                 if len(pcs) != expected:
                     raise RuntimeError("Missing PC samples")
                 if pcs:
-                    report(pcs, table, elf)
+                    profiles.append((*cases[-1], pcs))
                 pcs = []
                 if line == "DAWN PC END":
                     if len(cases) != 60 or len({name for name, _ in cases}) != 15:
@@ -116,6 +119,11 @@ def capture(elf, raw=None):
                         group = cases[index:index + 4]
                         if len({name for name, _ in group}) != 1 or [p for _, p in group] != [0, 997, 1999, 0]:
                             raise RuntimeError("Incorrect profiling controls")
+                    # Symbol resolution can take seconds. Never stop draining UART
+                    # for host-side analysis while the device is still sending.
+                    for name, period, samples in profiles:
+                        print(f"PROFILE effect={name} period_us={period}", flush=True)
+                        report(samples, table, elf)
                     return
                 fields = dict(part.split("=", 1) for part in line.split()[2:])
                 period = int(fields["period_us"])

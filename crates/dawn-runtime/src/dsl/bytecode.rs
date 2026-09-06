@@ -22,6 +22,19 @@ pub struct BytecodeProgram {
 }
 
 impl BytecodeProgram {
+    pub(crate) fn frame_cache_count(&self) -> usize {
+        self.instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instruction::SignalSample { frame_cache, .. } if *frame_cache != u32::MAX => {
+                    Some(*frame_cache as usize + 1)
+                }
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn value_operands(&self, span: PoolSpan) -> Option<&[ValueSlot]> {
         self.value_operands.get(span.range())
     }
@@ -263,6 +276,7 @@ pub enum Instruction {
         dst: ColorSlot,
         input: usize,
         seconds: FloatSlot,
+        frame_cache: u32,
     },
     Member {
         dst: ValueSlot,

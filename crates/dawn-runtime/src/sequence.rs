@@ -3,7 +3,7 @@ use core::ops::Range;
 
 use crate::control::{ControlError, PreparedControl, apply_controls, apply_fixture_behavior_rules};
 use crate::element::{ElementLayout, ElementNodeId, RenderedElementState, black};
-use crate::fixture::{FixtureBehaviors, FixtureFunctionId};
+use crate::fixture::FixtureBehaviors;
 use crate::patch::{PatchError, PatchWorkspace, PreparedPatch};
 use crate::signal::{EvaluationError, EvaluationWorkspace, PreparedSignalGraph};
 use crate::values::SampleTime;
@@ -27,7 +27,6 @@ pub struct SequenceWorkspace {
     signals: EvaluationWorkspace,
     patch: PatchWorkspace,
     elements: Vec<RenderedElementState>,
-    explicit_fixture_controls: Vec<(u32, FixtureFunctionId)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,12 +54,6 @@ impl PreparedSequence {
                 .iter()
                 .map(|(node, layout)| layout.create(*node))
                 .collect(),
-            explicit_fixture_controls: Vec::with_capacity(
-                self.controls
-                    .iter()
-                    .map(PreparedControl::explicit_fixture_count)
-                    .sum(),
-            ),
         }
     }
 
@@ -104,19 +97,10 @@ impl PreparedSequence {
                 _ => unreachable!("prepared color span targets a color-capable element"),
             }
         }
-        apply_controls(
-            &mut workspace.elements,
-            &self.controls,
-            sample_time,
-            &mut workspace.explicit_fixture_controls,
-        )
-        .map_err(SequenceError::Control)?;
-        apply_fixture_behavior_rules(
-            &mut workspace.elements,
-            &self.fixture_behaviors,
-            &workspace.explicit_fixture_controls,
-        )
-        .map_err(SequenceError::Control)?;
+        apply_controls(&mut workspace.elements, &self.controls, sample_time)
+            .map_err(SequenceError::Control)?;
+        apply_fixture_behavior_rules(&mut workspace.elements, &self.fixture_behaviors)
+            .map_err(SequenceError::Control)?;
         self.patch
             .evaluate(&workspace.elements, buffers, &mut workspace.patch)
             .map_err(SequenceError::Patch)?;

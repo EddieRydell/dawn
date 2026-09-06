@@ -50,9 +50,10 @@ pub struct PreparedEffectRasterSample {
     effect_pixels: Box<[PreparedSampledEffectPixels]>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EffectRasterWorkspace {
     effect_vm: VmWorkspace,
+    automation: Vec<Option<dawn_runtime::signal::EffectAutomationWorkspace>>,
 }
 
 pub struct EffectRasterPrepareBatch<'a> {
@@ -69,6 +70,16 @@ pub struct EffectRasterPrepareBatch<'a> {
 }
 
 impl PreparedEffectRasterRenderer {
+    pub fn workspace(&self) -> EffectRasterWorkspace {
+        EffectRasterWorkspace {
+            effect_vm: VmWorkspace::default(),
+            automation: self
+                .effects
+                .iter()
+                .map(PreparedEffect::automation_workspace)
+                .collect(),
+        }
+    }
     pub fn prepare(
         project: &DawnProject,
         setup_id: &SetupId,
@@ -209,6 +220,7 @@ impl PreparedEffectRasterRenderer {
                 &mut rendered,
                 sample_time,
                 &mut workspace.effect_vm,
+                workspace.automation[effect_index].as_mut(),
             )?;
         }
 

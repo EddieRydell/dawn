@@ -21,14 +21,15 @@ fn main() {
         .unwrap_or(&project.root.sequences[0]);
     let setup = &project.setups[&project.root.setup];
     let controller = &setup.controllers[0];
-    let port = project.controllers[controller].ports[0].id;
-    let prepared = PreparedSequenceOutput::prepare_selected(
-        &project,
-        &project.root.setup,
-        id,
-        &[(controller.clone(), port)],
-    )
-    .unwrap();
+    let ports = project.controllers[controller]
+        .ports
+        .iter()
+        .take(4)
+        .map(|port| (controller.clone(), port.id))
+        .collect::<Vec<_>>();
+    let prepared =
+        PreparedSequenceOutput::prepare_selected(&project, &project.root.setup, id, &ports)
+            .unwrap();
     let sequence = &prepared.sequence;
     let bytes = encode_sequence(sequence).unwrap();
     let decoded = decode_sequence(&bytes, LoadLimits::default()).unwrap();
@@ -63,9 +64,9 @@ fn main() {
     std::fs::write(&args[1], &bytes).unwrap();
     std::fs::write(format!("{}.checksums", args[1]), checksums).unwrap();
     println!(
-        "sequence={} port={} pixels={} effects={} payload_bytes={}",
+        "sequence={} ports={} pixels={} effects={} payload_bytes={}",
         id.0.object(),
-        port.0,
+        ports.len(),
         sequence.signals.pixel_count,
         sequence.signals.effects.len(),
         bytes.len()

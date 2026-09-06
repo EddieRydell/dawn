@@ -11,6 +11,7 @@ pub use vm::{
     BoundParams, DslBindCache, GeneratedEffect, GeneratorContext, OperatorRunContext, RunContext,
     RuntimeError, SignalSampler, VmWorkspace,
 };
+pub(crate) use vm::{PreparedCurveCrossings, prepared_curve_crossing};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum GeneratedEffectRef {

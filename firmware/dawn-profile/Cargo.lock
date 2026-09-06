@@ -326,6 +326,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-elaboration"
+version = "0.1.0"
+dependencies = [
+ "dawn-language",
+ "dawn-runtime",
+ "indexmap",
+]
+
+[[package]]
 name = "dawn-language"
 version = "0.1.0"
 dependencies = [
@@ -341,10 +350,10 @@ name = "dawn-profile"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "dawn-elaboration",
  "dawn-language",
  "dawn-runtime",
  "embassy-executor",
- "embassy-futures",
  "embassy-net",
  "embassy-sync 0.8.0",
  "embassy-time",
@@ -352,7 +361,6 @@ dependencies = [
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
- "esp-hal-smartled",
  "esp-println",
  "esp-radio",
  "esp-radio-rtos-driver",
@@ -360,7 +368,6 @@ dependencies = [
  "heapless 0.9.3",
  "indexmap",
  "picoserve",
- "smart-leds-trait",
  "static_cell",
 ]
 
@@ -372,7 +379,6 @@ dependencies = [
  "fugit 0.3.9",
  "libm",
  "micromath",
- "offset-allocator",
  "rkyv",
 ]
 
@@ -871,19 +877,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "termcolor",
-]
-
-[[package]]
-name = "esp-hal-smartled"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5315ad80e19e70920e282676e56fec5fb2115c36c9f9fbe14b154148ba761743"
-dependencies = [
- "document-features",
- "esp-hal",
- "num-traits",
- "smart-leds-trait",
- "thiserror",
 ]
 
 [[package]]
@@ -1486,12 +1479,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
-name = "nonmax"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "610a5acd306ec67f907abe5567859a3c693fb9886eb1f012ab8f2a47bef3db51"
-
-[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1518,13 +1505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "offset-allocator"
-version = "0.2.0"
-dependencies = [
- "nonmax",
 ]
 
 [[package]]
@@ -1736,12 +1716,6 @@ checksum = "663ba70707f96e871406fe10d68128412e619b06d1d47cb91c3a4c6501176240"
 dependencies = [
  "bytecheck",
 ]
-
-[[package]]
-name = "rgb"
-version = "0.8.53"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "riscv"
@@ -1968,15 +1942,6 @@ name = "smallvec"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
-
-[[package]]
-name = "smart-leds-trait"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7f4441a131924d58da6b83a7ad765c460e64630cce504376c3a87a2558c487f"
-dependencies = [
- "rgb",
-]
 
 [[package]]
 name = "smoltcp"

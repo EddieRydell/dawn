@@ -1,12 +1,11 @@
-use dawn_language::dsl::{BytecodeProgram, RunContext, RuntimeError, VmWorkspace};
-use dawn_language::native_effect::{self, NativeSample};
-use dawn_language::values::{Color, SampleTime};
+use dawn_language::dsl::{BytecodeProgram, RuntimeError, VmWorkspace};
+use dawn_language::values::Color;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::sequence::color::compose_max;
 use crate::sequence::targets::PreparedTargetPixel;
-use crate::{PreparedEffect, PreparedEffectImplementation, RenderError};
+use crate::{PreparedEffect, RenderError};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreparedSampleContext {
@@ -63,32 +62,20 @@ pub(crate) fn render_sampled_effect_target_colors(
     rendered: &mut [Color],
     sample_time: dawn_language::values::SampleTime,
     workspace: &mut VmWorkspace,
+    automation: Option<&mut dawn_runtime::signal::EffectAutomationWorkspace>,
 ) -> Result<(), RenderError> {
-    let local_time = effect.local_time(sample_time);
-    let progress = effect.progress(sample_time);
-    let automated = effect_params_at(effect, sample_time)?;
-    let native_sample = match (&effect.implementation, automated.as_ref()) {
-        (
-            PreparedEffectImplementation::Native {
-                params: Some((builtin, _)),
-                ..
-            },
-            Some(params),
-        ) => Some(native_effect::prepare_sample(*builtin, params)?),
-        _ => None,
-    };
-    render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
-        sample_effect_group(
-            programs,
-            effect,
-            automated.as_ref(),
-            native_sample.as_ref(),
-            sample_context,
-            progress,
-            local_time,
-            workspace,
-        )
-    })
+    effect
+        .with_sampler(programs, sample_time, automation, |sampler| {
+            render_sampled_effect_pixels(effect_pixels, rendered, |context| {
+                sampler.sample(
+                    context.pixel_index,
+                    context.pixel_count,
+                    context.pixel_fraction,
+                    workspace,
+                )
+            })
+        })
+        .map_err(RenderError::from)
 }
 
 #[inline(always)]
@@ -96,7 +83,7 @@ fn render_sampled_effect_pixels(
     effect_pixels: &PreparedSampledEffectPixels,
     rendered: &mut [Color],
     mut sample: impl FnMut(PreparedSampleContext) -> Result<Color, RuntimeError>,
-) -> Result<(), RenderError> {
+) -> Result<(), RuntimeError> {
     if let Some(groups) = &effect_pixels.groups {
         for group in groups {
             let color = sample(group.context)?;
@@ -122,103 +109,6 @@ fn render_sampled_effect_pixels(
         }
     }
     Ok(())
-}
-
-#[inline(always)]
-fn run_context(
-    effect: &PreparedEffect,
-    sample_context: PreparedSampleContext,
-    progress: f32,
-    local_time: dawn_language::values::SampleDuration,
-) -> RunContext {
-    RunContext {
-        progress,
-        time: local_time,
-        duration: effect.duration,
-        pixel_index: sample_context.pixel_index as i32,
-        pixel_count: sample_context.pixel_count as i32,
-        pixel_fraction: sample_context.pixel_fraction,
-    }
-}
-
-#[inline(always)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn sample_effect_group(
-    programs: &[Arc<BytecodeProgram>],
-    effect: &PreparedEffect,
-    params: Option<&dawn_language::dsl::BoundParams>,
-    native_sample: Option<&NativeSample>,
-    sample_context: PreparedSampleContext,
-    progress: f32,
-    local_time: dawn_language::values::SampleDuration,
-    workspace: &mut VmWorkspace,
-) -> Result<Color, RuntimeError> {
-    let context = run_context(effect, sample_context, progress, local_time);
-    match &effect.implementation {
-        PreparedEffectImplementation::Dsl {
-            program,
-            bound_params,
-        } => programs[*program as usize].sample_effect(
-            params.unwrap_or(bound_params),
-            &context,
-            workspace,
-        ),
-        PreparedEffectImplementation::Native { sample, .. } => {
-            let sample_time = effect
-                .start_time
-                .checked_add_duration(local_time)
-                .unwrap_or(effect.start_time);
-            native_sample
-                .unwrap_or(sample)
-                .sample(&context, sample_time)
-        }
-    }
-}
-
-fn effect_params_at(
-    effect: &PreparedEffect,
-    sample_time: SampleTime,
-) -> Result<Option<dawn_language::dsl::BoundParams>, RenderError> {
-    let Some(automation) = &effect.automation else {
-        return Ok(None);
-    };
-    let mut params = implementation_params(&effect.implementation)?.clone();
-    apply_bound_automation(&mut params, &automation.bindings, sample_time)?;
-    Ok(Some(params))
-}
-
-pub(crate) fn apply_bound_automation(
-    params: &mut dawn_language::dsl::BoundParams,
-    automation: &[crate::PreparedAutomation],
-    sample_time: SampleTime,
-) -> Result<(), RenderError> {
-    for binding in automation {
-        params.apply_automation(
-            usize::from(binding.param_index),
-            &binding.curve,
-            &binding.mapping,
-            binding.position(sample_time),
-        )?;
-    }
-    Ok(())
-}
-
-fn implementation_params(
-    implementation: &PreparedEffectImplementation,
-) -> Result<&dawn_language::dsl::BoundParams, RenderError> {
-    let params = match implementation {
-        PreparedEffectImplementation::Dsl { bound_params, .. } => bound_params,
-        PreparedEffectImplementation::Native {
-            params: Some((_, params)),
-            ..
-        } => params,
-        PreparedEffectImplementation::Native { params: None, .. } => {
-            return Err(RenderError::BadGraph {
-                message: "automation requires a parameterized sample effect".to_string(),
-            });
-        }
-    };
-    Ok(params)
 }
 
 pub(crate) fn prepare_sampled_effect_pixel_groups(

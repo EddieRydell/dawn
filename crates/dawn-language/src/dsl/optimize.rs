@@ -110,6 +110,19 @@ pub(super) fn hoist_uniform(
             break;
         }
     }
+    let mut frame_cache = 0u32;
+    for op in &mut *code {
+        if let Instruction::SignalSample {
+            seconds,
+            frame_cache: slot,
+            ..
+        } = op
+            && uniform.contains(&ValueSlot::Float(*seconds))
+        {
+            *slot = frame_cache;
+            frame_cache = frame_cache.saturating_add(1);
+        }
+    }
     let entry = prefix.len();
     let mut offsets = Vec::with_capacity(code.len() + 1);
     let mut kept = entry;
@@ -170,6 +183,7 @@ pub(super) fn cleanup(
             dst,
             input,
             seconds,
+            ..
         } = *op
         {
             if let Some(&src) = samples.get(&(input, seconds)) {

@@ -1,9 +1,9 @@
 use crate::RenderError;
+use crate::native_effect::{self, BoundNativeEffect};
 use crate::sequence::effects::generators::{
     GeneratorExpansion, GeneratorPrepareContext, expand_generator, expand_native_generator,
 };
 use crate::sequence::effects::parameters::{EffectParamTiming, prepare_params};
-use crate::sequence::effects::sampling::apply_bound_automation;
 use crate::sequence::elements::PreparedElement;
 use crate::sequence::targets::{
     PreparedTargetCache, PreparedTargetPixel, generator_expansion_targets, prepare_target,
@@ -18,8 +18,8 @@ use dawn_language::dsl::{
 use dawn_language::effect::{EffectDefinitionId, EffectImplementation, EffectInstId, EffectRef};
 use dawn_language::element::ElementNodeId;
 use dawn_language::model::DawnProject;
-use dawn_language::native_effect::{self, BoundNativeEffect};
 use dawn_language::sequence::{AutomationBinding, AutomationClip, AutomationTarget, Sequence};
+use dawn_runtime::signal::apply_bound_automation;
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 

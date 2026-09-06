@@ -1,4 +1,5 @@
 use super::preparation::prepare_sample_program;
+use crate::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
 use dawn_language::dsl::{
     BoundParams, BytecodeProgram, DslBindCache, EffectKind as RootEffectKind, GeneratedEffect,
     GeneratedEffectRef, GeneratorContext, Identifier, ParamDecl, Type, Value, VmWorkspace,
@@ -8,7 +9,6 @@ use dawn_language::effect::{
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
-use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
 use dawn_language::values::{SampleDuration, SampleTime};
 use indexmap::IndexMap;
 use std::sync::Arc;

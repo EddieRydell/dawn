@@ -4,8 +4,8 @@ The laptop elaborates only the selected controller outputs, serializes the resul
 `PreparedSequence`, and uploads that archive over HTTP. The ESP32 validates and
 decodes the same type, creates its reusable workspace once, then evaluates it at a
 requested time. Parsing, compilation, generator expansion, and elaboration remain
-on the laptop. With the optional `rmt-output` feature, the same firmware also
-evaluates continuously and drives four parallel WS2812 outputs.
+on the laptop. With the optional `i2s-output` feature, the same firmware also
+evaluates continuously and drives four parallel WS281x outputs through I2S DMA.
 
 ## Transport
 
@@ -45,27 +45,36 @@ appropriate only on a trusted LAN; this is not an Internet-facing service.
 
 `crates/dawn-runtime/src/wire.rs` owns `encode_sequence`, `decode_sequence`,
 `LoadLimits`, and `LoadError`. Runtime and codec remain `no_std + alloc`. The
-16-byte header contains `DAWN`, a `u32` version, payload length, and CRC32. The
+16-byte header contains `DAWN`, the current `u32` version 3, payload length, and CRC32. The
 payload is a 32-bit, little-endian rkyv archive validated before deserialization.
 CRC detects corruption, not authenticity.
 
+Version 3 removes redundant prepared gradient/forward-curve tables. Native effects,
+DSL values and controls share forward sampling rules; prepared curve crossings
+remain available for inverse queries. Regenerate archives when updating firmware.
+Workspace admission now uses the actual register/value sizes and reserved layouts,
+including temporal frame storage. It remains a conservative estimate, not an OOM
+proof or a sandbox for arbitrary bytecode.
+
 Firmware limits are currently 32 KiB of payload, 1,600 pixels, 128 graph nodes,
 and a 96 KiB estimated workspace. Loading allocates; successful frame evaluation
-does not. The normal loader's admission formula leaves 16 KiB for other tasks and
-reserves eight times the archive size for decoding headroom. The RMT build uses
-twice the archive size because its four one-time pulse-buffer allocations reduce
-the free heap substantially. These are admission policies, not proofs against OOM.
+does not. The loader-only build reserves eight times the archive size for decoding
+headroom. The I2S build instead derives the workspace limit from the heap remaining
+after the upload buffer and any active sequence, leaving 16 KiB untouched. This
+allows an archive to replace the active sequence without stopping output. These
+are admission policies, not proofs against OOM.
 
-The current layered starter archive is 7,856 bytes for 113 pixels, seven effects,
-and one bytecode program. It contains effects and prepared sequence data, not
-precomputed RGB frames.
+The current four-port starter fragment is 25,268 bytes for 452 pixels and ten
+selected effects. It contains effects and prepared sequence data, not precomputed
+RGB frames.
 
 The classic ESP32 has 520 KiB of on-chip SRAM, but it is split among executable
 data, static data, stacks, caches and heap; it is not a 520 KiB application heap.
-This firmware explicitly provides a 192 KiB allocator. On the tested board the
-dual-core Wi-Fi/RMT build had 73,108 heap bytes free before loading and 62,208
-after loading the starter sequence. The four RMT pulse buffers account for
-76,832 bytes and the application-core stack reserves another 4,096 static bytes.
+The I2S build explicitly provides a 160 KiB allocator. Its two 15,120-byte DMA
+buffers are static and hold one complete 200-pixel transmission each, including a
+300-us low reset. In the current combined run 117,132 heap bytes were free before
+loading; playback ranged from 79,676 to 81,376 free bytes and finished at 81,376.
+Frame evaluation allocated nothing; network tasks can allocate independently.
 
 A representative synthetic 100-effect fragment, made from the starter's Spin
 and Pulse effects over the same 113 pixels with one shared program, encoded to
@@ -73,13 +82,13 @@ and Pulse effects over the same 113 pixels with one shared program, encoded to
 and decoding peaked at 57,232 bytes in addition to the resident archive. This is
 not a universal per-effect multiplier: parameters, automations, targets and unique
 programs all affect the size. It also means that the current RAM-buffered loader
-cannot safely load that sample while four RMT outputs are allocated, even though
-the final decoded state would fit. Flash-backed upload staging or decoding without
-retaining the whole archive is the next memory fix.
+may still exceed the current firmware's replacement-time headroom. Flash-backed
+upload staging or decoding without retaining the whole archive remains the next
+memory improvement for substantially larger fragments.
 
 ## Build and verify
 
-Export the selected first controller output from the repository root:
+Export the selected first four controller outputs from the repository root:
 
 ```powershell
 cargo run -p dawn-elaboration --example export_sequence -- examples/starter firmware/dawn-profile/target/loaded-sequence.dawnseq
@@ -88,24 +97,42 @@ cargo run -p dawn-elaboration --example export_sequence -- examples/starter firm
 Then run from `firmware/dawn-profile`:
 
 ```powershell
-. C:/Users/eddie/export-esp.ps1
+. ./export-esp.ps1
 cargo +esp build --release --features loader --bin loader --locked
-espflash flash --port COM4 --baud 38400 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/loader
+espflash flash --port COM4 --baud 19200 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/loader
 uvx --from esptool python upload.py target/loaded-sequence.dawnseq --windows-profile YOUR_PROFILE --uploads 3 --exercise-rejections --log results/http-load.txt
 ```
 
-Use `--features rmt-output` instead of `loader` to run continuous 120 Hz playback
+Use `--features i2s-output` instead of `loader` to run continuous 120 Hz playback
 and four concurrent 200-pixel outputs on GPIO13, GPIO18, GPIO21 and GPIO25. This
 starts a second Embassy executor: Wi-Fi/HTTP stays on core 0, while sequence
-evaluation, color preparation and RMT interrupt servicing run on core 1. Dawn's
+evaluation, parallel encoding and I2S DMA run on core 1. Dawn's
 `atomic` feature is enabled only for this multicore build so the immutable shared
 sequence and its workspace can legally cross the core boundary; frame evaluation
 does not clone or drop those shared references.
+
+I2S runs at 2.4 MHz. Each WS281x bit is encoded as exactly three samples: `100`
+for zero or `110` for one, giving a constant 1.25-us bit cell. One byte carries the
+state of up to eight output lanes at a sample instant. The current firmware uses
+four lanes and double buffering: while DMA transmits one complete frame, the CPU
+evaluates and encodes the next into the other buffer. There are no mid-frame CPU
+refills.
 
 Alternatively use `--ssid YOUR_2_4_GHZ_SSID`; the tool prompts for its password
 without echo. On English Windows, `--windows-profile` reads the selected saved
 personal-network profile in memory. Passwords and tokens are never logged or
 written to evidence files.
+
+## Current validation and historical measurements
+
+See [the execution audit report](execution_audit_2026-09-06.md) for the current
+runtime, archive, loader image and Wi-Fi measurements. Its six 200-pixel fixtures
+exercise stacked chases and generated marks through the same uploader. The
+`/frame` handler releases its playback lock before sending the HTTP response;
+frame verification still shares the workspace with continuous playback.
+
+The measurements below are historical, recording individual earlier changes;
+their image hashes and timings do not describe the latest runtime.
 
 The accepted loader-only hardware run used loader ELF SHA256
 `47020836d08efa737712aaf707e163532268563524c2b69191f6428d66bf14f1`
@@ -123,22 +150,48 @@ The `/frame` timing includes radio interrupts, HTTP handling immediately before
 evaluation, and cold instruction-cache effects. Continuous Wi-Fi-free profiling
 showed the SDK migration within -1% to +1.5% across all 15 fixtures, including
 stacked chases and mark effects; use that result rather than HTTP request timing
-as the current indication of steady playback performance. Historical measurements
+as the indication of that migration's steady playback performance. Historical measurements
 and their limitations remain in `runtime_optimization_2026-09-05.md`.
 
 The firmware currently pins the coordinated esp-rs SDK revision documented in
 `firmware/dawn-profile/README.md`.
 
-The accepted dual-core Wi-Fi/RMT run used ELF SHA256
-`8d39dcd6d0627be488850bbed3942d808757901a1af179506f577eece9681210`.
-The board reported core 1 for playback. Over idle 120-frame windows it averaged
-about 0.57 ms for Dawn evaluation, 1.40 ms for four pulse preparations, 6.12 ms
-for the concurrent RMT transfers, and 8.10 ms total. It usually missed 0-3 of 120
-8.333 ms deadlines; the worst observed idle window missed 7. Before separating
-the work across cores, typical windows missed 27-32 deadlines and averaged
-8.50-8.58 ms total. Two hundred authenticated HTTP frame requests still returned
-the expected checksums with zero evaluation allocations. No LEDs were connected,
-so this verifies real GPIO/RMT transmission completion rather than light output or
-waveform electrical quality. See the
-[idle capture](../firmware/dawn-profile/results/2026-09-05-dual-core-playback.txt)
-and [HTTP verification](../firmware/dawn-profile/results/2026-09-05-dual-core-http-200.txt).
+That dual-core Wi-Fi/I2S image had ELF SHA256
+`32a4312b56bb6644f714ced974a2e69bd7545aa06a7468518467874ad9827e2a`.
+Three consecutive 25,025-byte replacements succeeded in 0.156-0.453 seconds.
+Two hundred authenticated HTTP frame requests returned the expected checksums,
+all rejection cases passed, and evaluation performed zero allocations.
+
+Ordinary playback windows evaluate the four-port fragment in about 1.87-1.90 ms,
+encode it in about 2.47 ms, and finish the overlapped DMA frame in about 6.35 ms,
+with zero missed 8.333-ms deadlines. At 58.98-60.54 seconds, two per-fixture Spin
+effects with six revolutions overlap; at 64.32-67.05 seconds, a 25-revolution
+per-fixture Spin is active. These regions previously reached 22-37 ms because a
+pixel-uniform TimeWarp read sampled identical per-fixture pixels separately for
+all four fixtures. The compiler now marks uniform signal times, and the runtime
+fills and reuses one upstream frame per marked read. Together with removing
+repeated Spin divisions, direct 66-second evaluation is now 6.210 ms on average
+(5.624-8.830 ms over 20 HTTP samples), down from 39.840 ms on average
+(38.126-44.827 ms). Ordinary playback is unchanged. The worst continuous window
+now averages 6.476 ms of evaluation and still misses some total deadlines once
+the 2.47-ms encoding step is included; the later high-revolution windows average
+about 3.8-4.8 ms and stay under the deadline. Frame evaluation still allocates
+nothing. These remaining misses are runtime effect cost, not I2S refill jitter.
+No LEDs or oscilloscope were connected, so this verifies real I2S DMA completion
+on the GPIO peripheral but not external waveform voltage or LED behavior. See the
+[current combined capture](../firmware/dawn-profile/results/2026-09-05-temporal-frame-cache-final.txt),
+[previous playback capture](../firmware/dawn-profile/results/2026-09-05-i2s-full-playback.txt),
+and [previous HTTP verification](../firmware/dawn-profile/results/2026-09-05-i2s-http-200.txt).
+
+The subsequent shared-runtime geometry hoist computes Chase/Spin section count,
+revolution scale, pulse duration, reciprocal duration and extension bounds once
+per active effect and fixture geometry. It does not add a firmware-specific path,
+heap storage, or evaluation allocations. The direct 66-second frame improved again
+to 5.674 ms average and 5.343 ms median over 20 HTTP samples (5.258-8.544 ms;
+5.452-ms mean with the two radio-interrupted outliers removed). The worst continuous
+windows improved from 6.476/5.526 ms to 6.014/5.142 ms evaluation, and the later
+25-revolution window improved from 4.819 ms to 4.470 ms. Ordinary evaluation is
+about 1.84-1.86 ms. The first hot region remains just over the full deadline after
+the unchanged 2.46-ms encoder: 8.538 ms average total. The measured image SHA256 is
+`d791c8042d2ed0ceae4eecbd94782e0cb29c2c3e791c6bd00601007b13b7488d`; see the
+[geometry-hoist capture](../firmware/dawn-profile/results/2026-09-05-hoisted-native-geometry.txt).

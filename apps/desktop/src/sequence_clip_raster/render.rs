@@ -62,7 +62,7 @@ pub(super) fn render_effect_raster(
         .min(display_row_count as usize)
         .min(settings.max_rows.max(1) as usize);
     let sample = renderer.prepare_sampled_raster(rows);
-    let mut render_workspace = dawn_elaboration::EffectRasterWorkspace::default();
+    let mut render_workspace = renderer.workspace();
     let mut pixels_rgba = vec![0u8; rows * columns * 4];
     for column in 0..columns {
         if !should_continue() {

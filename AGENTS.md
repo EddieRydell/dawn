@@ -17,6 +17,8 @@ When tests are requested for project analysis, document edits, diagnostics, or m
 
 ## Benchmark Guidelines
 
+Prioritize representative playback performance, especially ESP32 frame times, missed deadlines, and memory use, over isolated microbenchmark percentages. Microbenchmarks are diagnostic tools, not individual acceptance gates. Investigate reproducible regressions with meaningful absolute cost, poor scaling, or a connection to a measured bottleneck; use controlled reruns to distinguish signal from noise. Do not repeatedly chase or justify tiny isolated regressions when representative workloads improve. Briefly record the tradeoff or uncertainty and move on; do not add complexity merely to recover a microbenchmark score. Simplifying the hot path may warrant an intermediate slowdown, but verify the eventual end-to-end result.
+
 Effect DSL VM and real-project render benchmarks use Criterion only. Use `pnpm bench:effect-vm:quick` for a fast smoke pass, `pnpm bench:effect-vm:save` before optimization work, `pnpm bench:effect-vm:compare` after optimization work, and `pnpm bench:effect-vm` for the full benchmark set. Focused runs are `cargo bench -p dawn-language --bench effect_vm_bench -- scan_sweep` and `cargo bench -p dawn-runtime --bench render_bench -- render_frame_9504`.
 
 Do not reintroduce custom benchmark CLIs, JSON reporters, legacy aliases, or old render bench flags such as `--project`, `--frames`, `--iterations`, `--warmup`, or `--render-only`. Criterion output lives under `target/criterion` and must not be committed. Timing changes are advisory; checksum and active-effect-count assertion changes are behavior changes unless intentional.
@@ -31,6 +33,7 @@ Always use `apps/desktop/frontend/src/styles.css` as the styling source of truth
 All static frontend styling values—including typography, spacing, dimensions, shape, elevation, layering, motion, opacity, form geometry, icon sizes, scrollbar geometry, visualization metrics, responsive breakpoints, and accessibility geometry—must be defined in `apps/desktop/frontend/src/styles.css`. TypeScript and JSX may only use CSS-backed values or genuinely runtime/data-dependent values such as measured geometry, coordinates, and user/project colors.
 Do not reintroduce generated web bindings or desktop schema files.
 Avoid unrelated edits to lockfiles, IDE files, or generated assets. 
+Keep Dawn-specific scripts, profiling captures, and build artifacts inside this repository, not in the user's home directory. Shared installed toolchains and package caches may remain in their standard locations.
 Check both Rust and desktop manifests before assuming a command or dependency belongs at the workspace root. 
 Do not add compatibility layers, shims, fallbacks, or allow for legacy code when adding features or refactoring. 
 Do not add fallbacks when something doesn't work. This hides errors and makes debugging harder.

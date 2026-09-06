@@ -6,6 +6,8 @@ use dawn_runtime::dsl::bytecode::Instruction;
 #[allow(dead_code)]
 #[path = "../../crates/dawn-language/benches/fixtures/mod.rs"]
 mod fixtures;
+#[path = "src/mark_workload.rs"]
+mod mark_workload;
 #[path = "src/workload.rs"]
 mod workload;
 
@@ -19,6 +21,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../crates/dawn-language/benches/fixtures/mod.rs");
     println!("cargo:rerun-if-changed=../../examples/starter/effects");
     println!("cargo:rerun-if-changed=src/workload.rs");
+    println!("cargo:rerun-if-changed=src/mark_workload.rs");
     println!(
         "cargo:rerun-if-changed=../../crates/dawn-language/tests/fixtures/array-lifetimes.effect.dawn"
     );
@@ -346,20 +349,9 @@ fn main() {
     writeln!(generated, "_ => panic!(\"invalid case\") }} }}").unwrap();
     let (name, source, params) = fixtures::layer_cases().into_iter().nth(1).unwrap();
     let (effect, _) = fixtures::prepared_effect(name, source, params);
-    let chase_pulse_golden = workload::CHASE_PULSE_CASES.map(|(_, layers)| {
+    let chase_pulse_golden = workload::CHASE_PULSE_CASES.map(|(name, layers)| {
         let show = workload::chase_pulse_show(200, layers, effect.bytecode.clone());
-        let mut workspace = show.workspace();
-        let mut output = [vec![0; 600]];
-        let mut reference = [vec![0; 600]];
-        core::array::from_fn::<_, { workload::FRAMES }, _>(|frame| {
-            show.evaluate(workload::time(frame), &mut output, &mut workspace)
-                .unwrap();
-            show.evaluate(workload::time(frame), &mut reference, &mut show.workspace())
-                .unwrap();
-            assert_eq!(output, reference);
-            assert!(output[0].iter().any(|&byte| byte != 0));
-            workload::checksum(&output[0])
-        })
+        export_fixture(name, &show)
     });
     writeln!(
         generated,
@@ -367,20 +359,9 @@ fn main() {
         workload::FRAMES
     )
     .unwrap();
-    let mark_golden = workload::MARK_CASES.map(|(_, pulse, fade)| {
-        let show = workload::mark_show(200, pulse, fade, effect.bytecode.clone());
-        let mut workspace = show.workspace();
-        let mut output = [vec![0; 600]];
-        let mut reference = [vec![0; 600]];
-        core::array::from_fn::<_, { workload::FRAMES }, _>(|frame| {
-            show.evaluate(workload::time(frame), &mut output, &mut workspace)
-                .unwrap();
-            show.evaluate(workload::time(frame), &mut reference, &mut show.workspace())
-                .unwrap();
-            assert_eq!(output, reference);
-            assert!(output[0].iter().any(|&byte| byte != 0));
-            workload::checksum(&output[0])
-        })
+    let mark_golden = workload::MARK_CASES.map(|(name, pulse, fade)| {
+        let show = mark_workload::mark_show(200, pulse, fade, effect.bytecode.clone());
+        export_fixture(name, &show)
     });
     writeln!(
         generated,
@@ -389,11 +370,61 @@ fn main() {
         workload::MARK_CASES.len()
     )
     .unwrap();
+    writeln!(
+        generated,
+        "#[allow(dead_code)] pub const MARK_SEQUENCES: [&[u8]; 3] = ["
+    )
+    .unwrap();
+    for (name, _, _) in workload::MARK_CASES {
+        writeln!(
+            generated,
+            "include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{name}.dawnseq\")),"
+        )
+        .unwrap();
+    }
+    writeln!(generated, "];").unwrap();
     fs::write(
         PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("fixtures.rs"),
         generated,
     )
     .unwrap();
+}
+
+fn export_fixture(
+    name: &str,
+    show: &dawn_runtime::sequence::PreparedSequence,
+) -> [u32; workload::FRAMES] {
+    let directory = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let bytes = dawn_runtime::wire::encode_sequence(show).unwrap();
+    let decoded = dawn_runtime::wire::decode_sequence(&bytes, Default::default()).unwrap();
+    fs::write(directory.join(format!("{name}.dawnseq")), bytes).unwrap();
+    assert_eq!(&*show.output_widths, &[600]);
+    let mut workspace = decoded.workspace();
+    let mut output = [vec![0; 600]];
+    let mut reference = [vec![0; 600]];
+    let mut checksums = String::new();
+    let golden = core::array::from_fn(|frame| {
+        let time = workload::time(frame);
+        decoded.evaluate(time, &mut output, &mut workspace).unwrap();
+        show.evaluate(time, &mut reference, &mut show.workspace())
+            .unwrap();
+        assert_eq!(output, reference);
+        assert!(output[0].iter().any(|&byte| byte != 0));
+        writeln!(
+            checksums,
+            "{} {}",
+            time.ticks(),
+            crc32fast::hash(&output[0])
+        )
+        .unwrap();
+        workload::checksum(&output[0])
+    });
+    fs::write(
+        directory.join(format!("{name}.dawnseq.checksums")),
+        checksums,
+    )
+    .unwrap();
+    golden
 }
 
 // This is build-only Rust source emission for the benchmark fixtures, not a

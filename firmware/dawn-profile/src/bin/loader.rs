@@ -4,30 +4,34 @@
 
 extern crate alloc;
 
+#[cfg(feature = "i2s-output")]
+#[path = "../ws281x_parallel.rs"]
+mod ws281x_parallel;
+
 use alloc::{boxed::Box, vec, vec::Vec};
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 use core::sync::atomic::AtomicBool;
 use core::{
     fmt::Write as _,
     sync::atomic::{AtomicU32, Ordering::Relaxed},
 };
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 use dawn_runtime::values::sample_time_from_frame;
 use dawn_runtime::{
     sequence::{PreparedSequence, SequenceWorkspace},
     values::SampleTime,
     wire::{HEADER_BYTES, LoadError, LoadLimits, decode_sequence},
 };
-#[cfg(feature = "rmt-output")]
-use embassy_futures::join::join4;
 use embassy_net::StackResources;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use embedded_io_async::{Read as _, Write as _};
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 use esp_hal::{
     Async,
-    rmt::Rmt,
+    dma::DmaTxBuf,
+    gpio::NoPin,
+    i2s::parallel::{I2sParallel, TxEightBits},
     system::{Cpu, Stack},
     time::Rate,
 };
@@ -38,8 +42,6 @@ use esp_hal::{
     timer::timg::TimerGroup,
     uart::{Config, Uart},
 };
-#[cfg(feature = "rmt-output")]
-use esp_hal_smartled::{RmtSmartLeds, WS2812B_TIMING, buffer_size, color_order};
 use esp_println::println;
 use esp_radio::wifi::{self, AuthenticationMethodConfig, PowerSaveMode, sta::StationConfig};
 use picoserve::{
@@ -47,9 +49,7 @@ use picoserve::{
     response::{IntoResponse, StatusCode},
     routing::{PathRouter, RequestHandlerService, post_service, put_service},
 };
-#[cfg(feature = "rmt-output")]
-use smart_leds_trait::{RGB8, SmartLedsWriteAsync};
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 use static_cell::StaticCell;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -57,11 +57,11 @@ esp_bootloader_esp_idf::esp_app_desc!();
 static ALLOCATIONS: AtomicU32 = AtomicU32::new(0);
 static EVALUATION_TASK: AtomicU32 = AtomicU32::new(0);
 static EVALUATION_ALLOCATIONS: AtomicU32 = AtomicU32::new(0);
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 static OUTPUT_READY: AtomicBool = AtomicBool::new(false);
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 static APP_CORE_STACK: StaticCell<Stack<4096>> = StaticCell::new();
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 static APP_CORE_EXECUTOR: StaticCell<esp_rtos::embassy::Executor> = StaticCell::new();
 
 type Playback = (PreparedSequence, SequenceWorkspace, Vec<Vec<u8>>);
@@ -70,15 +70,23 @@ type UploadGate = Mutex<CriticalSectionRawMutex, ()>;
 
 const HTTP_PORT: u16 = 80;
 const HTTP_WORKERS: usize = 2;
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 const OUTPUT_PIXELS: usize = 200;
-#[cfg(feature = "rmt-output")]
-const OUTPUT_PULSES: usize = buffer_size::<RGB8>(OUTPUT_PIXELS);
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
+const OUTPUT_LANES: usize = 4;
+#[cfg(feature = "i2s-output")]
+const I2S_SAMPLE_RATE: u32 = 2_400_000;
+#[cfg(feature = "i2s-output")]
+const DATA_SAMPLES: usize = OUTPUT_PIXELS * 3 * 8 * 3;
+#[cfg(feature = "i2s-output")]
+const RESET_SAMPLES: usize = I2S_SAMPLE_RATE as usize * 300 / 1_000_000;
+#[cfg(feature = "i2s-output")]
+const DMA_BYTES: usize = DATA_SAMPLES + RESET_SAMPLES;
+#[cfg(feature = "i2s-output")]
 const OUTPUT_FRAME_RATE: u32 = 120;
 
-#[cfg(feature = "rmt-output")]
-type Leds = RmtSmartLeds<'static, OUTPUT_PULSES, Async, RGB8, color_order::Rgb>;
+#[cfg(feature = "i2s-output")]
+type ParallelOutput = I2sParallel<'static, Async>;
 
 const LIMITS: LoadLimits = LoadLimits {
     payload_bytes: 32 * 1024,
@@ -126,8 +134,8 @@ async fn uart_reply(
 
 #[inline(never)]
 fn load(bytes: &[u8]) -> Result<Playback, LoadError> {
-    let decode_headroom = if cfg!(feature = "rmt-output") {
-        bytes.len().checked_mul(2)
+    let archive_headroom = if cfg!(feature = "i2s-output") {
+        Some(0)
     } else {
         bytes.len().checked_mul(8)
     }
@@ -135,17 +143,20 @@ fn load(bytes: &[u8]) -> Result<Playback, LoadError> {
     let workspace_bytes = esp_alloc::HEAP
         .free()
         .saturating_sub(16 * 1024)
-        .checked_sub(decode_headroom)
+        .checked_sub(archive_headroom)
         .ok_or(LoadError::Limit)?;
     let limits = LoadLimits {
         workspace_bytes: LIMITS.workspace_bytes.min(workspace_bytes),
         ..LIMITS
     };
     let sequence = decode_sequence(bytes, limits)?;
-    #[cfg(feature = "rmt-output")]
-    if sequence.output_widths.len() != 1
-        || sequence.output_widths[0] as usize > OUTPUT_PIXELS * 3
-        || sequence.output_widths[0] % 3 != 0
+    #[cfg(feature = "i2s-output")]
+    if sequence.output_widths.is_empty()
+        || sequence.output_widths.len() > OUTPUT_LANES
+        || sequence
+            .output_widths
+            .iter()
+            .any(|&width| width as usize > OUTPUT_PIXELS * 3 || width % 3 != 0)
     {
         return Err(LoadError::Limit);
     }
@@ -333,6 +344,7 @@ impl RequestHandlerService<LoaderState> for EvaluateFrame {
         let ticks = u32::from_le_bytes(ticks);
         let mut active = state.playback.lock().await;
         let Some((sequence, workspace, buffers)) = active.as_mut() else {
+            drop(active);
             return (StatusCode::CONFLICT, "REJECT NoSequence\n")
                 .write_to(connection, response_writer)
                 .await;
@@ -352,6 +364,7 @@ impl RequestHandlerService<LoaderState> for EvaluateFrame {
         let allocations = ALLOCATIONS.load(Relaxed) - allocations;
 
         if result.is_err() {
+            drop(active);
             return (StatusCode::INTERNAL_SERVER_ERROR, "REJECT Evaluation\n")
                 .write_to(connection, response_writer)
                 .await;
@@ -361,15 +374,13 @@ impl RequestHandlerService<LoaderState> for EvaluateFrame {
         for buffer in buffers {
             crc.update(buffer);
         }
+        let crc = crc.finalize();
+        drop(active);
         (
             StatusCode::OK,
             format_args!(
                 "FRAME {} {} {} {} {}\n",
-                ticks,
-                crc.finalize(),
-                elapsed,
-                evaluation_allocations,
-                allocations
+                ticks, crc, elapsed, evaluation_allocations, allocations
             ),
         )
             .write_to(connection, response_writer)
@@ -447,40 +458,52 @@ fn token_ascii(token: [u8; 16]) -> [u8; 32] {
     result
 }
 
-#[cfg(feature = "rmt-output")]
+#[cfg(feature = "i2s-output")]
 #[embassy_executor::task]
 async fn render_outputs(
     playback: &'static SharedPlayback,
-    mut led0: Box<Leds>,
-    mut led1: Box<Leds>,
-    mut led2: Box<Leds>,
-    mut led3: Box<Leds>,
+    mut output: ParallelOutput,
+    mut ready_buffer: DmaTxBuf,
+    mut spare_buffer: DmaTxBuf,
 ) -> ! {
-    let mut output_colors = [RGB8::default(); OUTPUT_PIXELS];
-    let mut frame_index = 0;
-    let mut frames = 0;
-    let mut missed = 0;
-    let mut evaluation_sum = 0;
-    let mut evaluation_max = 0;
-    let mut preparation_sum = 0;
-    let mut preparation_max = 0;
-    let mut transmission_sum = 0;
-    let mut transmission_max = 0;
-    let mut total_sum = 0;
-    let mut total_max = 0;
-    loop {
-        let frame_start = Instant::now();
+    let mut frame_index = loop {
         let mut active = playback.lock().await;
         let Some((sequence, workspace, buffers)) = active.as_mut() else {
             drop(active);
             Timer::after_millis(10).await;
             continue;
         };
+        sequence
+            .evaluate(SampleTime::from_ticks(0), buffers, workspace)
+            .unwrap();
+        ws281x_parallel::encode(buffers, OUTPUT_PIXELS, ready_buffer.as_mut_slice());
+        break 1;
+    };
+
+    let mut frames = 0;
+    let mut missed = 0;
+    let mut evaluation_sum = 0;
+    let mut evaluation_max = 0;
+    let mut encoding_sum = 0;
+    let mut encoding_max = 0;
+    let mut wait_sum = 0;
+    let mut wait_max = 0;
+    let mut total_sum = 0;
+    let mut total_max = 0;
+    loop {
+        let frame_start = Instant::now();
+        let mut transfer = match output.send(ready_buffer) {
+            Ok(transfer) => transfer,
+            Err((error, _, _)) => panic!("I2S DMA start failed: {error:?}"),
+        };
+
+        let mut active = playback.lock().await;
+        let (sequence, workspace, buffers) = active.as_mut().unwrap();
         let sample_time = sample_time_from_frame(frame_index, OUTPUT_FRAME_RATE).unwrap();
         if sample_time.ticks() >= sequence.signals.duration.ticks() {
             frame_index = 0;
-            continue;
         }
+        let sample_time = sample_time_from_frame(frame_index, OUTPUT_FRAME_RATE).unwrap();
 
         let evaluation_start = Instant::now();
         EVALUATION_TASK.store(
@@ -491,35 +514,26 @@ async fn render_outputs(
         EVALUATION_TASK.store(0, Relaxed);
         let evaluation_us = u32::try_from(evaluation_start.elapsed().as_micros()).unwrap();
 
-        let preparation_start = Instant::now();
-        let output = &buffers[0];
-        output_colors.fill(RGB8::default());
-        for (color, pixel) in output_colors.iter_mut().zip(output.chunks_exact(3)) {
-            *color = RGB8::new(pixel[1], pixel[0], pixel[2]);
-        }
+        let encoding_start = Instant::now();
+        ws281x_parallel::encode(buffers, OUTPUT_PIXELS, spare_buffer.as_mut_slice());
         drop(active);
-        let transfer0 = led0.write(output_colors.iter().copied());
-        let transfer1 = led1.write(output_colors.iter().copied());
-        let transfer2 = led2.write(output_colors.iter().copied());
-        let transfer3 = led3.write(output_colors.iter().copied());
-        let preparation_us = u32::try_from(preparation_start.elapsed().as_micros()).unwrap();
+        let encoding_us = u32::try_from(encoding_start.elapsed().as_micros()).unwrap();
 
-        let transmission_start = Instant::now();
-        let (result0, result1, result2, result3) =
-            join4(transfer0, transfer1, transfer2, transfer3).await;
-        result0.unwrap();
-        result1.unwrap();
-        result2.unwrap();
-        result3.unwrap();
-        let transmission_us = u32::try_from(transmission_start.elapsed().as_micros()).unwrap();
+        let wait_start = Instant::now();
+        transfer.wait_for_done().await.unwrap();
+        let (next_output, finished_buffer) = transfer.wait();
+        output = next_output;
+        ready_buffer = spare_buffer;
+        spare_buffer = finished_buffer;
+        let wait_us = u32::try_from(wait_start.elapsed().as_micros()).unwrap();
 
         let total_us = u32::try_from(frame_start.elapsed().as_micros()).unwrap();
         evaluation_sum += evaluation_us;
         evaluation_max = evaluation_max.max(evaluation_us);
-        preparation_sum += preparation_us;
-        preparation_max = preparation_max.max(preparation_us);
-        transmission_sum += transmission_us;
-        transmission_max = transmission_max.max(transmission_us);
+        encoding_sum += encoding_us;
+        encoding_max = encoding_max.max(encoding_us);
+        wait_sum += wait_us;
+        wait_max = wait_max.max(wait_us);
         total_sum += total_us;
         total_max = total_max.max(total_us);
         frames += 1;
@@ -534,16 +548,16 @@ async fn render_outputs(
 
         if frames == OUTPUT_FRAME_RATE {
             println!(
-                "PLAYBACK core={} frames={} missed={} eval_avg_us={} eval_max_us={} prepare_avg_us={} prepare_max_us={} tx_avg_us={} tx_max_us={} total_avg_us={} total_max_us={} heap_free={}",
+                "PLAYBACK core={} frames={} missed={} eval_avg_us={} eval_max_us={} encode_avg_us={} encode_max_us={} dma_wait_avg_us={} dma_wait_max_us={} total_avg_us={} total_max_us={} heap_free={}",
                 Cpu::current() as usize,
                 frames,
                 missed,
                 evaluation_sum / frames,
                 evaluation_max,
-                preparation_sum / frames,
-                preparation_max,
-                transmission_sum / frames,
-                transmission_max,
+                encoding_sum / frames,
+                encoding_max,
+                wait_sum / frames,
+                wait_max,
                 total_sum / frames,
                 total_max,
                 esp_alloc::HEAP.free()
@@ -552,10 +566,10 @@ async fn render_outputs(
             missed = 0;
             evaluation_sum = 0;
             evaluation_max = 0;
-            preparation_sum = 0;
-            preparation_max = 0;
-            transmission_sum = 0;
-            transmission_max = 0;
+            encoding_sum = 0;
+            encoding_max = 0;
+            wait_sum = 0;
+            wait_max = 0;
             total_sum = 0;
             total_max = 0;
         }
@@ -566,7 +580,7 @@ async fn render_outputs(
 async fn main(spawner: embassy_executor::Spawner) -> ! {
     let p = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
-    esp_alloc::heap_allocator!(size: 128 * 1024);
+    esp_alloc::heap_allocator!(size: 96 * 1024);
     let timer = TimerGroup::new(p.TIMG0);
     esp_rtos::start(timer.timer0, p.FROM_CPU_INTR0);
 
@@ -665,40 +679,41 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         spawner.spawn(web_server(task_id, stack, app).unwrap());
     }
 
-    #[cfg(feature = "rmt-output")]
+    #[cfg(feature = "i2s-output")]
     esp_rtos::start_second_core(
         p.CPU_CTRL,
         p.FROM_CPU_INTR1,
         APP_CORE_STACK.init(Stack::new()),
         move || {
-            let frequency = Rate::from_mhz(80);
-            let rmt = Rmt::new(p.RMT, frequency).unwrap().into_async();
-            let led0 = Box::new(
-                Leds::new_with_memsize(WS2812B_TIMING, rmt.channel0, p.GPIO13, 2, frequency)
-                    .unwrap(),
+            let pins = TxEightBits::new(
+                p.GPIO13, p.GPIO18, p.GPIO21, p.GPIO25, NoPin, NoPin, NoPin, NoPin,
             );
-            let led1 = Box::new(
-                Leds::new_with_memsize(WS2812B_TIMING, rmt.channel2, p.GPIO18, 2, frequency)
-                    .unwrap(),
-            );
-            let led2 = Box::new(
-                Leds::new_with_memsize(WS2812B_TIMING, rmt.channel4, p.GPIO21, 2, frequency)
-                    .unwrap(),
-            );
-            let led3 = Box::new(
-                Leds::new_with_memsize(WS2812B_TIMING, rmt.channel6, p.GPIO25, 2, frequency)
-                    .unwrap(),
-            );
+            let output = I2sParallel::new(
+                p.I2S1,
+                p.DMA_I2S1,
+                Rate::from_hz(I2S_SAMPLE_RATE),
+                pins,
+                NoPin,
+            )
+            .into_async();
+            let mut ready_buffer = esp_hal::dma_tx_buffer!(DMA_BYTES).unwrap();
+            ready_buffer.as_mut_slice().fill(0);
+            ready_buffer.set_length(DMA_BYTES);
+            let mut spare_buffer = esp_hal::dma_tx_buffer!(DMA_BYTES).unwrap();
+            spare_buffer.as_mut_slice().fill(0);
+            spare_buffer.set_length(DMA_BYTES);
             OUTPUT_READY.store(true, Relaxed);
             APP_CORE_EXECUTOR
                 .init(esp_rtos::embassy::Executor::new())
                 .run(|spawner| {
-                    spawner.spawn(render_outputs(playback, led0, led1, led2, led3).unwrap());
+                    spawner.spawn(
+                        render_outputs(playback, output, ready_buffer, spare_buffer).unwrap(),
+                    );
                 });
         },
     );
 
-    #[cfg(feature = "rmt-output")]
+    #[cfg(feature = "i2s-output")]
     while !OUTPUT_READY.load(Relaxed) {
         Timer::after_millis(1).await;
     }
@@ -706,10 +721,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     uart_reply(
         &mut uart,
         format_args!(
-            "WIFI READY {} {} leds={} heap_free={}",
+            "WIFI READY {} {} i2s={} heap_free={}",
             stack.config_v4().unwrap().address.address(),
             HTTP_PORT,
-            if cfg!(feature = "rmt-output") {
+            if cfg!(feature = "i2s-output") {
                 "gpio13,18,21,25"
             } else {
                 "off"

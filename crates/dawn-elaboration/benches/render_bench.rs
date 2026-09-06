@@ -12,8 +12,11 @@ use std::time::Duration;
 #[path = "../../dawn-language/benches/fixtures/mod.rs"]
 mod effect_fixtures;
 #[allow(dead_code)]
+#[path = "../../../firmware/dawn-profile/src/mark_workload.rs"]
+mod mark_workload;
+#[allow(dead_code)]
 #[path = "../../../firmware/dawn-profile/src/workload.rs"]
-mod prepared_workload;
+mod workload;
 
 const BENCHMARK_SEQUENCE_DOCUMENT: &str = "sequences/layer_test.sequence.dawn";
 const BENCHMARK_SEQUENCE_OBJECT: &str = "layer_test";
@@ -297,21 +300,21 @@ fn bench_chase_pulse(c: &mut Criterion) {
         .map(|layers| {
             (
                 format!("prepared_chase_pulse/{layers}"),
-                prepared_workload::chase_pulse_show(200, layers, effect.bytecode.clone()),
+                workload::chase_pulse_show(200, layers, effect.bytecode.clone()),
             )
         })
         .chain([
             (
                 "prepared_device_marks/pulse".into(),
-                prepared_workload::mark_show(200, true, 0.0, effect.bytecode.clone()),
+                mark_workload::mark_show(200, true, 0.0, effect.bytecode.clone()),
             ),
             (
                 "prepared_device_marks/chase".into(),
-                prepared_workload::mark_show(200, false, 0.0, effect.bytecode.clone()),
+                mark_workload::mark_show(200, false, 0.0, effect.bytecode.clone()),
             ),
             (
                 "prepared_device_marks/pulse_edge".into(),
-                prepared_workload::mark_show(200, true, 1.0, effect.bytecode.clone()),
+                mark_workload::mark_show(200, true, 1.0, effect.bytecode.clone()),
             ),
         ]);
     for (name, show) in cases {
@@ -319,23 +322,19 @@ fn bench_chase_pulse(c: &mut Criterion) {
         let mut output = [vec![0; 600]];
         let mut expected = [vec![0; 600]];
         for frame in [0, 31, 4, 0] {
-            show.evaluate(prepared_workload::time(frame), &mut output, &mut workspace)
+            show.evaluate(workload::time(frame), &mut output, &mut workspace)
                 .unwrap();
-            show.evaluate(
-                prepared_workload::time(frame),
-                &mut expected,
-                &mut show.workspace(),
-            )
-            .unwrap();
+            show.evaluate(workload::time(frame), &mut expected, &mut show.workspace())
+                .unwrap();
             assert_eq!(output, expected);
             assert!(output[0].iter().any(|&byte| byte != 0));
         }
         let mut frame = 0;
         c.bench_function(&name, |b| {
             b.iter(|| {
-                frame = (frame + 1) % prepared_workload::FRAMES;
+                frame = (frame + 1) % workload::FRAMES;
                 show.evaluate(
-                    black_box(prepared_workload::time(frame)),
+                    black_box(workload::time(frame)),
                     &mut output,
                     &mut workspace,
                 )
@@ -351,20 +350,15 @@ fn bench_layers(c: &mut Criterion) {
     for (name, source, params) in effect_fixtures::layer_cases() {
         let (effect, bound) = effect_fixtures::prepared_effect(name, source, params);
         for layers in [1, 4, 16] {
-            let show = prepared_workload::layered_show(
-                200,
-                effect.bytecode.clone(),
-                bound.clone(),
-                layers,
-            );
+            let show = workload::layered_show(200, effect.bytecode.clone(), bound.clone(), layers);
             let mut workspace = show.workspace();
             let mut output = [vec![0; 600]];
             let mut frame = 0;
             c.bench_function(&format!("prepared_layers/{name}/{layers}"), |b| {
                 b.iter(|| {
-                    frame = (frame + 1) % prepared_workload::FRAMES;
+                    frame = (frame + 1) % workload::FRAMES;
                     show.evaluate(
-                        black_box(prepared_workload::time(frame)),
+                        black_box(workload::time(frame)),
                         &mut output,
                         &mut workspace,
                     )
@@ -384,34 +378,33 @@ fn bench_operators(c: &mut Criterion) {
         (
             "prepared_operator",
             [
-                ("full", prepared_workload::OPERATOR_SOURCE, false),
-                ("reuse", prepared_workload::OPERATOR_SOURCE, true),
+                ("full", workload::OPERATOR_SOURCE, false),
+                ("reuse", workload::OPERATOR_SOURCE, true),
             ],
         ),
         (
             "prepared_temporal",
             [
-                ("grouped", prepared_workload::GROUPED_SOURCE, true),
-                ("alternating", prepared_workload::ALTERNATING_SOURCE, true),
+                ("grouped", workload::GROUPED_SOURCE, true),
+                ("alternating", workload::ALTERNATING_SOURCE, true),
             ],
         ),
     ] {
-        for count in prepared_workload::COUNTS {
+        for count in workload::COUNTS {
             let mut expected = None;
             for (mode, source, reuse) in modes {
                 let operator = dawn_language::dsl::compile_operators(source)
                     .unwrap()
                     .remove(0);
-                let mut show =
-                    prepared_workload::show(count, effect.bytecode.clone(), bound.clone());
-                prepared_workload::apply_operator(&mut show, operator.bytecode.clone(), reuse);
+                let mut show = workload::show(count, effect.bytecode.clone(), bound.clone());
+                workload::apply_operator(&mut show, operator.bytecode.clone(), reuse);
                 let mut workspace = show.workspace();
                 let mut output = [vec![0; count * 3]];
                 let mut checksums = Vec::new();
-                for frame in 0..prepared_workload::FRAMES {
-                    show.evaluate(prepared_workload::time(frame), &mut output, &mut workspace)
+                for frame in 0..workload::FRAMES {
+                    show.evaluate(workload::time(frame), &mut output, &mut workspace)
                         .unwrap();
-                    checksums.push(prepared_workload::checksum(&output[0]));
+                    checksums.push(workload::checksum(&output[0]));
                 }
                 if let Some(expected) = &expected {
                     assert_eq!(&checksums, expected);
@@ -421,9 +414,9 @@ fn bench_operators(c: &mut Criterion) {
                 let mut frame = 0;
                 c.bench_function(&format!("{group}/{mode}/{count}"), |b| {
                     b.iter(|| {
-                        frame = (frame + 1) % prepared_workload::FRAMES;
+                        frame = (frame + 1) % workload::FRAMES;
                         show.evaluate(
-                            black_box(prepared_workload::time(frame)),
+                            black_box(workload::time(frame)),
                             &mut output,
                             &mut workspace,
                         )
@@ -445,15 +438,15 @@ fn bench_uniform_resources(c: &mut Criterion) {
         if !reuse {
             program.pixel_entry = 0;
         }
-        let show = prepared_workload::show(200, program, params.clone());
+        let show = workload::show(200, program, params.clone());
         let mut workspace = show.workspace();
         let mut output = [vec![0; 600]];
-        let checksums = (0..prepared_workload::FRAMES)
+        let checksums = (0..workload::FRAMES)
             .map(|frame| {
-                show.evaluate(prepared_workload::time(frame), &mut output, &mut workspace)
+                show.evaluate(workload::time(frame), &mut output, &mut workspace)
                     .unwrap();
                 assert!(output[0].iter().any(|&byte| byte != 0));
-                prepared_workload::checksum(&output[0])
+                workload::checksum(&output[0])
             })
             .collect::<Vec<_>>();
         if let Some(expected) = &expected {
@@ -464,9 +457,9 @@ fn bench_uniform_resources(c: &mut Criterion) {
         let mut frame = 0;
         c.bench_function(&format!("prepared_uniform_resources/{name}"), |b| {
             b.iter(|| {
-                frame = (frame + 1) % prepared_workload::FRAMES;
+                frame = (frame + 1) % workload::FRAMES;
                 show.evaluate(
-                    black_box(prepared_workload::time(frame)),
+                    black_box(workload::time(frame)),
                     &mut output,
                     &mut workspace,
                 )
@@ -482,7 +475,7 @@ fn bench_uniform_upstream(c: &mut Criterion) {
     let (name, source, params) = effect_fixtures::layer_cases().into_iter().next().unwrap();
     let (effect, bound) = effect_fixtures::prepared_effect(name, source, params);
     assert!(!effect.bytecode.uses_pixel_context);
-    let operator = dawn_language::dsl::compile_operators(prepared_workload::IDENTITY_SOURCE)
+    let operator = dawn_language::dsl::compile_operators(workload::IDENTITY_SOURCE)
         .unwrap()
         .remove(0);
     for count in [200, 1600] {
@@ -492,15 +485,15 @@ fn bench_uniform_upstream(c: &mut Criterion) {
             // Conservative dependency metadata forces recomputation of the same
             // bytecode, giving an exact-output control for uniform-result reuse.
             program.uses_pixel_context = !reuse;
-            let mut show = prepared_workload::show(count, program, bound.clone());
-            prepared_workload::apply_operator(&mut show, operator.bytecode.clone(), true);
+            let mut show = workload::show(count, program, bound.clone());
+            workload::apply_operator(&mut show, operator.bytecode.clone(), true);
             let mut workspace = show.workspace();
             let mut output = [vec![0; count * 3]];
             let mut checksums = Vec::new();
-            for frame in 0..prepared_workload::FRAMES {
-                show.evaluate(prepared_workload::time(frame), &mut output, &mut workspace)
+            for frame in 0..workload::FRAMES {
+                show.evaluate(workload::time(frame), &mut output, &mut workspace)
                     .unwrap();
-                checksums.push(prepared_workload::checksum(&output[0]));
+                checksums.push(workload::checksum(&output[0]));
             }
             if let Some(expected) = &expected {
                 assert_eq!(&checksums, expected);
@@ -511,9 +504,9 @@ fn bench_uniform_upstream(c: &mut Criterion) {
             let mut frame = 0;
             c.bench_function(&format!("prepared_uniform_upstream/{mode}/{count}"), |b| {
                 b.iter(|| {
-                    frame = (frame + 1) % prepared_workload::FRAMES;
+                    frame = (frame + 1) % workload::FRAMES;
                     show.evaluate(
-                        black_box(prepared_workload::time(frame)),
+                        black_box(workload::time(frame)),
                         &mut output,
                         &mut workspace,
                     )
@@ -529,19 +522,18 @@ fn bench_gamma(c: &mut Criterion) {
     pin_benchmark_thread();
     let (name, source, params) = effect_fixtures::layer_cases().into_iter().nth(1).unwrap();
     let (effect, bound) = effect_fixtures::prepared_effect(name, source, params);
-    for count in prepared_workload::COUNTS {
+    for count in workload::COUNTS {
         let mut expected = None;
         for fused in [false, true] {
-            let mut show =
-                prepared_workload::layered_show(count, effect.bytecode.clone(), bound.clone(), 1);
-            prepared_workload::apply_gamma(&mut show, fused.then(prepared_workload::gamma_lookup));
+            let mut show = workload::layered_show(count, effect.bytecode.clone(), bound.clone(), 1);
+            workload::apply_gamma(&mut show, fused.then(workload::gamma_lookup));
             let mut workspace = show.workspace();
             let mut output = [vec![0; count * 3]];
             let mut checksums = Vec::new();
-            for frame in 0..prepared_workload::FRAMES {
-                show.evaluate(prepared_workload::time(frame), &mut output, &mut workspace)
+            for frame in 0..workload::FRAMES {
+                show.evaluate(workload::time(frame), &mut output, &mut workspace)
                     .unwrap();
-                checksums.push(prepared_workload::checksum(&output[0]));
+                checksums.push(workload::checksum(&output[0]));
             }
             if let Some(expected) = &expected {
                 assert_eq!(&checksums, expected);
@@ -552,9 +544,9 @@ fn bench_gamma(c: &mut Criterion) {
             let mut frame = 0;
             c.bench_function(&format!("prepared_gamma/{stage}/{count}"), |b| {
                 b.iter(|| {
-                    frame = (frame + 1) % prepared_workload::FRAMES;
+                    frame = (frame + 1) % workload::FRAMES;
                     show.evaluate(
-                        black_box(prepared_workload::time(frame)),
+                        black_box(workload::time(frame)),
                         &mut output,
                         &mut workspace,
                     )

@@ -240,7 +240,7 @@ static BUILTIN_EFFECT_DEFINITIONS: LazyLock<[EffectDefinition; 5]> = LazyLock::n
         ),
         make(BuiltinEffect::Spin, "spin", "Spin", EffectKind::Sample, {
             let mut params = chase_params();
-            params.insert(5, optional("revolutions", Type::Int, Value::Int(2)));
+            params.push(optional("revolutions", Type::Int, Value::Int(2)));
             params
         }),
         make(

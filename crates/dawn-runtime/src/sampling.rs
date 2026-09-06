@@ -1,20 +1,28 @@
-use crate::values::{Color, Curve, Gradient};
+use crate::values::{Color, Curve, CurvePoint, Gradient, GradientStop};
 
 #[inline(always)]
 pub fn sample_curve(curve: &Curve, position: f32) -> f32 {
-    let Some(first) = curve.points.first() else {
+    sample_curve_points(&curve.points, position)
+}
+
+#[inline(always)]
+pub fn sample_curve_points(points: &[CurvePoint], position: f32) -> f32 {
+    let Some(first) = points.first() else {
         return 0.0;
     };
-    let mut previous = first;
-    for point in curve.points.iter().skip(1) {
-        if point.position > position {
-            let span = (point.position - previous.position).max(1e-9);
-            let t = ((position - previous.position) / span).clamp(0.0, 1.0);
-            return previous.value + (point.value - previous.value) * t;
-        }
-        previous = point;
+    if position < first.position || position.is_nan() {
+        return first.value;
     }
-    previous.value
+    let last = &points[points.len() - 1];
+    if position >= last.position {
+        return last.value;
+    }
+    let index = 1 + points[1..points.len() - 1].partition_point(|point| point.position <= position);
+    let previous = &points[index - 1];
+    let point = &points[index];
+    let span = (point.position - previous.position).max(1e-9);
+    let t = unit_span_fraction(position - previous.position, span).clamp(0.0, 1.0);
+    previous.value + (point.value - previous.value) * t
 }
 
 #[inline]
@@ -31,7 +39,7 @@ pub fn curve_crossing(curve: &Curve, value: f32, fallback: f32) -> f32 {
             if span.abs() <= 1e-9 {
                 return previous.position;
             }
-            let t = ((value - previous.value) / span).clamp(0.0, 1.0);
+            let t = unit_span_fraction(value - previous.value, span).clamp(0.0, 1.0);
             return previous.position + (point.position - previous.position) * t;
         }
         previous = point;
@@ -41,20 +49,40 @@ pub fn curve_crossing(curve: &Curve, value: f32, fallback: f32) -> f32 {
 
 #[inline]
 pub fn sample_gradient(gradient: &Gradient, position: f32) -> Option<Color> {
-    let first = gradient.stops.first()?;
-    let mut previous = first;
-    for stop in &gradient.stops {
-        if stop.position >= position {
-            let span = (stop.position - previous.position).max(1e-9);
-            return Some(mix_colors(
-                previous.color,
-                stop.color,
-                ((position - previous.position) / span).clamp(0.0, 1.0),
-            ));
-        }
-        previous = stop;
+    sample_gradient_stops(&gradient.stops, position)
+}
+
+/// Equal-position stops form a step: the last stop wins at the exact position.
+#[inline]
+pub fn sample_gradient_stops(stops: &[GradientStop], position: f32) -> Option<Color> {
+    let first = stops.first()?;
+    if position < first.position || position.is_nan() {
+        return Some(first.color);
     }
-    Some(previous.color)
+    let last = &stops[stops.len() - 1];
+    if position >= last.position {
+        return Some(last.color);
+    }
+    let index = 1 + stops[1..stops.len() - 1].partition_point(|stop| stop.position <= position);
+    let previous = &stops[index - 1];
+    let stop = &stops[index];
+    let span = (stop.position - previous.position).max(1e-9);
+    Some(mix_colors(
+        previous.color,
+        stop.color,
+        unit_span_fraction(position - previous.position, span).clamp(0.0, 1.0),
+    ))
+}
+
+#[inline(always)]
+fn unit_span_fraction(numerator: f32, span: f32) -> f32 {
+    if span == 1.0 {
+        numerator
+    } else if span == -1.0 {
+        -numerator
+    } else {
+        numerator / span
+    }
 }
 
 #[inline(always)]
@@ -77,6 +105,48 @@ pub fn scale_color(color: Color, scale: f32) -> Color {
         green: channel(color.green),
         blue: channel(color.blue),
     }
+}
+
+#[inline(always)]
+pub fn add_colors(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.saturating_add(right.red),
+        green: left.green.saturating_add(right.green),
+        blue: left.blue.saturating_add(right.blue),
+    }
+}
+
+#[inline(always)]
+pub fn multiply_colors(left: Color, right: Color) -> Color {
+    let channel = |a: u8, b: u8| ((u16::from(a) * u16::from(b) + 127) / 255) as u8;
+    Color {
+        red: channel(left.red, right.red),
+        green: channel(left.green, right.green),
+        blue: channel(left.blue, right.blue),
+    }
+}
+
+#[inline(always)]
+pub fn max_colors(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.max(right.red),
+        green: left.green.max(right.green),
+        blue: left.blue.max(right.blue),
+    }
+}
+
+#[inline(always)]
+pub fn invert_color(color: Color) -> Color {
+    Color {
+        red: 255 - color.red,
+        green: 255 - color.green,
+        blue: 255 - color.blue,
+    }
+}
+
+#[inline(always)]
+pub fn color_intensity(color: Color) -> f32 {
+    f32::from(color.red.max(color.green).max(color.blue)) / 255.0
 }
 
 #[inline]

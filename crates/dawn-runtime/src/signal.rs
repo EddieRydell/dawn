@@ -15,6 +15,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
+pub use crate::evaluation::{EffectSampler, apply_bound_automation};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EvaluationError {
     InvalidTiming { reason: String },
@@ -255,8 +257,10 @@ pub struct EvaluationWorkspace {
     pub(crate) effect_vm: VmWorkspace,
     pub(crate) effect_vm_sample: Option<(CachedVmSample, SampleDuration, Color)>,
     pub(crate) operator_vm: Vec<(VmWorkspace, Option<CachedVmSample>)>,
+    pub(crate) operator_frames: Vec<Vec<CachedSignalFrame>>,
     pub(crate) signal_cache: Box<[Option<CachedSignal>]>,
     pub(crate) signal_buffers: Box<[Color]>,
+    pub(crate) frame_scratch: Vec<Box<[Color]>>,
     pub(crate) effect_samples: Vec<CachedEffectSample>,
     pub(crate) effect_automation: Vec<EffectAutomationWorkspace>,
     pub(crate) operator_automation: Vec<(BoundParams, Option<SampleTime>)>,
@@ -276,6 +280,12 @@ pub(crate) struct CachedSignal {
     pub(crate) color: Color,
 }
 
+#[derive(Debug)]
+pub(crate) struct CachedSignalFrame {
+    pub(crate) key: Option<(usize, SampleTime)>,
+    pub(crate) colors: Box<[Color]>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct CachedEffectSample {
     pub(crate) pixel_count: u32,
@@ -283,13 +293,61 @@ pub(crate) struct CachedEffectSample {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct EffectAutomationWorkspace {
+pub struct EffectAutomationWorkspace {
     pub(crate) params: Option<BoundParams>,
-    pub(crate) native_sample: Option<NativeSample>,
     pub(crate) sample_time: Option<SampleTime>,
 }
 
 impl PreparedSignalGraph {
+    /// Maximum number of temporary frames held by nested whole-frame sampling.
+    /// DSL frame caches own their storage separately, but may sample native inputs.
+    pub(crate) fn frame_scratch_count(&self) -> usize {
+        let samples_frames = |node: &PreparedSignalNode| match &node.kind {
+            PreparedSignalKind::Operator { operator, .. } => match operator.implementation {
+                PreparedOperator::Native(BuiltinOperator::Delay | BuiltinOperator::Echo) => true,
+                PreparedOperator::Dsl(program) => {
+                    self.programs[program as usize].frame_cache_count() != 0
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !self.plan.nodes.iter().any(samples_frames) {
+            return 0;
+        }
+        let mut depths = Vec::with_capacity(self.plan.nodes.len());
+        let mut required = 0;
+        for node in &self.plan.nodes {
+            let (inputs, extra) = match &node.kind {
+                PreparedSignalKind::Layer { .. } => (&[][..], 0),
+                PreparedSignalKind::Operator {
+                    inputs, operator, ..
+                } => (
+                    &inputs[..],
+                    usize::from(matches!(
+                        operator.implementation,
+                        PreparedOperator::Native(
+                            BuiltinOperator::Echo
+                                | BuiltinOperator::Max
+                                | BuiltinOperator::Add
+                                | BuiltinOperator::Multiply
+                                | BuiltinOperator::IntensityModulate
+                        )
+                    )),
+                ),
+                PreparedSignalKind::Output { inputs } => {
+                    (&inputs[..], usize::from(inputs.len() > 1))
+                }
+            };
+            let depth = inputs.iter().map(|&index| depths[index]).max().unwrap_or(0) + extra;
+            depths.push(depth);
+            if samples_frames(node) {
+                required = required.max(depth);
+            }
+        }
+        required
+    }
+
     pub fn target(&self, index: u32) -> &[PreparedPixel] {
         let range = &self.targets[index as usize].pixels;
         &self.target_pixels[range.start as usize..range.end as usize]
@@ -314,11 +372,51 @@ impl PreparedSignalGraph {
     /// Preallocates frame buffers, VM registers, calculated-array slots,
     /// and automation storage.
     pub fn workspace(&self) -> EvaluationWorkspace {
+        let mut operator_frame_counts = vec![0usize; self.plan.vm_workspace_count];
+        for node in &self.plan.nodes {
+            let PreparedSignalKind::Operator {
+                operator:
+                    PreparedOperatorNode {
+                        implementation: PreparedOperator::Dsl(program),
+                        ..
+                    },
+                vm_slot,
+                ..
+            } = &node.kind
+            else {
+                continue;
+            };
+            let count = self.programs[*program as usize].frame_cache_count();
+            operator_frame_counts[usize::from(*vm_slot)] =
+                operator_frame_counts[usize::from(*vm_slot)].max(count);
+        }
         let mut workspace = EvaluationWorkspace {
             effect_vm: VmWorkspace::default(),
+            frame_scratch: (0..self.frame_scratch_count())
+                .map(|_| vec![crate::element::black(); self.pixel_count].into_boxed_slice())
+                .collect(),
             effect_vm_sample: None,
             operator_vm: (0..self.plan.vm_workspace_count)
                 .map(|_| (VmWorkspace::default(), None))
+                .collect(),
+            operator_frames: operator_frame_counts
+                .into_iter()
+                .map(|count| {
+                    (0..count)
+                        .map(|_| CachedSignalFrame {
+                            key: None,
+                            colors: vec![
+                                Color {
+                                    red: 0,
+                                    green: 0,
+                                    blue: 0,
+                                };
+                                self.pixel_count
+                            ]
+                            .into_boxed_slice(),
+                        })
+                        .collect()
+                })
                 .collect(),
             signal_cache: vec![
                 None;
@@ -370,22 +468,7 @@ impl PreparedSignalGraph {
             effect_automation: self
                 .effects
                 .iter()
-                .filter_map(|effect| {
-                    let automation = effect.automation.as_ref()?;
-                    let params = match &effect.implementation {
-                        PreparedEffectImplementation::Dsl { bound_params, .. }
-                        | PreparedEffectImplementation::Native {
-                            params: Some((_, bound_params)),
-                            ..
-                        } => Some(automation_params(bound_params, &automation.bindings)),
-                        PreparedEffectImplementation::Native { params: None, .. } => None,
-                    };
-                    Some(EffectAutomationWorkspace {
-                        params,
-                        native_sample: None,
-                        sample_time: None,
-                    })
-                })
+                .filter_map(PreparedEffect::automation_workspace)
                 .collect(),
             operator_automation: self
                 .plan
@@ -462,7 +545,6 @@ impl PreparedSignalGraph {
         frame_index: u32,
         workspace: &mut EvaluationWorkspace,
     ) -> Result<EvaluatedFrame, EvaluationError> {
-        let frame_index = frame_index.min(self.frame_count.saturating_sub(1));
         let sample_time =
             sample_time_from_frame(frame_index, self.frame_rate).map_err(sample_time_error)?;
         self.evaluate_elements(frame_index, sample_time, workspace)
@@ -511,7 +593,10 @@ impl PreparedSignalGraph {
     }
 }
 
-fn automation_params(params: &BoundParams, automation: &[PreparedAutomation]) -> BoundParams {
+pub(crate) fn automation_params(
+    params: &BoundParams,
+    automation: &[PreparedAutomation],
+) -> BoundParams {
     let mut params = params.clone_for_automation();
     for binding in automation {
         params.reserve_automation(

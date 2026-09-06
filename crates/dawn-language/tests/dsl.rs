@@ -4,6 +4,7 @@ use dawn_language::dsl::{
 };
 use dawn_language::effect::BuiltinEffect;
 use dawn_language::values::{SampleDuration, SampleTime};
+use dawn_runtime::dsl::bytecode::Instruction;
 use indexmap::IndexMap;
 
 #[test]
@@ -89,6 +90,58 @@ fn compiler_tracks_pixel_dependency_including_branches_and_signal_samples() {
     let effect = compile_effects("effect Branch { color sample() { if (progress() > 0.5) { return rgb(pixel_index(), 0.0, 0.0); } return #000000; } }")
         .unwrap().remove(0);
     assert!(effect.bytecode.uses_pixel_context);
+}
+
+#[test]
+fn compiler_marks_only_pixel_uniform_signal_times_for_frame_caching() {
+    let uniform = compile_operators(
+        "operator Uniform { input Signal source; color sample() { return source.at(seconds() + 0.25); } }",
+    )
+    .unwrap()
+    .remove(0);
+    assert!(uniform.bytecode.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Instruction::SignalSample { frame_cache: 0, .. }
+        )
+    }));
+
+    let pixel_dependent = compile_operators(
+        "operator PerPixel { input Signal source; color sample() { return source.at(seconds() + pixel_fraction()); } }",
+    )
+    .unwrap()
+    .remove(0);
+    assert!(
+        pixel_dependent
+            .bytecode
+            .instructions
+            .iter()
+            .any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::SignalSample {
+                        frame_cache: u32::MAX,
+                        ..
+                    }
+                )
+            })
+    );
+
+    let independent_reads = compile_operators(
+        "operator TwoReads { input Signal first; input Signal second; color sample() { return first.at(seconds()) + second.at(seconds() + 0.5); } }",
+    )
+    .unwrap()
+    .remove(0);
+    let caches = independent_reads
+        .bytecode
+        .instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::SignalSample { frame_cache, .. } => Some(*frame_cache),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(caches, vec![0, 1]);
 }
 
 #[test]
@@ -542,7 +595,12 @@ fn repeated_signal_reads_reuse_only_unchanged_values_in_one_block() {
     #[derive(Default)]
     struct Samples(Vec<(usize, u32)>);
     impl SignalSampler for Samples {
-        fn sample_signal(&mut self, input: usize, time: SampleTime) -> Result<Color, RuntimeError> {
+        fn sample_signal(
+            &mut self,
+            input: usize,
+            time: SampleTime,
+            _frame_cache: Option<usize>,
+        ) -> Result<Color, RuntimeError> {
             self.0.push((input, time.ticks()));
             Ok(Color {
                 red: (time.ticks() / 1000).min(255) as u8,
@@ -615,6 +673,7 @@ impl SignalSampler for ConstantSignal {
         &mut self,
         _input: usize,
         _sample_time: SampleTime,
+        _frame_cache: Option<usize>,
     ) -> Result<Color, RuntimeError> {
         Ok(self.0)
     }

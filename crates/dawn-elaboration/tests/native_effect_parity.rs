@@ -1,9 +1,9 @@
+use dawn_elaboration::native_effect::{self, BoundNativeEffect};
 use dawn_language::dsl::{
     GeneratorContext, Identifier, RunContext, TargetItemValue, TargetPixelValue, TargetValue,
     Value, compile_effects,
 };
 use dawn_language::effect::BuiltinEffect;
-use dawn_language::native_effect::{self, BoundNativeEffect};
 use dawn_language::values::{
     Color, Curve, CurvePoint, Gradient, GradientStop, Marks, SampleDuration, SampleTime,
 };
@@ -12,6 +12,78 @@ use std::sync::Arc;
 
 fn id(value: &str) -> Identifier {
     Identifier::new(value.to_string()).unwrap()
+}
+
+#[test]
+fn native_parameter_layout_matches_the_compact_runtime_binding() {
+    use dawn_language::effect::builtin_effect_definition;
+    use dawn_language::operator::{BuiltinOperator, builtin_operator_definition};
+    // This order is the native binding ABI. In particular Spin extends Chase;
+    // adding its parameter must never shift Chase's slots.
+    let chase = [
+        "gradient",
+        "gradient_mode",
+        "pulse_overlap",
+        "section_width_pixels",
+        "chase_position",
+        "reverse",
+        "extend_to_start",
+        "extend_to_end",
+        "pulse_shape",
+    ];
+    let mut spin = chase.to_vec();
+    spin.push("revolutions");
+    for (effect, names) in [
+        (BuiltinEffect::Pulse, &["gradient", "pulse_shape"][..]),
+        (BuiltinEffect::Chase, &chase[..]),
+        (BuiltinEffect::Spin, &spin[..]),
+        (
+            BuiltinEffect::MarkPulse,
+            &[
+                "beats",
+                "base",
+                "accent",
+                "hue",
+                "hue_mix",
+                "offset_seconds",
+                "decay_seconds",
+                "section_width_pixels",
+                "section_edge_fade_pixels",
+                "sections_per_mark",
+                "seed",
+            ][..],
+        ),
+        (
+            BuiltinEffect::MarkChase,
+            &[
+                "beats",
+                "base",
+                "gradient_mode",
+                "gradients",
+                "hue",
+                "hue_mix",
+                "offset_seconds",
+                "chase_seconds",
+                "pulse_overlap",
+                "section_width_pixels",
+                "chase_positions",
+                "pulse_shape",
+            ][..],
+        ),
+    ] {
+        let actual: Vec<_> = builtin_effect_definition(effect)
+            .params
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect();
+        assert_eq!(actual, names, "{effect:?} binding layout changed");
+    }
+    for operator in BuiltinOperator::ALL {
+        assert_eq!(
+            builtin_operator_definition(operator).inputs.len(),
+            operator.input_count()
+        );
+    }
 }
 fn curve() -> Arc<Curve> {
     Arc::new(Curve {
@@ -73,8 +145,10 @@ fn target() -> Arc<TargetValue> {
 
 #[test]
 fn chase_and_spin_integer_sections_match_reference_sampling() {
-    let effects =
-        compile_effects(include_str!("fixtures/native_effect_reference.effect.dawn")).unwrap();
+    let effects = compile_effects(include_str!(
+        "../../dawn-language/tests/fixtures/native_effect_reference.effect.dawn"
+    ))
+    .unwrap();
     for (name, builtin) in [
         ("Chase", BuiltinEffect::Chase),
         ("Spin", BuiltinEffect::Spin),
@@ -137,8 +211,10 @@ fn chase_and_spin_integer_sections_match_reference_sampling() {
 
 #[test]
 fn mark_chase_matches_reference_schedule_and_samples() {
-    let effects =
-        compile_effects(include_str!("fixtures/native_effect_reference.effect.dawn")).unwrap();
+    let effects = compile_effects(include_str!(
+        "../../dawn-language/tests/fixtures/native_effect_reference.effect.dawn"
+    ))
+    .unwrap();
     let generator = effects
         .iter()
         .find(|effect| effect.name().as_str() == "MarkChase")
@@ -262,8 +338,10 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
             (id("sections_per_mark"), Value::Int(3)),
             (id("seed"), Value::Float(29.0)),
         ]);
-        let effects =
-            compile_effects(include_str!("fixtures/native_effect_reference.effect.dawn")).unwrap();
+        let effects = compile_effects(include_str!(
+            "../../dawn-language/tests/fixtures/native_effect_reference.effect.dawn"
+        ))
+        .unwrap();
         let generator = effects
             .iter()
             .find(|effect| effect.name().as_str() == "MarkPulse")

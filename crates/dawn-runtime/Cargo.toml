@@ -16,4 +16,3 @@ crc32fast.workspace = true
 fugit.workspace = true
 libm.workspace = true
 micromath.workspace = true
-offset-allocator.workspace = true

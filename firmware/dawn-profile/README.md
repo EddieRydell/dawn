@@ -10,10 +10,9 @@ profiling binaries do not start Wi-Fi or the second application CPU. The
 separate `loader` binary uses USB only for initial Wi-Fi provisioning and serves
 sequence uploads through `picoserve` HTTP; see
 [sequence loading](../../docs/esp32_loading.md) for its build, upload, and
-verification commands. Its opt-in `rmt-output` feature also starts the second CPU
-and drives four GPIOs continuously from the loaded sequence. The standalone
-`rmt_parallel` hardware diagnostic drives the same GPIOs without Wi-Fi, as
-described below.
+verification commands. Its opt-in `i2s-output` feature also starts the second CPU
+and drives four GPIOs continuously from the loaded sequence using parallel I2S
+DMA.
 
 ## Build and capture (Windows)
 
@@ -24,9 +23,6 @@ esp-radio-rtos-driver 0.4.1, esp-alloc 0.11.0, esp-println 0.18.0 and
 esp-bootloader-esp-idf 0.6.0 from upstream SDK revision
 `0eb3e53b4a2e555d2136ce9dc83e18c6692b9673`. Its esp-radio package still calls itself
 `1.0.0-beta.0`, but is newer than the published beta.0 that requires HAL 1.1.
-The published `esp-hal-smartled` 0.18.0 dependency is compiled against the same
-HAL.
-
 The manifest patches the SDK packages together to avoid mixing Git and registry
 copies of the HAL, allocator or scheduler. Cargo.lock also pins upstream's radio
 binary wrappers (`esp-wifi-sys` revision `2ea8e3e`) and peripheral register crates
@@ -38,7 +34,7 @@ published beta.0 is the same source just because its version string matches.
 From this directory:
 
 ```powershell
-. C:/Users/eddie/export-esp.ps1
+. ./export-esp.ps1
 cargo +esp build --release --bin dawn-profile --locked
 espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/dawn-profile
 uvx --from esptool python capture.py target/xtensa-esp32-none-elf/release/dawn-profile --raw-output results/profile.txt
@@ -50,21 +46,22 @@ Use a new output filename for each run; existing files are never overwritten.
 Preserve the exact ELF before another build, since the capture records its hash.
 It closes the port on completion/error and rejects duplicate measurements,
 checksum mismatches, unexpected profiling records and incomplete runs. A serial
-transfer checksum failure occurred at the default upload speed. Later 115200-baud
-flashes also failed intermittently; 57600 is the currently tested upload setting,
-but has still occasionally required identical-image retries. Capture UART remains
-115200 baud. Both Windows/.NET and pyserial captures have encountered corrupt bytes;
-changing collectors is not a proven fix. The checked-in collector uses pyserial
-(provided by the esptool tool environment) and rejects corrupted captures.
+transfer checksum failure occurred at the default upload speed. Later 115200,
+57600, and 38400-baud flashes also failed intermittently; the accepted I2S image
+was flashed at 19200 baud after an identical 38400-baud image timed out. Capture
+UART remains 115200 baud. Both Windows/.NET and pyserial captures have encountered
+corrupt bytes; changing collectors is not a proven fix. The checked-in collector
+uses pyserial (provided by the esptool tool environment) and rejects corrupted
+captures.
 
 ## Interrupted-PC profiling
 
 The optional `pc-profile` feature enables the `pc_profile` binary. HAL's unstable
-APIs are enabled for this firmware workspace, including the LED adapter; they do
-not affect the shared runtime's dependencies.
+APIs are enabled for this firmware workspace, including parallel I2S; they do not
+affect the shared runtime's dependencies.
 
 ```powershell
-. C:/Users/eddie/export-esp.ps1
+. ./export-esp.ps1
 cargo +esp build --release --features pc-profile --bin pc_profile --locked
 espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/pc_profile
 uvx --from esptool python capture_pc.py target/xtensa-esp32-none-elf/release/pc_profile --raw-output results/pc-profile.txt
@@ -84,6 +81,15 @@ provides the broader first-frame and every-frame checksum coverage.
 The mark fixtures include both disabled and nonzero MarkPulse edge fading, so
 section-index arithmetic is actually exercised in `MarkPulseEdge200`.
 
+Mark fixtures are expanded by `dawn-elaboration` in the build script, archived with
+the normal sequence codec, then decoded on-device before measurement. Native
+generator expansion is no longer part of `dawn-runtime`. The collector drains all
+UART records before running source symbolization, so host analysis cannot stall
+serial reception. Corrupt or incomplete records still fail the entire capture.
+The generated `Mark*.dawnseq` and `ChasePulse*.dawnseq` files in the build output directory also have
+`.checksums` sidecars for `upload.py`, allowing the same fixtures to be verified
+through the Wi-Fi loader without flashing a dedicated profiling image.
+
 Periodic samples can alias with the workload; the two periods help expose this but
 do not eliminate sampling bias. Windows finish the current 32-frame show cycle
 after at least two seconds, preserving an equal mixture of show times. The collector
@@ -100,7 +106,7 @@ paired disabled windows before interpreting sampling overhead or cross-image gai
 
 Both collectors reject corrupt/incomplete captures. A partial raw file left after
 an error is evidence of a failed attempt, not a valid result; never repair it by
-silently dropping bytes. See `../../docs/runtime_optimization_2026-09-05.md` for
+silently dropping bytes. See `../../docs/execution_audit_2026-09-06.md` for
 accepted captures, exact image hashes and current measurement limitations.
 
 The root desktop toolchain remains Rust 1.96.0. Do not run desktop builds with
@@ -109,35 +115,40 @@ The root desktop toolchain remains Rust 1.96.0. Do not run desktop builds with
 ```powershell
 cargo +1.96.0 fmt --check
 cargo +esp clippy --release --features pc-profile --bins --locked -- -D warnings
+cargo +esp clippy --release --features i2s-output --bin loader --locked -- -D warnings
 ```
 
-## Parallel WS2812 RMT diagnostic
+## Parallel WS281x I2S output
 
-`rmt_parallel` sends 200 RGB pixels concurrently on GPIO13, GPIO18, GPIO21 and
-GPIO25 using async RMT channels 0, 2, 4 and 6. Each output owns two of the
-classic ESP32's eight 64-word RMT memory blocks. No LEDs were connected for the
-measured run; this proves that the HAL completed real pin transmissions, but is
-not an oscilloscope-level waveform validation. The pins are driven directly at
-3.3 V.
+The loader's `i2s-output` feature sends up to 200 RGB pixels concurrently on
+GPIO13, GPIO18, GPIO21 and GPIO25. I2S1 runs in 8-bit parallel mode at 2.4 MHz, so
+each output bit is a constant three-sample `100` or `110` cell lasting 1.25 us.
+Each 15,120-byte DMA buffer holds the entire 200-pixel frame and a 300-us reset;
+there are no mid-frame refills. Two buffers let DMA transmit one frame while core
+1 evaluates and encodes the next. Wi-Fi and HTTP remain on core 0.
 
 ```powershell
-. C:/Users/eddie/export-esp.ps1
-cargo +esp build --release --features rmt-profile --bin rmt_parallel --locked
-espflash flash --port COM4 --baud 57600 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/rmt_parallel
-espflash monitor --port COM4 --non-interactive target/xtensa-esp32-none-elf/release/rmt_parallel
+. ./export-esp.ps1
+cargo +esp build --release --features i2s-output --bin loader --locked
+espflash flash --port COM4 --baud 19200 --chip esp32 --non-interactive --flash-size 4mb --flash-mode dio --flash-freq 40mhz target/xtensa-esp32-none-elf/release/loader
+uvx --from esptool python upload.py target/loaded-sequence.dawnseq --windows-profile YOUR_PROFILE --uploads 3 --repeat 1 --monitor-seconds 75 --log results/i2s-playback.txt
 ```
 
-After warmup, one 200-pixel output took 187-188 microseconds to prepare and
-6479-6480 microseconds total. Four outputs took 750-751 microseconds to prepare
-and 7078-7079 microseconds total, or about 141 complete four-output frames per
-second. The four encodes currently run sequentially on the CPU; the four RMT
-transfers then run concurrently. Each output's expanded pulse buffer is 19,208
-bytes, so four outputs reserve 76,832 bytes. Wi-Fi was disabled during this
-diagnostic. The integrated `rmt-output` loader isolates playback and RMT on core 1
-while Wi-Fi/HTTP runs on core 0. With the 113-pixel starter sequence padded to 200
-pixels on all four outputs, it averages about 8.10 ms/frame and usually misses
-0-3 of 120 deadlines at 120 Hz. See `docs/esp32_loading.md` for the exact memory
-and hardware measurements.
+For current measurements and the exact tested image, see the
+[execution audit report](../../docs/execution_audit_2026-09-06.md).
+The following numbers describe the earlier temporal/geometry-hoist images.
+With the four-port starter fragment, ordinary windows took about 1.87-1.90 ms to
+evaluate and 2.47 ms to encode. Both fit inside the 6.3-ms wire transmission and
+the complete overlapped frame averages about 6.35 ms, sustaining 120 Hz with no
+ordinary misses. Compiler-proven pixel-uniform temporal reads now evaluate their
+upstream signal once as a frame, reducing the direct 66-second Spin hotspot from
+38-45 ms to 5.3-8.5 ms. Shared-runtime native geometry hoisting computes section,
+revolution and pulse timing once per effect/fixture geometry rather than per pixel.
+The worst continuous Spin window still briefly averages 6.01 ms of evaluation and
+misses some 8.333-ms total deadlines after encoding. See
+`docs/esp32_loading.md` for the exact memory and hardware measurements. No LEDs
+were connected, so the board run proves DMA completion rather than external
+waveform or LED behavior.
 
 ## Workloads and measurement boundaries
 
