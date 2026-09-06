@@ -27,6 +27,13 @@ pub struct Sequence {
     pub control_clips: Vec<ControlClip>,
 }
 
+impl Sequence {
+    pub fn frame_count(&self) -> u128 {
+        (self.duration.as_nanos() * u128::from(self.frame_rate))
+            .div_ceil(u128::from(crate::values::NANOS_PER_SECOND))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SequenceLayerId(pub u32);
 
@@ -104,6 +111,33 @@ pub struct AutomationClip {
 }
 
 impl AutomationClip {
+    /// The authored envelope over a target's time range, with target-relative positions.
+    /// Preserve coincident points: they encode steps, and the last point wins at a boundary.
+    pub fn curve_in_range(&self, start: &DawnTime, duration: &DawnDuration) -> Curve {
+        let clip_duration = self.duration.as_seconds_f32().max(f32::EPSILON);
+        let range_duration = duration.as_seconds_f32().max(f32::EPSILON);
+        let start_position = (start.as_seconds_f32() - self.start.as_seconds_f32()) / clip_duration;
+        let end_position = start_position + range_duration / clip_duration;
+        let mut points = vec![crate::values::CurvePoint {
+            position: 0.0,
+            value: dawn_runtime::sampling::sample_curve(&self.curve, start_position),
+        }];
+        points.extend(self.curve.points.iter().filter_map(|point| {
+            let position = (point.position - start_position) * clip_duration / range_duration;
+            (position > 0.0 && position <= 1.0).then_some(crate::values::CurvePoint {
+                position,
+                value: point.value,
+            })
+        }));
+        if points.last().is_none_or(|point| point.position < 1.0) {
+            points.push(crate::values::CurvePoint {
+                position: 1.0,
+                value: dawn_runtime::sampling::sample_curve(&self.curve, end_position),
+            });
+        }
+        Curve { points }
+    }
+
     pub fn detach_bindings(
         &mut self,
         reason: AutomationDetachmentReason,
@@ -151,7 +185,6 @@ pub struct DetachedAutomationBinding {
 pub enum AutomationDetachmentReason {
     TargetDeleted,
     DefinitionChanged,
-    OperatorSchemaChanged,
 }
 
 impl AutomationBinding {

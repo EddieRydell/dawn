@@ -88,12 +88,6 @@ pub(crate) fn delete_path(path: String, state: State<'_, DesktopState>) -> AppSn
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn reload_project(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.reload_project()
-}
-
-#[tauri::command]
-#[specta::specta]
 pub(crate) fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_snapshot(|snapshot| {
         snapshot.workspace_layout.sidebar_collapsed = !snapshot.workspace_layout.sidebar_collapsed;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
 import { runSnapshotCommand, subscribeToSnapshots, useAppStore, useStaticAppSnapshot, type AppStaticSnapshot } from "../store";
@@ -6,7 +6,6 @@ import type { WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewSequenceDialog } from "./NewSequenceDialog";
-import { OperatorRewriteDialog } from "./OperatorRewriteDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
@@ -14,10 +13,13 @@ import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle";
 import { THEME_METRICS } from "../theme";
 import { CommandOverlays } from "../workspace/CommandOverlays";
 import { WorkspaceSidebar } from "../workspace/WorkspaceSidebar";
+import { openProjectDialog, runWorkspaceTransition, useTransitionStore } from "../workspaceTransitions";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog";
+import { listen } from "@tauri-apps/api/event";
+import { scheduleViewStateSave } from "../viewStatePersistence";
 
 const PROJECT_TREE_MIN_WIDTH_PX = THEME_METRICS.projectPanelMinWidth;
 const PROJECT_TREE_MAX_WIDTH_PX = THEME_METRICS.projectPanelMaxWidth;
-const WORKSPACE_LAYOUT_SAVE_DELAY_MS = THEME_METRICS.workspaceLayoutSaveDelay;
 
 export function App() {
   const snapshot = useStaticAppSnapshot();
@@ -37,6 +39,16 @@ export function App() {
       disposeEvents?.();
     };
   }, [hydrate]);
+
+  useEffect(() => {
+    const close = listen("close_requested", () => { void runWorkspaceTransition({ type: "closeApplication" }); });
+    const onFocus = () => { void runSnapshotCommand(commands.reconcileExternalFiles); };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      void close.then((unlisten) => { unlisten(); });
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   if (!snapshot) {
     return <div className="app-loading">Dawn</div>;
@@ -59,11 +71,11 @@ export function App() {
       <NewProjectDialog />
       <NewSequenceDialog />
       <SettingsDialog />
-      <OperatorRewriteDialog />
+      <UnsavedChangesDialog />
       <CommandOverlays />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
-          <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project...</button>
+          <button onClick={() => void openProjectDialog()}>Open Project...</button>
         </div>
       )}
     </div>
@@ -71,37 +83,26 @@ export function App() {
 }
 
 function WorkspaceMain({ snapshot }: { snapshot: AppStaticSnapshot }) {
+  const transitionInProgress = useTransitionStore((store) => store.inProgress);
   const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayoutState>(() => snapshot.workspaceLayout);
   const [serverLayout, setServerLayout] = useState<WorkspaceLayoutState>(() => snapshot.workspaceLayout);
-  const layoutSaveTimer = useRef<number | undefined>(undefined);
 
   if (!sameWorkspaceLayout(serverLayout, snapshot.workspaceLayout)) {
     setServerLayout(snapshot.workspaceLayout);
     setWorkspaceLayout(snapshot.workspaceLayout);
   }
 
-  useEffect(() => {
-    return () => {
-      window.clearTimeout(layoutSaveTimer.current);
-    };
-  }, []);
-
   const updateWorkspaceLayout = useCallback((next: WorkspaceLayoutState, immediate = false) => {
     setWorkspaceLayout(next);
-    window.clearTimeout(layoutSaveTimer.current);
-    if (immediate) {
-      void runSnapshotCommand(() => commands.saveWorkspaceLayoutState(next));
-      return;
-    }
-    layoutSaveTimer.current = window.setTimeout(() => {
-      void runSnapshotCommand(() => commands.saveWorkspaceLayoutState(next));
-    }, WORKSPACE_LAYOUT_SAVE_DELAY_MS);
+    scheduleViewStateSave("layout", async () => {
+      useAppStore.getState().setSnapshot(await commands.saveWorkspaceLayoutState(next));
+    }, (error) => { useAppStore.getState().setError(String(error)); }, immediate);
   }, []);
 
   const layout = workspaceLayout;
 
   return (
-    <main className="workbench">
+    <main className="workbench" inert={transitionInProgress}>
       <div
         className={`project-panel-shell ${layout.sidebarCollapsed ? "collapsed" : ""}`}
         style={{ width: layout.sidebarCollapsed ? undefined : layout.sidebarWidthPx }}

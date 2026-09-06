@@ -36,11 +36,7 @@ mod analysis;
 mod package_update;
 mod path_refactor;
 mod source;
-pub use analysis::{
-    ProjectRecovery, RecoveryDocument, RecoveryDocumentKind, RecoveryMarkCollection,
-    RecoveryObject, RecoverySequence, RecoverySequenceItem, RecoverySequenceItemKind,
-    RecoverySequenceLayer, RecoverySequencePlacement, RecoveryTimelineLane,
-};
+pub use analysis::{ProjectRecovery, RecoveryDocument, RecoveryDocumentKind, RecoveryObject};
 pub use package_update::{
     PackageCompatibilityIssue, PackageCompatibilityIssueKind, PackageCompatibilityReport,
     analyze_package_candidate,
@@ -126,42 +122,37 @@ impl From<LoadProjectError> for PackageLoadError {
 }
 
 pub fn load_package(root: &Utf8Path) -> Result<LoadedPackageProject, PackageLoadError> {
-    let report = check_package(root);
-    let session = report
-        .session
-        .ok_or(PackageLoadError::Analysis(report.diagnostics))?;
-    let manifest = report.recovery.manifest.ok_or_else(|| {
-        PackageLoadError::Analysis(vec![IoDiagnostic {
-            path: Utf8PathBuf::from(dawn_package::MANIFEST_FILE),
-            range: None,
-            severity: IoDiagnosticSeverity::Error,
-            code: IoDiagnosticCode::ManifestSyntax,
-            message: "project analysis produced no package manifest".to_string(),
-            detail: None,
-            related: Vec::new(),
-        }])
-    })?;
-    let lockfile = dawn_package::Lockfile::read(root)?;
+    let compiled = compile_package(root)?;
+    let project = compiled
+        .graph
+        .project
+        .ok_or_else(|| LoadProjectError::InvalidEntrypoint {
+            path: root.join(dawn_package::MANIFEST_FILE),
+        })?;
     Ok(LoadedPackageProject {
-        manifest,
-        lockfile,
-        session,
+        manifest: compiled.manifest,
+        lockfile: compiled.lockfile,
+        session: ProjectSession {
+            project,
+            source: compiled.graph.source,
+        },
     })
 }
 
 pub fn compile_package(root: &Utf8Path) -> Result<CompiledPackage, PackageLoadError> {
-    let report = check_package(root);
-    let manifest = report
-        .recovery
-        .manifest
-        .clone()
-        .ok_or_else(|| PackageLoadError::Analysis(report.diagnostics.clone()))?;
-    if manifest.project.is_some() && report.session.is_none() {
-        return Err(PackageLoadError::Analysis(report.diagnostics));
-    }
-    let lockfile = dawn_package::Lockfile::read(root)?;
-    let cache = package_cache_for_lock(root, &lockfile)?;
-    compile_package_with_cache(root, manifest, lockfile, &cache)
+    let (analysis, lockfile) = analyze_package(root);
+    let graph = analysis
+        .compiled
+        .ok_or(PackageLoadError::Analysis(analysis.diagnostics))?;
+    let manifest = graph.source.source_graph.project_module().manifest.clone();
+    let lockfile = lockfile.ok_or_else(|| {
+        dawn_package::PackageError::Invalid("package analysis produced no lockfile".to_string())
+    })?;
+    Ok(CompiledPackage {
+        manifest,
+        lockfile,
+        graph,
+    })
 }
 
 pub fn compile_package_with_cache(
@@ -532,27 +523,6 @@ pub fn load_package_with_cache(
     })
 }
 
-/// Loads a package candidate while deferring composition-graph validation for
-/// project-owned sequences. Prior operator identities are available only as
-/// parsing references, so removed or renamed dependency operators can be
-/// reconciled against the candidate definition store before acceptance.
-pub fn load_package_for_operator_reconciliation_with_cache(
-    root: &Utf8Path,
-    manifest: dawn_package::PackageManifest,
-    lockfile: dawn_package::Lockfile,
-    cache: &dawn_package::CacheStore,
-    previous_operators: &dawn_language::operator::OperatorDefinitionStore,
-) -> Result<LoadedPackageProject, PackageLoadError> {
-    let source_graph =
-        dawn_package::ResolvedSourceGraph::from_lock(root, manifest.clone(), &lockfile, cache)?;
-    let session = Loader::for_operator_reconciliation(source_graph, previous_operators)?.load()?;
-    Ok(LoadedPackageProject {
-        manifest,
-        lockfile,
-        session,
-    })
-}
-
 pub fn load_source_graph(
     source_graph: dawn_package::ResolvedSourceGraph,
 ) -> Result<ProjectSession, LoadProjectError> {
@@ -565,40 +535,163 @@ pub fn compile_source_graph(
     Loader::new(source_graph)?.compile()
 }
 
-pub fn check_source_graph(source_graph: dawn_package::ResolvedSourceGraph) -> ProjectCheckReport {
-    let mut diagnostics = Vec::new();
-    let project_module = source_graph.project_module();
-    let root = project_module.root.clone();
-    let manifest = project_module.manifest.clone();
-    let recovery = analysis::analyze_project_documents(&root, Some(manifest), &mut diagnostics);
-    match load_source_graph(source_graph) {
-        Ok(session) => {
-            analysis::sort_diagnostics(&mut diagnostics);
-            let session = (!diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.severity == IoDiagnosticSeverity::Error))
-            .then_some(session);
-            ProjectCheckReport {
-                session,
-                recovery,
-                diagnostics,
+struct ProjectAnalysis {
+    compiled: Option<CompiledSourceGraph>,
+    recovery: ProjectRecovery,
+    diagnostics: Vec<IoDiagnostic>,
+}
+
+impl ProjectAnalysis {
+    fn into_report(mut self) -> ProjectCheckReport {
+        let session = self.compiled.and_then(|compiled| match compiled.project {
+            Some(project) => Some(ProjectSession {
+                project,
+                source: compiled.source,
+            }),
+            None => {
+                push_load_error_diagnostics(
+                    &mut self.diagnostics,
+                    LoadProjectError::InvalidEntrypoint {
+                        path: self.recovery.root.join(dawn_package::MANIFEST_FILE),
+                    },
+                );
+                None
             }
-        }
-        Err(error) => {
-            push_load_error_diagnostics(&mut diagnostics, error);
-            analysis::sort_diagnostics(&mut diagnostics);
-            ProjectCheckReport {
-                session: None,
-                recovery,
-                diagnostics,
-            }
+        });
+        analysis::sort_diagnostics(&mut self.diagnostics);
+        ProjectCheckReport {
+            session,
+            recovery: self.recovery,
+            diagnostics: self.diagnostics,
         }
     }
 }
 
-pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
+fn compile_for_analysis(
+    overrides: &SourceOverrides,
+    source_graph: dawn_package::ResolvedSourceGraph,
+    checked_dsl_documents: &mut IndexSet<Utf8PathBuf>,
+    diagnostics: &mut Vec<IoDiagnostic>,
+) -> Option<CompiledSourceGraph> {
+    let result = Loader::new(source_graph).and_then(|mut loader| {
+        for (path, text) in overrides {
+            let Some((module, path)) =
+                source::workspace_module_for_path(&loader.source_graph, path)
+            else {
+                continue;
+            };
+            loader.source_overrides.insert(
+                dawn_language::identity::DocumentId::new(module, path),
+                text.clone(),
+            );
+        }
+        let result = loader.compile();
+        *checked_dsl_documents = loader.checked_dsl_documents;
+        result
+    });
+    match result {
+        Ok(compiled) => Some(compiled),
+        Err(error) => {
+            push_load_error_diagnostics(diagnostics, error);
+            None
+        }
+    }
+}
+
+fn finish_analysis(
+    overrides: &SourceOverrides,
+    root: &Utf8Path,
+    manifest: Option<dawn_package::PackageManifest>,
+    compiled: Option<CompiledSourceGraph>,
+    checked_dsl_documents: &IndexSet<Utf8PathBuf>,
+    mut diagnostics: Vec<IoDiagnostic>,
+) -> ProjectAnalysis {
+    let recovery = analysis::analyze_project_documents(
+        root,
+        manifest,
+        overrides,
+        checked_dsl_documents,
+        &mut diagnostics,
+    );
+    analysis::sort_diagnostics(&mut diagnostics);
+    let compiled = compiled.filter(|_| {
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == IoDiagnosticSeverity::Error)
+    });
+    ProjectAnalysis {
+        compiled,
+        recovery,
+        diagnostics,
+    }
+}
+
+pub fn check_source_graph(source_graph: dawn_package::ResolvedSourceGraph) -> ProjectCheckReport {
+    let project_module = source_graph.project_module();
+    let root = project_module.root.clone();
+    let manifest = project_module.manifest.clone();
     let mut diagnostics = Vec::new();
-    let manifest = match dawn_package::PackageManifest::read_for_analysis(root) {
+    let mut checked_dsl_documents = IndexSet::new();
+    let compiled = compile_for_analysis(
+        &SourceOverrides::new(),
+        source_graph,
+        &mut checked_dsl_documents,
+        &mut diagnostics,
+    );
+    finish_analysis(
+        &SourceOverrides::new(),
+        &root,
+        Some(manifest),
+        compiled,
+        &checked_dsl_documents,
+        diagnostics,
+    )
+    .into_report()
+}
+
+pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
+    check_package_with_overrides(root, &SourceOverrides::new())
+}
+
+pub type SourceOverrides = std::collections::BTreeMap<Utf8PathBuf, String>;
+
+pub fn project_source_texts(root: &Utf8Path) -> io::Result<SourceOverrides> {
+    analysis::project_file_inventory(root)
+        .into_iter()
+        .filter(|path| {
+            path.extension() == Some("dawn")
+                || matches!(
+                    path.file_name(),
+                    Some(dawn_package::MANIFEST_FILE | dawn_package::LOCK_FILE)
+                )
+        })
+        .map(|path| fs::read_to_string(root.join(&path)).map(|text| (path, text)))
+        .collect()
+}
+
+/// Analyze the exact working sources without writing any input to disk.
+pub fn check_package_with_overrides(
+    root: &Utf8Path,
+    overrides: &SourceOverrides,
+) -> ProjectCheckReport {
+    analyze_package_overrides(root, overrides).0.into_report()
+}
+
+fn analyze_package(root: &Utf8Path) -> (ProjectAnalysis, Option<dawn_package::Lockfile>) {
+    analyze_package_overrides(root, &SourceOverrides::new())
+}
+
+fn analyze_package_overrides(
+    root: &Utf8Path,
+    overrides: &SourceOverrides,
+) -> (ProjectAnalysis, Option<dawn_package::Lockfile>) {
+    let mut diagnostics = Vec::new();
+    let manifest = match overrides
+        .get(Utf8Path::new(dawn_package::MANIFEST_FILE))
+        .map_or_else(
+            || dawn_package::PackageManifest::read_for_analysis(root),
+            |text| dawn_package::PackageManifest::parse_for_analysis(text.as_bytes()),
+        ) {
         Ok(manifest) => {
             diagnostics.extend(analysis::package_validation_diagnostics(
                 dawn_package::MANIFEST_FILE,
@@ -628,7 +721,12 @@ pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
             None
         }
     };
-    let lockfile = match dawn_package::Lockfile::read_for_analysis(root) {
+    let lockfile = match overrides
+        .get(Utf8Path::new(dawn_package::LOCK_FILE))
+        .map_or_else(
+            || dawn_package::Lockfile::read_for_analysis(root),
+            |text| dawn_package::Lockfile::parse_for_analysis(text.as_bytes()),
+        ) {
         Ok(lockfile) => {
             if let Some(manifest) = &manifest {
                 diagnostics.extend(analysis::package_validation_diagnostics(
@@ -649,7 +747,7 @@ pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
         }
     };
 
-    let recovery = analysis::analyze_project_documents(root, manifest.clone(), &mut diagnostics);
+    let mut checked_dsl_documents = IndexSet::new();
     let package_files_valid = !diagnostics.iter().any(|diagnostic| {
         matches!(
             diagnostic.code,
@@ -659,19 +757,23 @@ pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
                 | IoDiagnosticCode::LockSyntax
         )
     });
-    let session = if package_files_valid {
-        match (manifest, lockfile) {
+    let compiled = if package_files_valid {
+        match (manifest.as_ref(), lockfile.as_ref()) {
             (Some(manifest), Some(lockfile)) => {
-                match package_cache_for_lock(root, &lockfile).and_then(|cache| {
-                    dawn_package::ResolvedSourceGraph::from_lock(root, manifest, &lockfile, &cache)
+                match package_cache_for_lock(root, lockfile).and_then(|cache| {
+                    dawn_package::ResolvedSourceGraph::from_lock(
+                        root,
+                        manifest.clone(),
+                        lockfile,
+                        &cache,
+                    )
                 }) {
-                    Ok(source_graph) => match load_source_graph(source_graph) {
-                        Ok(session) => Some(session),
-                        Err(error) => {
-                            push_load_error_diagnostics(&mut diagnostics, error);
-                            None
-                        }
-                    },
+                    Ok(source_graph) => compile_for_analysis(
+                        overrides,
+                        source_graph,
+                        &mut checked_dsl_documents,
+                        &mut diagnostics,
+                    ),
                     Err(error) => {
                         push_diagnostic(
                             &mut diagnostics,
@@ -694,20 +796,17 @@ pub fn check_package(root: &Utf8Path) -> ProjectCheckReport {
     } else {
         None
     };
-    analysis::sort_diagnostics(&mut diagnostics);
-    let session = if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == IoDiagnosticSeverity::Error)
-    {
-        None
-    } else {
-        session
-    };
-    ProjectCheckReport {
-        session,
-        recovery,
-        diagnostics,
-    }
+    (
+        finish_analysis(
+            overrides,
+            root,
+            manifest,
+            compiled,
+            &checked_dsl_documents,
+            diagnostics,
+        ),
+        lockfile,
+    )
 }
 
 pub fn check_package_with_cache(
@@ -725,6 +824,8 @@ pub fn check_package_with_cache(
                 let recovery = analysis::analyze_project_documents(
                     root,
                     Some(recovery_manifest),
+                    &SourceOverrides::new(),
+                    &IndexSet::new(),
                     &mut diagnostics,
                 );
                 diagnostics.push(IoDiagnostic {
@@ -840,101 +941,6 @@ pub fn check_project_document_text(
             diagnostics
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CompiledOperatorDocument {
-    pub document_id: dawn_language::identity::DocumentId,
-    pub definitions: dawn_language::operator::OperatorDefinitionStore,
-    document: SourceDocument,
-}
-
-pub fn compile_operator_document(
-    document_id: &dawn_language::identity::DocumentId,
-    text: &str,
-) -> Result<CompiledOperatorDocument, Vec<IoDiagnostic>> {
-    let path = document_id.path();
-    let compiled = dawn_language::dsl::compile_operators(text).map_err(|diagnostics| {
-        diagnostics
-            .into_iter()
-            .map(|diagnostic| {
-                diagnostics::dsl_diagnostic(
-                    path,
-                    text,
-                    diagnostic,
-                    IoDiagnosticCode::OperatorCompile,
-                )
-            })
-            .collect::<Vec<_>>()
-    })?;
-    let mut definitions = dawn_language::operator::OperatorDefinitionStore::default();
-    let mut objects = Vec::new();
-    for operator in compiled {
-        let name = operator.name().as_str().to_string();
-        let id = dawn_language::operator::OperatorDefinitionId(SourceIdentity::from_document(
-            document_id.clone(),
-            name.clone(),
-        ));
-        definitions.insert(
-            id.clone(),
-            dawn_language::operator::custom_operator_definition(id, operator),
-        );
-        objects.push(
-            SourceObjectId::new(SourceObjectKind::OperatorDefinition, name).map_err(|message| {
-                vec![IoDiagnostic {
-                    path: path.to_path_buf(),
-                    range: None,
-                    severity: IoDiagnosticSeverity::Error,
-                    code: IoDiagnosticCode::OperatorCompile,
-                    message,
-                    detail: None,
-                    related: Vec::new(),
-                }]
-            })?,
-        );
-    }
-    let document = SourceDocument::new(
-        Vec::new(),
-        objects,
-        SourceDocumentKind::Operator {
-            source: text.to_string(),
-        },
-    )
-    .map_err(|message| {
-        vec![IoDiagnostic {
-            path: path.to_path_buf(),
-            range: None,
-            severity: IoDiagnosticSeverity::Error,
-            code: IoDiagnosticCode::OperatorCompile,
-            message,
-            detail: None,
-            related: Vec::new(),
-        }]
-    })?;
-    Ok(CompiledOperatorDocument {
-        document_id: document_id.clone(),
-        definitions,
-        document,
-    })
-}
-
-pub fn apply_compiled_operator_document(
-    session: &mut ProjectSession,
-    compiled: CompiledOperatorDocument,
-) {
-    session
-        .project
-        .definitions
-        .operators
-        .definitions
-        .retain(|id, _| id.0.document_id() != &compiled.document_id);
-    for (id, definition) in compiled.definitions.definitions {
-        session.project.definitions.operators.insert(id, definition);
-    }
-    session
-        .source
-        .documents
-        .insert(compiled.document_id, compiled.document);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1215,7 +1221,7 @@ pub fn source_document_text(
     let Some(document) = session.source.documents.get(document_id) else {
         return Ok(None);
     };
-    document_text(session, document_id.path(), document).map(Some)
+    document_text(session, document_id, document).map(Some)
 }
 
 fn ensure_document_imports_target(
@@ -1600,6 +1606,7 @@ impl fmt::Display for ExportProjectError {
 impl std::error::Error for ExportProjectError {}
 
 mod serialization;
+pub use serialization::{SourceTextWrite, write_source_texts};
 use serialization::{document_text, write_source_documents};
 
 mod loader;

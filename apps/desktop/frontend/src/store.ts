@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
-import { commands, setGuiEditResultHandler } from "./api";
+import { commands } from "./api";
 import { effectiveEditorViewMode } from "./editorViewMode";
+import { DocumentSync } from "./documentSync";
+import { isNewerSnapshot, reconcileGuiRequest, sameGuiDocument } from "./snapshotState";
 import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, LiveOutputSnapshot, ProjectRestoreState } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
@@ -14,20 +16,22 @@ type AppStore = {
   restoreState: ProjectRestoreState | null;
   guiRequest: GuiDocumentRequest | null;
   guiDocument: GuiDocument | null;
+  guiDocumentRevision: number | null;
+  guiEditPending: boolean;
   guiResetRevision: number;
   compositionGraphEditing: boolean;
   error: string | null;
+  failedDocumentSync: { epoch: number; path: string } | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource, preserveLocalText?: boolean) => void;
   setAudioTransport: (transport: AudioTransportSnapshot) => void;
   setLiveOutput: (liveOutput: LiveOutputSnapshot) => void;
   setPreviewOpen: (previewOpen: boolean) => void;
   setRestoreState: (restoreState: ProjectRestoreState | null) => void;
-  setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
   resetGuiLocalState: () => void;
   setCompositionGraphEditing: (editing: boolean) => void;
-  applyGuiEditResult: (result: GuiEditResult) => void;
+  applyGuiEditResult: (request: GuiDocumentRequest, result: GuiEditResult) => boolean;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
@@ -38,61 +42,30 @@ export const useAppStore = create<AppStore>((set) => ({
   restoreState: null,
   guiRequest: null,
   guiDocument: null,
+  guiDocumentRevision: null,
+  guiEditPending: false,
   guiResetRevision: 0,
   compositionGraphEditing: false,
   error: null,
+  failedDocumentSync: null,
   localText: "",
   setSnapshot: (snapshot, source = "command", preserveLocalText = false) => {
-    set((current) => {
-      const currentSnapshot = current.snapshot;
-      const audioTransport = mergeAudioTransport(
-        currentSnapshot?.audioTransport ?? null,
-        snapshot.audioTransport,
-        source
-      );
-      const nextState: Partial<AppStore> = {
-        snapshot: {
-          ...snapshot,
-          audioTransport
-        }
-      };
-      if (!preserveLocalText && snapshot.activeBuffer !== null && effectiveEditorViewMode(snapshot) === "text") {
-        nextState.localText = snapshot.activeBuffer.text;
-      }
-      return nextState;
-    });
-    void source;
+    set((current) => snapshotUpdate(current, snapshot, source, preserveLocalText));
   },
   setAudioTransport: (audioTransport) => {
-    set((current) => {
-      if (
-        current.snapshot === null
-        || audioTransport.generation < current.snapshot.audioTransport.generation
-      ) {
-        return current;
+    set((current) => current.snapshot === null ? current : {
+      snapshot: {
+        ...current.snapshot,
+        audioTransport: mergeTransport(current.snapshot.audioTransport, audioTransport, "event")
       }
-      return {
-        snapshot: {
-          ...current.snapshot,
-          audioTransport
-        }
-      };
     });
   },
   setLiveOutput: (liveOutput) => {
-    set((current) => {
-      if (
-        current.snapshot === null
-        || liveOutput.generation < current.snapshot.liveOutput.generation
-      ) {
-        return current;
+    set((current) => current.snapshot === null ? current : {
+      snapshot: {
+        ...current.snapshot,
+        liveOutput: mergeTransport(current.snapshot.liveOutput, liveOutput, "event")
       }
-      return {
-        snapshot: {
-          ...current.snapshot,
-          liveOutput
-        }
-      };
     });
   },
   setPreviewOpen: (previewOpen) => {
@@ -105,14 +78,11 @@ export const useAppStore = create<AppStore>((set) => ({
           }
         });
   },
-  setGuiRequest: (guiRequest) => {
-    set({ guiRequest });
-  },
   setRestoreState: (restoreState) => {
     set({ restoreState });
   },
   setGuiDocument: (guiDocument) => {
-    set({ guiDocument });
+    set((current) => ({ guiDocument, guiDocumentRevision: guiDocument === null ? null : current.guiRequest?.projectRevision ?? null }));
   },
   resetGuiLocalState: () => {
     set((current) => ({
@@ -123,30 +93,35 @@ export const useAppStore = create<AppStore>((set) => ({
   setCompositionGraphEditing: (compositionGraphEditing) => {
     set({ compositionGraphEditing });
   },
-  applyGuiEditResult: (result) => {
+  applyGuiEditResult: (request, result) => {
+    let applied = false;
     set((current) => {
-      const audioTransport = mergeAudioTransport(
-        current.snapshot?.audioTransport ?? null,
-        result.snapshot.audioTransport,
-        "command"
-      );
-      const nextState: Partial<AppStore> = {
-        snapshot: {
-          ...result.snapshot,
-          audioTransport
-        },
-        guiDocument: result.document
+      if (
+        !sameGuiDocument(current.guiRequest, request)
+        || current.snapshot?.projectEpoch !== result.snapshot.projectEpoch
+        || current.snapshot.projectRoot !== result.snapshot.projectRoot
+        || result.snapshot.projectRevision < current.snapshot.projectRevision
+      ) return current;
+      const update = snapshotUpdate(current, result.snapshot, "command", false);
+      const nextRequest = update.guiRequest === undefined ? current.guiRequest : update.guiRequest;
+      if (!sameGuiDocument(nextRequest, request) || nextRequest?.projectRevision !== result.snapshot.projectRevision) return current;
+      applied = true;
+      return {
+        ...update,
+        guiDocument: result.document,
+        guiDocumentRevision: result.snapshot.projectRevision
       };
-      if (result.snapshot.activeBuffer !== null && effectiveEditorViewMode(result.snapshot) === "text") {
-        nextState.localText = result.snapshot.activeBuffer.text;
-      }
-      return nextState;
     });
+    return applied;
   },
   setError: (error) => {
     set({ error });
   },
   setLocalText: (localText) => {
+    const snapshot = useAppStore.getState().snapshot;
+    if (snapshot?.activeBuffer !== null && snapshot?.activeBuffer !== undefined) {
+      documentSync.queue(snapshot.projectEpoch, snapshot.activeBuffer.path, snapshot.activeBuffer.documentRevision, localText);
+    }
     set({ localText });
   },
   hydrate: async () => {
@@ -158,13 +133,50 @@ export const useAppStore = create<AppStore>((set) => ({
   }
 }));
 
-setGuiEditResultHandler((result) => {
-  useAppStore.getState().applyGuiEditResult(result);
-  useAppStore.getState().setError(null);
-});
+const documentSync = new DocumentSync(
+  commands.updateDocument,
+  (snapshot) => {
+    useAppStore.getState().setSnapshot(snapshot);
+    const current = useAppStore.getState().snapshot;
+    if (current?.activeBuffer !== null && current?.activeBuffer !== undefined && documentSync.pendingText(current.projectEpoch, current.activeBuffer.path) === null) {
+      useAppStore.setState({ localText: current.activeBuffer.text });
+    }
+  },
+  (error, epoch, path) => {
+    useAppStore.setState({ error: String(error), failedDocumentSync: { epoch, path } });
+  }
+);
+
+export const flushDocumentSync = () => documentSync.flush();
+
+export async function resolveDocumentSyncFailure(keepText: boolean) {
+  const failed = useAppStore.getState().failedDocumentSync;
+  if (failed === null) return;
+  try {
+    let snapshot = await commands.getSnapshot();
+    const buffer = snapshot.tabs.find((tab) => tab.path === failed.path);
+    if (keepText && (snapshot.projectEpoch !== failed.epoch || buffer === undefined)) {
+      throw new Error("The edited file is no longer open. Copy your text before discarding the pending edit.");
+    }
+    if (snapshot.projectEpoch === failed.epoch && buffer !== undefined && buffer.externalState !== "current") {
+      snapshot = await commands.resolveExternalConflict(failed.epoch, failed.path, buffer.documentRevision, keepText ? "keepWorkingCopy" : "reload");
+    }
+    const revision = snapshot.tabs.find((tab) => tab.path === failed.path)?.documentRevision ?? null;
+    documentSync.resolveFailure(failed.epoch, failed.path, keepText ? revision : null);
+    useAppStore.getState().setSnapshot(snapshot);
+    useAppStore.setState({ failedDocumentSync: null, error: null });
+    if (keepText) await flushDocumentSync();
+    else useAppStore.setState({ localText: snapshot.activeBuffer?.text ?? "" });
+  } catch (error) {
+    useAppStore.getState().setError(String(error));
+  }
+}
 
 export function subscribeToSnapshots(): Promise<() => void> {
   return Promise.all([
+    listen<AppSnapshot>("app_snapshot_changed", (event) => {
+      useAppStore.getState().setSnapshot(event.payload, "event");
+    }),
     listen<AudioTransportSnapshot>("audio_transport_changed", (event) => {
       useAppStore.getState().setAudioTransport(event.payload);
     }),
@@ -193,6 +205,7 @@ export function useStaticAppSnapshot(): AppStaticSnapshot | null {
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
   try {
+    await flushDocumentSync();
     const previousRoot = useAppStore.getState().snapshot?.projectRoot ?? null;
     const snapshot = await command();
     useAppStore.getState().setSnapshot(snapshot, "command");
@@ -208,29 +221,83 @@ export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
   }
 }
 
-export async function runGuiEditCommand(command: () => Promise<GuiEditResult>) {
+export async function runGuiEditCommand<T extends GuiEditResult>(command: (request: GuiDocumentRequest) => Promise<T>, origin?: GuiDocumentRequest | null): Promise<T> {
+  const { guiRequest: request, guiDocumentRevision, guiEditPending } = useAppStore.getState();
+  if (request === null) throw new Error("GUI edit attempted without an active GUI document request.");
+  if (guiDocumentRevision !== request.projectRevision) throw new Error("The current GUI document is still loading.");
+  if (guiEditPending) throw new Error("A GUI edit is already pending.");
+  if (origin !== undefined && origin !== request) throw new Error("The GUI document changed during the gesture.");
+  useAppStore.setState({ guiEditPending: true });
   try {
-    const previousRoot = useAppStore.getState().snapshot?.projectRoot ?? null;
-    const result = await command();
-    if (result.snapshot.projectRoot !== previousRoot) {
-      const restoreState = await commands.getRestoredViewState();
-      useAppStore.getState().setRestoreState(restoreState);
+    const result = await command(request);
+    if (result.document.type === "blocked") throw new Error(result.document.reason);
+    if (!useAppStore.getState().applyGuiEditResult(request, result)) {
+      throw new Error("The GUI document changed before the edit completed.");
     }
     useAppStore.getState().setError(null);
     return result;
   } catch (error) {
-    useAppStore.getState().setError(String(error));
+    if (useAppStore.getState().guiRequest === request) useAppStore.getState().setError(String(error));
     throw error;
+  } finally {
+    useAppStore.setState({ guiEditPending: false });
   }
 }
 
-function mergeAudioTransport(
-  current: AudioTransportSnapshot | null,
-  incoming: AudioTransportSnapshot,
+function mergeTransport<T extends { generation: number }>(
+  current: T | null,
+  incoming: T,
   source: SnapshotApplySource
-): AudioTransportSnapshot {
+): T {
   if (current === null) return incoming;
   if (incoming.generation < current.generation) return current;
   if (source === "command" && incoming.generation === current.generation) return current;
   return incoming;
+}
+
+function snapshotUpdate(current: AppStore, incoming: AppSnapshot, source: SnapshotApplySource, preserveLocalText: boolean): Partial<AppStore> {
+  const previous = current.snapshot;
+  if (!isNewerSnapshot(previous, incoming)) return {};
+  const snapshot = {
+    ...incoming,
+    audioTransport: mergeTransport(previous?.audioTransport ?? null, incoming.audioTransport, source),
+    liveOutput: mergeTransport(previous?.liveOutput ?? null, incoming.liveOutput, source)
+  };
+  const nextRequest = guiRequestForSnapshot(snapshot);
+  const { request, retainDocument } = reconcileGuiRequest(current.guiRequest, nextRequest,
+    previous?.projectEpoch === snapshot.projectEpoch && previous.projectRoot === snapshot.projectRoot);
+  const update: Partial<AppStore> = {
+    snapshot,
+    guiRequest: request
+  };
+  if (!retainDocument) {
+    update.guiDocument = null;
+    update.guiDocumentRevision = null;
+  }
+  const projection = snapshot.guiProjection;
+  if (projection !== null && request !== null
+    && projection.projectRevision === request.projectRevision
+    && projection.request.projectRevision === request.projectRevision
+    && sameGuiDocument(projection.request, request)
+    && (!retainDocument || current.guiDocumentRevision !== request.projectRevision)) {
+    update.guiDocument = projection.document;
+    update.guiDocumentRevision = projection.projectRevision;
+  }
+  if (!preserveLocalText && snapshot.activeBuffer !== null && effectiveEditorViewMode(snapshot) === "text") {
+    update.localText = documentSync.pendingText(snapshot.projectEpoch, snapshot.activeBuffer.path) ?? snapshot.activeBuffer.text;
+  }
+  return update;
+}
+
+function guiRequestForSnapshot(snapshot: AppSnapshot): GuiDocumentRequest | null {
+  const descriptor = snapshot.activeDocumentDescriptor;
+  const activePath = snapshot.activeFile;
+  if (descriptor === null || activePath === null || effectiveEditorViewMode(snapshot) !== "gui") return null;
+  const defaultObject =
+    descriptor.defaultObjectKeys.find((item) => item.view === "sequence") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "setup") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "preview") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "prop");
+  if (defaultObject === undefined) return null;
+  return { path: activePath, view: defaultObject.view, objectKey: defaultObject.objectKey, projectRevision: snapshot.projectRevision };
 }

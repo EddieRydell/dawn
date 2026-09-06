@@ -10,7 +10,7 @@
     )
 )]
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 mod audio;
 pub mod bindings;
@@ -29,12 +29,8 @@ mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {
     let bindings = bindings::builder();
-    let state = desktop_state::DesktopState::new();
-    let preview = preview::PreviewWindowService::new(state.preview_wake());
 
     tauri::Builder::default()
-        .manage(state)
-        .manage(preview)
         .register_uri_scheme_protocol("dawn-raster", |context, request| {
             raster_protocol_response(
                 context.app_handle().state::<desktop_state::DesktopState>().inner(),
@@ -43,7 +39,23 @@ pub fn run() -> Result<(), tauri::Error> {
         })
         .setup(|app| {
             let handle = app.handle().clone();
-                            let state = app.state::<desktop_state::DesktopState>();
+            let analysis_app = handle.clone();
+            let state = desktop_state::DesktopState::new(move |snapshot| {
+                let _ = analysis_app.emit("app_snapshot_changed", snapshot);
+            });
+            let preview = preview::PreviewWindowService::new(state.preview_wake());
+            app.manage(state);
+            app.manage(preview);
+            let state = app.state::<desktop_state::DesktopState>();
+            if let Some(window) = app.get_window("main") {
+                let close_app = handle.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = close_app.emit("close_requested", ());
+                    }
+                });
+            }
             match state.persistence().load(&handle) {
                 Ok(last_project) => {
                     let settings_snapshot = state.apply_persisted_settings();
@@ -51,24 +63,6 @@ pub fn run() -> Result<(), tauri::Error> {
                         && let Some(window) = app.get_window("main")
                     {
                         persistence::apply_window_state(&window, &window_state);
-                    }
-                    if let Some(window) = app.get_window("main") {
-                        let close_app = handle.clone();
-                        window.on_window_event(move |event| {
-                            if !matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                                return;
-                            }
-                            let state = close_app.state::<desktop_state::DesktopState>();
-                            if let Some(main) = close_app
-                                .get_window("main")
-                                .and_then(|window| persistence::read_window_state(&window))
-                            {
-                                let _ = state.persistence().record_main_window(main);
-                            }
-                        let preview = close_app.state::<preview::PreviewWindowService>();
-                            let _ = preview.close_for_main_shutdown(&close_app, state.persistence());
-                            state.shutdown_live_output();
-                        });
                     }
                     if settings_snapshot.settings.reopen_last_project
                         && let Some(project) = last_project

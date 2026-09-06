@@ -83,6 +83,9 @@ pub(crate) fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry>
 pub(crate) fn recovery_workspace_entries(recovery: &ProjectRecovery) -> Vec<WorkspaceEntry> {
     let mut paths = BTreeMap::new();
     collect_workspace_paths(&recovery.root, Utf8Path::new(""), &mut paths);
+    for path in recovery.documents.keys() {
+        insert_path_with_parents(&mut paths, path);
+    }
     paths
         .into_iter()
         .map(|(path, kind)| {

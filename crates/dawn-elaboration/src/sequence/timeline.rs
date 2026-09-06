@@ -1,9 +1,7 @@
 use crate::RenderError;
 use dawn_language::sequence::Sequence;
-use dawn_language::validation::{MAX_SEQUENCE_FRAME_COUNT, MAX_SEQUENCE_FRAME_RATE};
 use dawn_language::values::{
-    DawnDuration, DawnTime, NANOS_PER_SECOND, SampleTime, sample_time_from_dawn_time,
-    sample_time_from_frame,
+    SampleDuration, SampleTime, sample_duration_from_dawn_duration, sample_time_from_frame,
 };
 
 fn invalid_timing(reason: impl Into<String>) -> RenderError {
@@ -12,35 +10,21 @@ fn invalid_timing(reason: impl Into<String>) -> RenderError {
     }
 }
 
-pub(crate) fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
-    if sequence.frame_rate == 0 {
-        return Err(invalid_timing("frame rate must be greater than zero"));
-    }
-    if sequence.frame_rate > MAX_SEQUENCE_FRAME_RATE {
-        return Err(invalid_timing(format!(
-            "frame rate exceeds the limit of {MAX_SEQUENCE_FRAME_RATE} frames per second"
-        )));
-    }
-    if sequence.duration.is_zero() {
-        return Err(invalid_timing("duration must be positive"));
-    }
-    if frame_count(&sequence.duration, sequence.frame_rate)? > MAX_SEQUENCE_FRAME_COUNT {
-        return Err(invalid_timing(format!(
-            "sequence exceeds the prepared-frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
-        )));
-    }
-    sample_time_from_dawn_time(&DawnTime(sequence.duration.0))
-        .map_err(|_| invalid_timing("sequence duration exceeds the runtime clock range"))?;
-    Ok(())
+pub(crate) struct PreparedTiming {
+    pub(crate) duration: SampleDuration,
+    pub(crate) frame_count: u32,
 }
 
-pub(crate) fn frame_count(duration: &DawnDuration, frame_rate: u32) -> Result<u32, RenderError> {
-    if frame_rate == 0 {
-        return Err(invalid_timing("frame rate must be greater than zero"));
-    }
-    let scaled = duration.as_nanos() * u128::from(frame_rate);
-    let frames = scaled.div_ceil(u128::from(NANOS_PER_SECOND));
-    u32::try_from(frames).map_err(|_| invalid_timing("frame count exceeds the runtime range"))
+/// Convert validated authoring timing into the portable runtime representation.
+pub(crate) fn prepare_timing(sequence: &Sequence) -> Result<PreparedTiming, RenderError> {
+    let duration = sample_duration_from_dawn_duration(&sequence.duration)
+        .map_err(|_| invalid_timing("sequence duration exceeds the runtime clock range"))?;
+    let frame_count = u32::try_from(sequence.frame_count())
+        .map_err(|_| invalid_timing("frame count exceeds the runtime range"))?;
+    Ok(PreparedTiming {
+        duration,
+        frame_count,
+    })
 }
 
 pub(crate) fn sample_time_for_frame(

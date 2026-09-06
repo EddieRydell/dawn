@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { commands } from "../api";
 import { useAppStore } from "../store";
+import { runWorkspaceTransition } from "../workspaceTransitions";
 import { THEME_METRICS } from "../theme";
 
 const NEW_PROJECT_EVENT = "dawn:new-project";
@@ -51,8 +52,8 @@ export function NewProjectDialog() {
     setCreating(true);
     setError(null);
     try {
-      const snapshot = await commands.createNewProject(parentPath, directoryName);
-      useAppStore.getState().setSnapshot(snapshot);
+      const applied = await runWorkspaceTransition({ type: "createProject", parentPath, directoryName });
+      if (!applied) return;
       useAppStore.getState().setError(null);
       setOpen(false);
       setDirectoryName("");

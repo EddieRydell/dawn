@@ -18,10 +18,8 @@ pub(super) struct Loader {
     pub(crate) definitions: ProjectDefinitionStores,
     pub(crate) referenced_assets: Vec<ReferencedAsset>,
     pub(crate) next_asset_id: u32,
+    pub(crate) checked_dsl_documents: IndexSet<Utf8PathBuf>,
     pub(crate) source_overrides: IndexMap<dawn_language::identity::DocumentId, String>,
-    pub(crate) operator_reconciliation:
-        Option<BTreeMap<dawn_language::identity::DocumentId, Vec<OperatorDefinitionId>>>,
-    pub(crate) validate_semantics: bool,
 }
 
 impl Loader {
@@ -64,29 +62,8 @@ impl Loader {
             referenced_assets: Vec::new(),
             next_asset_id: 1,
             source_overrides: IndexMap::new(),
-            operator_reconciliation: None,
-            validate_semantics: true,
+            checked_dsl_documents: IndexSet::new(),
         })
-    }
-
-    pub(super) fn for_operator_reconciliation(
-        source_graph: dawn_package::ResolvedSourceGraph,
-        previous: &dawn_language::operator::OperatorDefinitionStore,
-    ) -> Result<Self, LoadProjectError> {
-        let mut loader = Self::new(source_graph)?;
-        let mut definitions = BTreeMap::<_, Vec<_>>::new();
-        for id in previous.definitions.keys() {
-            definitions
-                .entry(id.0.document_id().clone())
-                .or_default()
-                .push(id.clone());
-        }
-        for document_definitions in definitions.values_mut() {
-            document_definitions.sort_by(|left, right| left.0.object().cmp(right.0.object()));
-        }
-        loader.operator_reconciliation = Some(definitions);
-        loader.validate_semantics = false;
-        Ok(loader)
     }
 
     pub(super) fn source_identity(
@@ -97,7 +74,7 @@ impl Loader {
         dawn_language::identity::SourceIdentity::from_document(document.clone(), object)
     }
 
-    pub(super) fn load(self) -> Result<ProjectSession, LoadProjectError> {
+    pub(super) fn load(mut self) -> Result<ProjectSession, LoadProjectError> {
         let compiled = self.compile()?;
         let project = compiled
             .project
@@ -113,7 +90,7 @@ impl Loader {
         })
     }
 
-    pub(super) fn compile(mut self) -> Result<crate::CompiledSourceGraph, LoadProjectError> {
+    pub(super) fn compile(&mut self) -> Result<crate::CompiledSourceGraph, LoadProjectError> {
         let mut roots = std::collections::BTreeSet::new();
         for (module_id, module) in self.source_graph.modules() {
             for export in module.manifest.exports.values() {
@@ -143,17 +120,7 @@ impl Loader {
             }))
         };
         self.validate_exported_objects(&mut typed)?;
-        if self.entrypoint.is_some() && self.validate_semantics {
-            let entrypoint =
-                self.entrypoint
-                    .as_ref()
-                    .ok_or_else(|| LoadProjectError::InvalidEntrypoint {
-                        path: self
-                            .source_graph
-                            .project_module()
-                            .root
-                            .join(dawn_package::MANIFEST_FILE),
-                    })?;
+        if let Some(entrypoint) = &self.entrypoint {
             dawn_language::validation::validate_project(&typed).map_err(|error| {
                 LoadProjectError::InvalidDocument {
                     path: entrypoint.path().to_path_buf(),
@@ -162,14 +129,14 @@ impl Loader {
                 }
             })?;
         }
-        let project = self.entrypoint.as_ref().map(|_| typed.clone());
         let definitions = typed.definitions.clone();
+        let project = self.entrypoint.as_ref().map(|_| typed);
         Ok(crate::CompiledSourceGraph {
             source: SourceProject {
-                source_graph: self.source_graph,
-                entrypoint: self.entrypoint,
-                documents: self.documents,
-                referenced_assets: self.referenced_assets,
+                source_graph: self.source_graph.clone(),
+                entrypoint: self.entrypoint.take(),
+                documents: std::mem::take(&mut self.documents),
+                referenced_assets: std::mem::take(&mut self.referenced_assets),
             },
             project,
             definitions,
@@ -378,6 +345,9 @@ impl Loader {
     ) -> Result<(), LoadProjectError> {
         let relative = document_id.path();
         let source = self.read_source(document_id, absolute)?;
+        if let Ok(path) = absolute.strip_prefix(&self.source_graph.project_module().root) {
+            self.checked_dsl_documents.insert(path.to_path_buf());
+        }
         let compiled =
             compile_effects(&source).map_err(|diagnostics| LoadProjectError::InvalidEffect {
                 path: relative.to_path_buf(),
@@ -433,6 +403,9 @@ impl Loader {
     ) -> Result<(), LoadProjectError> {
         let relative = document_id.path();
         let source = self.read_source(document_id, absolute)?;
+        if let Ok(path) = absolute.strip_prefix(&self.source_graph.project_module().root) {
+            self.checked_dsl_documents.insert(path.to_path_buf());
+        }
         let compiled = compile_operators(&source).map_err(|diagnostics| {
             LoadProjectError::InvalidOperator {
                 path: relative.to_path_buf(),
@@ -658,39 +631,6 @@ impl Loader {
                         object.clone(),
                     ));
                 }
-                if document_id.module_id() == self.source_graph.project_module_id()
-                    && let Some(previous) = self
-                        .operator_reconciliation
-                        .as_ref()
-                        .and_then(|definitions| definitions.get(target))
-                {
-                    for id in previous {
-                        let name = id.0.object().to_string();
-                        if target_visible
-                            .keys()
-                            .any(|key| key.alias.is_none() && key.object.as_str() == name.as_str())
-                        {
-                            continue;
-                        }
-                        if !names.insert(name.clone()) {
-                            return Err(LoadProjectError::InvalidDocument {
-                                path: relative.to_path_buf(),
-                                range: None,
-                                message: format!(
-                                    "duplicate exported object `{name}` in import alias `{}`",
-                                    import.alias
-                                ),
-                            });
-                        }
-                        imported_visible.push((
-                            AliasObjectKey {
-                                alias: Some(import.alias.clone()),
-                                object: name,
-                            },
-                            ResolvedObject::OperatorDefinition(id.clone()),
-                        ));
-                    }
-                }
             }
             import_edges.push(ImportEdge {
                 alias: import.alias.clone(),
@@ -744,7 +684,7 @@ impl Loader {
                         path.clone(),
                     );
                     let absolute = self.absolute_document_path(&target)?;
-                    if !absolute.is_file() {
+                    if !absolute.is_file() && !self.source_overrides.contains_key(&target) {
                         return Err(LoadProjectError::InvalidDocument {
                             path: importer.path().to_path_buf(),
                             range: None,
@@ -781,7 +721,7 @@ impl Loader {
                             Utf8PathBuf::from(path),
                         );
                         let absolute = self.absolute_document_path(&target)?;
-                        if !absolute.is_file() {
+                        if !absolute.is_file() && !self.source_overrides.contains_key(&target) {
                             return Err(LoadProjectError::InvalidDocument {
                                 path: importer.path().to_path_buf(),
                                 range: None,
@@ -849,15 +789,6 @@ impl Loader {
             for sequence in sequences {
                 resolver.resolve_sequence(&sequence)?;
             }
-        }
-        if self.validate_semantics {
-            dawn_language::validation::validate_project(&project).map_err(|error| {
-                LoadProjectError::InvalidDocument {
-                    path: entrypoint.path().to_path_buf(),
-                    range: None,
-                    message: format!("project validation failed: {error:?}"),
-                }
-            })?;
         }
         Ok(project)
     }
@@ -1042,7 +973,6 @@ fn missing_exported_definition(
     }
 }
 
-use std::collections::BTreeMap;
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};

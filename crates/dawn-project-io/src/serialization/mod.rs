@@ -13,81 +13,121 @@ pub(super) fn write_source_documents(
     session: &ProjectSession,
     output_root: &Utf8Path,
 ) -> Result<Vec<Utf8PathBuf>, ExportProjectError> {
-    let mut prepared = Vec::new();
-    for (document_id, document) in &session.source.documents {
-        if !session.source.is_project_owned(document_id) {
+    let mut writes = std::collections::BTreeMap::new();
+    for (id, document) in &session.source.documents {
+        if !session.source.is_project_owned(id) {
             continue;
         }
-        let relative_path = document_id.path();
-        let output_path = output_root.join(relative_path);
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).map_err(|source| ExportProjectError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-
-        let text =
-            document_text(session, relative_path, document).map_err(|error| match error {
-                ExportProjectError::Serialize { source, .. } => ExportProjectError::Serialize {
-                    path: output_path.clone(),
-                    source,
-                },
-                other => other,
-            })?;
-        let previous = if output_path.is_file() {
-            Some(
-                fs::read(&output_path).map_err(|source| ExportProjectError::Io {
-                    path: output_path.clone(),
-                    source,
-                })?,
-            )
-        } else {
-            None
-        };
-        prepared.push((relative_path.to_path_buf(), output_path, text, previous));
+        let path = output_root.join(id.path());
+        let expected = read_previous(&path)?;
+        writes.insert(
+            id.path().to_path_buf(),
+            SourceTextWrite {
+                text: document_text(session, id, document)?,
+                expected,
+            },
+        );
     }
-    let mut written = 0usize;
-    while written < prepared.len() {
-        let (_, output_path, text, _) = &prepared[written];
-        if let Err(write_error) = fs::write(output_path, text) {
-            let mut rollback_failures = Vec::new();
-            for (_, written_path, _, previous) in prepared[..=written].iter().rev() {
-                let rollback = match previous {
+    write_source_texts(output_root, &writes)
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceTextWrite {
+    pub text: String,
+    /// Last observed disk bytes. None means the file must not exist.
+    pub expected: Option<Vec<u8>>,
+}
+
+fn read_previous(path: &Utf8Path) -> Result<Option<Vec<u8>>, ExportProjectError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ExportProjectError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Persist exactly these sources, checking every precondition before writing.
+/// A failed write restores the files already touched and reports rollback errors.
+pub fn write_source_texts(
+    root: &Utf8Path,
+    writes: &std::collections::BTreeMap<Utf8PathBuf, SourceTextWrite>,
+) -> Result<Vec<Utf8PathBuf>, ExportProjectError> {
+    let mut prepared = Vec::new();
+    for (relative, write) in writes {
+        if relative.as_str().is_empty()
+            || !relative
+                .components()
+                .all(|part| matches!(part, camino::Utf8Component::Normal(_)))
+        {
+            return Err(ExportProjectError::Io {
+                path: relative.clone(),
+                source: io::Error::other("Invalid project source path"),
+            });
+        }
+        let path = root.join(relative);
+        let previous = read_previous(&path)?;
+        if previous != write.expected {
+            return Err(ExportProjectError::Io {
+                path,
+                source: io::Error::other(
+                    "Source changed on disk; resolve the external conflict before saving",
+                ),
+            });
+        }
+        prepared.push((relative, path, write));
+    }
+    for (index, (_, path, write)) in prepared.iter().enumerate() {
+        let mut write_started = false;
+        let result = (|| {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            // Recheck immediately before each overwrite as well as before the transaction.
+            let actual = match fs::read(path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            if actual != write.expected {
+                return Err(io::Error::other("Source changed during save"));
+            }
+            write_started = true;
+            fs::write(path, &write.text)
+        })();
+        if let Err(error) = result {
+            let mut failures = Vec::new();
+            let rollback_end = index + usize::from(write_started);
+            for (_, written_path, previous) in prepared[..rollback_end].iter().rev() {
+                let rollback = match &previous.expected {
                     Some(bytes) => fs::write(written_path, bytes),
                     None => fs::remove_file(written_path),
                 };
                 if let Err(error) = rollback {
-                    rollback_failures.push(format!("{written_path}: {error}"));
+                    failures.push(format!("{written_path}: {error}"));
                 }
             }
-            if rollback_failures.is_empty() {
-                return Err(ExportProjectError::Io {
-                    path: output_path.clone(),
-                    source: write_error,
-                });
-            }
             return Err(ExportProjectError::Io {
-                path: output_path.clone(),
-                source: io::Error::other(format!(
-                    "{write_error}; rollback also failed: {}",
-                    rollback_failures.join(", ")
-                )),
+                path: path.clone(),
+                source: io::Error::other(if failures.is_empty() {
+                    error.to_string()
+                } else {
+                    format!("{error}; rollback failed: {}", failures.join(", "))
+                }),
             });
         }
-        written += 1;
     }
-    Ok(prepared
-        .into_iter()
-        .map(|(relative_path, _, _, _)| relative_path)
-        .collect())
+    Ok(writes.keys().cloned().collect())
 }
 
 pub(super) fn document_text(
     session: &ProjectSession,
-    relative_path: &Utf8Path,
+    document_id: &DocumentId,
     document: &SourceDocument,
 ) -> Result<String, ExportProjectError> {
+    let relative_path = document_id.path();
     match &document.kind {
         SourceDocumentKind::Dawn { original_value } => {
             let existing = mapping(original_value);
@@ -99,8 +139,8 @@ pub(super) fn document_text(
                 );
             }
             for object in &document.objects {
-                let value = if has_typed_object(session, relative_path, object) {
-                    serialize_source_object(session, relative_path, object)?
+                let value = if has_typed_object(session, document_id, object) {
+                    serialize_source_object(session, document_id, object)?
                 } else {
                     existing
                         .and_then(|mapping| mapping.get(string_value(&object.id)))
@@ -128,7 +168,7 @@ pub(super) fn document_text(
 
 pub(super) fn has_typed_object(
     session: &ProjectSession,
-    document: &Utf8Path,
+    document: &DocumentId,
     id: &SourceObjectId,
 ) -> bool {
     match id.kind {
@@ -234,25 +274,20 @@ pub(super) fn has_typed_object(
 
 pub(super) fn qualified_identity(
     session: &ProjectSession,
-    document: &Utf8Path,
+    document: &DocumentId,
     id: &SourceObjectId,
 ) -> Option<SourceIdentity> {
     session
         .source
         .documents
-        .get(&session.source.project_document(document.to_path_buf()))
+        .get(document)
         .is_some_and(|document| document.objects.contains(id))
-        .then(|| {
-            SourceIdentity::from_document(
-                session.source.project_document(document.to_path_buf()),
-                id.id.clone(),
-            )
-        })
+        .then(|| SourceIdentity::from_document(document.clone(), id.id.clone()))
 }
 
 pub(super) fn serialize_source_object(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     id: &SourceObjectId,
 ) -> Result<Value, ExportProjectError> {
     match id.kind {
@@ -368,16 +403,19 @@ pub(super) fn serialize_source_object(
         SourceObjectKind::EffectDefinition
         | SourceObjectKind::OperatorDefinition
         | SourceObjectKind::EffectInstance => Err(ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_document.path().to_path_buf(),
             reference: id.id.clone(),
             message: "DSL definitions are preserved as source documents".to_string(),
         }),
     }
 }
 
-pub(super) fn missing_typed_object(path: &Utf8Path, id: &SourceObjectId) -> ExportProjectError {
+pub(super) fn missing_typed_object(
+    document: &DocumentId,
+    id: &SourceObjectId,
+) -> ExportProjectError {
     ExportProjectError::InvalidReference {
-        path: path.to_path_buf(),
+        path: document.path().to_path_buf(),
         reference: id.id.clone(),
         message: "typed project object is missing".to_string(),
     }
@@ -420,7 +458,7 @@ pub(super) fn import_decls_value(imports: &[ImportEdge]) -> Value {
 
 pub(super) fn project_root_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("project");
     value.insert(
@@ -461,7 +499,7 @@ use dawn_language::controller::ControllerId;
 use dawn_language::effect::{CurveId, EffectDefinitionId, GradientId};
 use dawn_language::element::ElementTreeId;
 use dawn_language::fixture_profile::FixtureProfileId;
-use dawn_language::identity::SourceIdentity;
+use dawn_language::identity::{DocumentId, SourceIdentity};
 use dawn_language::model::ProjectId;
 use dawn_language::operator::OperatorDefinitionId;
 use dawn_language::patch::PatchId;

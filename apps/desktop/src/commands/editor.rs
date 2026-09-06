@@ -2,36 +2,82 @@ use super::*;
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn open_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.open_file_path(&path)
+pub(crate) fn update_document(
+    update: crate::dto::DocumentUpdate,
+    state: State<'_, DesktopState>,
+) -> Result<AppSnapshot, String> {
+    state.update_document(update)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn close_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.close_file_path(&path)
+pub(crate) fn save_all(state: State<'_, DesktopState>) -> Result<AppSnapshot, String> {
+    state.save_all()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn request_transition(
+    request: crate::dto::TransitionRequest,
+    state: State<'_, DesktopState>,
+) -> Result<crate::dto::TransitionResult, String> {
+    state.request_transition(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn reconcile_external_files(
+    state: State<'_, DesktopState>,
+) -> Result<AppSnapshot, String> {
+    state.reconcile_external_files()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn resolve_external_conflict(
+    epoch: u32,
+    path: String,
+    revision: u32,
+    decision: crate::dto::ExternalConflictDecision,
+    state: State<'_, DesktopState>,
+) -> Result<AppSnapshot, String> {
+    state.resolve_external_conflict(epoch, path, revision, decision)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn complete_close(
+    epoch: u32,
+    revision: u32,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<(), String> {
+    state.finish_close(epoch, revision, || {
+        let window = app
+            .get_window("main")
+            .ok_or("The main window is unavailable")?;
+        if let Some(geometry) = crate::persistence::read_window_state(&window) {
+            state.persistence().record_main_window(geometry)?;
+        }
+        let preview = app.state::<crate::preview::PreviewWindowService>();
+        preview
+            .close_for_main_shutdown(&app, state.persistence())
+            .map_err(|error| error.to_string())?;
+        state.shutdown_live_output();
+        window.destroy().map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn open_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.set_active_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn set_active_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.set_active_file_path(&path)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub(crate) fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_active_text(text)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub(crate) fn autosave_active_text(
-    path: String,
-    text: String,
-    state: State<'_, DesktopState>,
-) -> Result<AppSnapshot, String> {
-    state.autosave_active_text(&path, text)
 }
 
 #[tauri::command]
@@ -71,16 +117,4 @@ pub(crate) fn undo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
 #[specta::specta]
 pub(crate) fn redo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
     state.redo_active_edit()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub(crate) fn flush_autosave(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.save_active_buffer()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub(crate) fn reload_active_buffer_from_disk(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.reload_active_buffer_from_disk()
 }

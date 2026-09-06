@@ -1,5 +1,6 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import { runWorkspaceTransition } from "../workspaceTransitions";
 import {
   ChevronDown,
   ChevronRight,
@@ -115,7 +116,7 @@ export function ExplorerView({
           <button type="button" title="Collapse all" aria-label="Collapse all" onClick={() => treeRef.current?.closeAll()}>
             <SquareStack size={THEME_METRICS.iconSizeCompact} />
           </button>
-          <button type="button" title="Refresh" aria-label="Refresh project" onClick={() => void runSnapshotCommand(commands.reloadProject)}>
+          <button type="button" title="Refresh" aria-label="Refresh project" onClick={() => void runWorkspaceTransition({ type: "reloadProject" })}>
             <RefreshCw size={THEME_METRICS.iconSizeCompact} />
           </button>
         </div>

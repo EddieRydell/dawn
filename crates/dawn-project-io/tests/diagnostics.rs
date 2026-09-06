@@ -11,6 +11,57 @@ use std::fs;
 use common::{load_project_package, write_project_package};
 
 #[test]
+fn all_source_kinds_are_analyzed_from_overrides_without_writing_disk() {
+    let workspace = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let root = workspace.join("examples/starter");
+    let original = dawn_project_io::project_source_texts(&root).unwrap();
+    let sequence = Utf8PathBuf::from("sequences/layer_test.sequence.dawn");
+    let mut overrides = original.clone();
+    overrides.insert(
+        sequence.clone(),
+        original[&sequence].replace("frame_rate: 144", "frame_rate: 90"),
+    );
+    let report = dawn_project_io::check_package_with_overrides(&root, &overrides);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let session = report.session.unwrap();
+    assert!(
+        session
+            .project
+            .sequences
+            .values()
+            .any(|sequence| sequence.frame_rate == 90)
+    );
+    for path in [
+        dawn_package::MANIFEST_FILE,
+        dawn_package::LOCK_FILE,
+        "effects/scan-sweep.effect.dawn",
+        "operators/gain.operator.dawn",
+        sequence.as_str(),
+    ] {
+        let mut invalid = original.clone();
+        invalid.insert(path.into(), "[ invalid source".into());
+        let report = dawn_project_io::check_package_with_overrides(&root, &invalid);
+        assert!(report.session.is_none(), "{path} unexpectedly compiled");
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.path == Utf8Path::new(path)),
+            "{path}: {:?}",
+            report.diagnostics
+        );
+    }
+    assert_eq!(
+        dawn_project_io::project_source_texts(&root).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn invalid_yaml_reports_parser_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();

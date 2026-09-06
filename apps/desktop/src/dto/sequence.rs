@@ -49,62 +49,6 @@ pub struct SequenceGuiDocument {
     pub control_clips: Vec<SequenceControlClip>,
     pub composition_graph: SequenceCompositionGraph,
     pub automation_clips: Vec<SequenceAutomationClip>,
-    pub mode: GuiDocumentMode,
-    pub recovery_items: Vec<InvalidSequencePlaceholder>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum GuiDocumentMode {
-    Editable,
-    Recovery,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct InvalidSequencePlaceholder {
-    pub kind: InvalidSequencePlaceholderKind,
-    pub id: String,
-    pub placement: InvalidSequencePlacement,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum InvalidSequencePlaceholderKind {
-    Effect,
-    AutomationClip,
-    ControlClip,
-    GraphNode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum InvalidSequencePlacement {
-    Timeline {
-        start_seconds: f32,
-        duration_seconds: f32,
-        lane: InvalidSequenceLane,
-    },
-    Graph {
-        x: f32,
-        y: f32,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum InvalidSequenceLane {
-    Layer { layer_id: u32 },
-    Lane { lane_index: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -150,7 +94,6 @@ pub struct SequenceDetachedAutomationBinding {
 pub enum SequenceAutomationDetachmentReason {
     TargetDeleted,
     DefinitionChanged,
-    OperatorSchemaChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

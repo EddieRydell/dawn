@@ -29,6 +29,7 @@ pub enum GuiDocument {
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiDocumentRequest {
+    pub project_revision: u32,
     pub path: String,
     pub view: DocumentViewId,
     pub object_key: Option<String>,
@@ -64,7 +65,7 @@ pub struct GuiEditResult {
     pub document: GuiDocument,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum BufferExternalState {
     Current,

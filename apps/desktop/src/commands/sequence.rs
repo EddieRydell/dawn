@@ -5,7 +5,7 @@ use super::*;
 pub(crate) fn get_gui_document(
     request: GuiDocumentRequest,
     state: State<'_, DesktopState>,
-) -> GuiDocument {
+) -> crate::dto::GuiDocumentResult {
     state.get_gui_document(request)
 }
 
@@ -89,10 +89,11 @@ pub(crate) fn discard_detached_automation(
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn apply_sequence_selection_edit(
+    request: GuiDocumentRequest,
     edit: SequenceSelectionEdit,
     state: State<'_, DesktopState>,
 ) -> SequenceSelectionEditResult {
-    state.apply_sequence_selection_edit(edit)
+    state.apply_sequence_selection_edit(request, edit)
 }
 
 #[tauri::command]
@@ -107,7 +108,7 @@ pub(crate) fn choose_sequence_audio(
     else {
         return GuiEditResult {
             snapshot: state.snapshot(),
-            document: state.get_gui_document(request),
+            document: state.get_gui_document(request).document,
         };
     };
     let snapshot = state.snapshot();
@@ -119,7 +120,7 @@ pub(crate) fn choose_sequence_audio(
             });
             return GuiEditResult {
                 snapshot,
-                document: state.get_gui_document(request),
+                document: state.get_gui_document(request).document,
             };
         }
     };
@@ -129,7 +130,7 @@ pub(crate) fn choose_sequence_audio(
         });
         return GuiEditResult {
             snapshot,
-            document: state.get_gui_document(request),
+            document: state.get_gui_document(request).document,
         };
     }
     state.apply_gui_edit(

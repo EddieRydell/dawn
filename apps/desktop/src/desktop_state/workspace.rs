@@ -2,17 +2,12 @@ use std::fs;
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_project_io::{
-    check_document_text, check_package, check_project_document_text, save_project,
-};
 
 use super::{
-    DesktopState, FsEntryKind, LoadedProject, PendingOperatorRewriteKind, absolute_project_path,
-    absolute_root_path, descriptor_for_path, editor_buffer_for_path, lock_unpoisoned,
-    path_matches_or_is_child, project_diagnostic, recovery_descriptor_for_path,
-    recovery_editor_buffer, upsert_tab, valid_child_name,
+    DesktopState, FsEntryKind, LoadedProject, absolute_project_path, absolute_root_path,
+    descriptor_for_path, lock_unpoisoned, path_matches_or_is_child, valid_child_name,
 };
-use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
+use crate::dto::{AppSnapshot, EditorViewMode, NewSequenceRequest};
 use crate::dto::{
     WorkspaceExplorerState, WorkspacePathChangeImpact, WorkspacePathChangePlan,
     WorkspacePathChangeRequest, WorkspacePathOwnership,
@@ -36,7 +31,7 @@ impl DesktopState {
                 "Open a project by selecting its dawn-package.json manifest.",
             );
         };
-        self.apply_project_open_check(root.as_str(), check_package(root))
+        self.load_working_copy(root)
     }
 
     pub fn save_editor_view_state(&self, update: PersistedEditorViewStateUpdate) -> AppSnapshot {
@@ -83,37 +78,40 @@ impl DesktopState {
     }
 
     pub fn open_file_path(&self, path: &str) -> AppSnapshot {
-        let relative_path = Utf8PathBuf::from(path);
-        let (buffer, descriptor) = match &*lock_unpoisoned(&self.project) {
-            LoadedProject::Ready(project) => (
-                editor_buffer_for_path(project, &relative_path),
-                descriptor_for_path(project, &relative_path),
-            ),
-            LoadedProject::Recovery(recovery) => (
-                recovery_editor_buffer(recovery, &relative_path),
-                recovery_descriptor_for_path(recovery, &relative_path),
-            ),
-            LoadedProject::Closed => (None, None),
+        let Some(root) = self.project_root_path() else {
+            return self.snapshot();
         };
-        let Some(buffer) = buffer else {
-            return self.snapshot_with_error(
-                "file.open",
-                path,
-                "File is not part of the open project",
+        let relative = Utf8PathBuf::from(path);
+        let Some(absolute) = absolute_root_path(&root, &relative) else {
+            return self.snapshot_with_error("file.open", path, "Invalid project file path");
+        };
+        let known = lock_unpoisoned(&self.workspace)
+            .documents
+            .contains_key(&relative);
+        if !known {
+            let text = match fs::read_to_string(&absolute) {
+                Ok(text) => text,
+                Err(error) => {
+                    return self.snapshot_with_error("file.open", path, &error.to_string());
+                }
+            };
+            lock_unpoisoned(&self.workspace).documents.insert(
+                relative.clone(),
+                super::workspace_state::WorkingDocument::new(&relative, text),
             );
-        };
-        let Some(descriptor) = descriptor else {
-            return self.snapshot_with_error(
-                "file.open",
-                path,
-                "File is not part of the open project",
-            );
-        };
+        }
+        let descriptor = self
+            .project_session()
+            .and_then(|project| descriptor_for_path(&project, &relative));
+        {
+            let mut workspace = lock_unpoisoned(&self.workspace);
+            if !workspace.tabs.contains(&relative) {
+                workspace.tabs.push(relative);
+            }
+            workspace.view.active_file = Some(path.to_string());
+        }
         self.update_snapshot(|snapshot| {
-            upsert_tab(&mut snapshot.tabs, buffer.clone());
-            snapshot.active_file = Some(buffer.path.clone());
-            snapshot.active_buffer = Some(buffer);
-            snapshot.active_document_descriptor = Some(descriptor);
+            snapshot.active_document_descriptor = descriptor;
             snapshot
                 .workspace_explorer
                 .recent_files
@@ -121,9 +119,8 @@ impl DesktopState {
             snapshot
                 .workspace_explorer
                 .recent_files
-                .insert(0, path.to_string());
+                .insert(0, path.into());
             snapshot.workspace_explorer.recent_files.truncate(20);
-            snapshot.status = format!("Opened {path}");
         })
     }
 
@@ -206,8 +203,14 @@ impl DesktopState {
         &self,
         request: WorkspacePathChangeRequest,
     ) -> Result<AppSnapshot, String> {
+        let _authoring = self.settled_authoring();
         let description = self.plan_workspace_path_change(request.clone())?;
-        if description.structural && self.snapshot().tabs.iter().any(|buffer| buffer.dirty) {
+        if description.structural
+            && lock_unpoisoned(&self.workspace)
+                .documents
+                .values()
+                .any(|document| document.buffer.dirty)
+        {
             return Err(
                 "Structural path changes require every open text buffer to be saved.".to_string(),
             );
@@ -220,8 +223,8 @@ impl DesktopState {
             Utf8Path::new(&request.source),
             Utf8Path::new(&request.destination),
         )?;
-        lock_unpoisoned(&self.gui_save).invalidate_pending();
-        lock_unpoisoned(&self.render_refresh).invalidate_pending();
+        self.working_copy.invalidate_pending();
+        self.render_refresh.invalidate_pending();
         let candidate = {
             let _filesystem = lock_unpoisoned(&self.filesystem);
             dawn_project_io::apply_path_change(&project, &plan)?
@@ -229,26 +232,47 @@ impl DesktopState {
         let root = candidate.source.project_root().to_string();
         self.persistence
             .remap_project_paths(&root, &request.source, &request.destination)?;
-        *lock_unpoisoned(&self.project) =
-            LoadedProject::Ready(std::sync::Arc::new(candidate.clone()));
+        let candidate = std::sync::Arc::new(candidate);
         lock_unpoisoned(&self.gui_history).clear();
-        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         let entries = super::workspace_entries(&candidate);
         let package = super::package_status(Utf8Path::new(&root), Some(&candidate));
         let remap = |path: &str| remap_workspace_path(path, &request.source, &request.destination);
-        let snapshot = self.update_snapshot(|snapshot| {
-            for tab in &mut snapshot.tabs {
-                tab.path = remap(&tab.path);
-                tab.name = Utf8Path::new(&tab.path)
-                    .file_name()
-                    .unwrap_or(tab.path.as_str())
-                    .to_string();
+        {
+            let mut workspace = lock_unpoisoned(&self.workspace);
+            workspace.documents = std::mem::take(&mut workspace.documents)
+                .into_iter()
+                .map(|(path, mut document)| {
+                    let path = Utf8PathBuf::from(remap(path.as_str()));
+                    document.buffer.path = path.to_string();
+                    document.buffer.name = path.file_name().unwrap_or(path.as_str()).to_string();
+                    (path, document)
+                })
+                .collect();
+            for (path, document) in &mut workspace.documents {
+                if document.buffer.dirty {
+                    continue;
+                }
+                if let Some(bytes) =
+                    super::working_copy::read_disk(&Utf8Path::new(&root).join(path))?
+                {
+                    let text =
+                        String::from_utf8(bytes.clone()).map_err(|error| error.to_string())?;
+                    document.observed = Some(bytes);
+                    document.edit(text);
+                }
             }
-            snapshot.active_file = snapshot.active_file.as_deref().map(remap);
-            snapshot.active_buffer = snapshot
-                .active_file
-                .as_deref()
-                .and_then(|path| super::editor_buffer_for_path(&candidate, Utf8Path::new(path)));
+            workspace.tabs = workspace
+                .tabs
+                .iter()
+                .map(|path| Utf8PathBuf::from(remap(path.as_str())))
+                .collect();
+            workspace.view.active_file = workspace.view.active_file.as_deref().map(remap);
+            workspace.view.project_revision += 1;
+            workspace.view.state_revision += 1;
+            workspace.typed_revision = Some(workspace.view.project_revision);
+            workspace.project = LoadedProject::Ready(std::sync::Arc::clone(&candidate));
+        }
+        let snapshot = self.update_snapshot(|snapshot| {
             snapshot.active_document_descriptor = snapshot
                 .active_file
                 .as_deref()
@@ -267,8 +291,6 @@ impl DesktopState {
                 .collect();
             snapshot.project_entries = entries;
             snapshot.package = package;
-            snapshot.pending_operator_rewrite = None;
-            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
             snapshot.status = if description.structural {
                 "Structural path change applied; GUI undo and redo history were cleared."
                     .to_string()
@@ -276,237 +298,61 @@ impl DesktopState {
                 "Path change applied.".to_string()
             };
         });
-        self.schedule_render_refresh(std::sync::Arc::new(candidate));
+        self.schedule_render_refresh(candidate);
         Ok(snapshot)
     }
 
     pub fn set_active_file_path(&self, path: &str) -> AppSnapshot {
-        let relative_path = Utf8PathBuf::from(path);
-        let current_buffer = self
-            .snapshot()
-            .tabs
-            .into_iter()
-            .find(|tab| tab.path == path);
-        let (buffer, descriptor) = match &*lock_unpoisoned(&self.project) {
-            LoadedProject::Ready(project) => (
-                current_buffer.or_else(|| editor_buffer_for_path(project, &relative_path)),
-                descriptor_for_path(project, &relative_path),
-            ),
-            LoadedProject::Recovery(recovery) => (
-                current_buffer.or_else(|| recovery_editor_buffer(recovery, &relative_path)),
-                recovery_descriptor_for_path(recovery, &relative_path),
-            ),
-            LoadedProject::Closed => (None, None),
-        };
-        let Some(buffer) = buffer else {
-            return self.snapshot_with_error(
-                "file.activate",
-                path,
-                "File is not part of the loaded project",
-            );
-        };
-        let Some(descriptor) = descriptor else {
-            return self.snapshot_with_error(
-                "file.activate",
-                path,
-                "File is not part of the loaded project",
-            );
-        };
-        self.update_snapshot(|snapshot| {
-            snapshot.active_file = Some(buffer.path.clone());
-            snapshot.active_buffer = Some(buffer);
-            snapshot.active_document_descriptor = Some(descriptor);
-        })
+        let _authoring = self.settled_authoring();
+        self.open_file_path(path)
     }
 
-    pub fn close_file_path(&self, path: &str) -> AppSnapshot {
-        self.update_snapshot(|snapshot| {
-            let Some(index) = snapshot.tabs.iter().position(|tab| tab.path == path) else {
-                return;
+    pub(super) fn close_file_path(&self, path: &str) -> AppSnapshot {
+        let next = {
+            let mut workspace = lock_unpoisoned(&self.workspace);
+            let Some(index) = workspace.tabs.iter().position(|item| item.as_str() == path) else {
+                return workspace.snapshot();
             };
-            snapshot.tabs.remove(index);
-            if snapshot.active_file.as_deref() != Some(path) {
-                return;
+            workspace.tabs.remove(index);
+            if workspace.view.active_file.as_deref() == Some(path) {
+                workspace.view.active_file = workspace
+                    .tabs
+                    .get(index)
+                    .or_else(|| workspace.tabs.last())
+                    .map(ToString::to_string);
             }
-            if let Some(next) = snapshot
-                .tabs
-                .get(index)
-                .or_else(|| {
-                    index
-                        .checked_sub(1)
-                        .and_then(|previous| snapshot.tabs.get(previous))
-                })
-                .cloned()
-            {
-                snapshot.active_file = Some(next.path.clone());
-                snapshot.active_document_descriptor = self
-                    .project_session()
-                    .and_then(|project| descriptor_for_path(&project, Utf8Path::new(&next.path)));
-                if snapshot.active_document_descriptor.is_none() {
-                    snapshot.active_document_descriptor =
-                        self.project_recovery().and_then(|recovery| {
-                            recovery_descriptor_for_path(&recovery, Utf8Path::new(&next.path))
-                        });
-                }
-                snapshot.active_buffer = Some(next);
-            } else {
-                snapshot.active_file = None;
-                snapshot.active_buffer = None;
-                snapshot.active_document_descriptor = None;
-            }
-        })
-    }
-
-    pub fn update_active_text(&self, text: String) -> AppSnapshot {
-        if lock_unpoisoned(&self.pending_operator_rewrite).is_some() {
-            self.invalidate_operator_rewrite();
-        }
-        let active_path = self.snapshot().active_file;
-        let diagnostics = active_path
-            .as_deref()
-            .map(|path| {
-                if is_operator_document(path) {
-                    return check_document_text(Utf8Path::new(path), &text);
-                }
-                self.project_session().map_or_else(
-                    || check_document_text(Utf8Path::new(path), &text),
-                    |project| {
-                        project
-                            .source
-                            .document_for_workspace_path(Utf8Path::new(path))
-                            .map_or_else(
-                                || check_document_text(Utf8Path::new(path), &text),
-                                |document_id| {
-                                    check_project_document_text(&project, &document_id, &text)
-                                },
-                            )
-                    },
-                )
-            })
-            .unwrap_or_default();
-        self.update_snapshot(|snapshot| {
-            if let Some(buffer) = snapshot.active_buffer.as_mut() {
-                let changed = buffer.text != text;
-                buffer.text = text.clone();
-                buffer.dirty |= changed;
-                if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == buffer.path) {
-                    tab.text = text.clone();
-                    tab.dirty |= changed;
-                }
-            }
-            if let Some(active_path) = active_path.as_deref() {
-                snapshot
-                    .diagnostics
-                    .retain(|diagnostic| diagnostic.path != active_path);
-                snapshot
-                    .diagnostics
-                    .extend(diagnostics.iter().map(project_diagnostic));
-            }
-        })
-    }
-
-    pub fn autosave_active_text(&self, path: &str, text: String) -> Result<AppSnapshot, String> {
-        if self.snapshot().active_file.as_deref() != Some(path) {
-            return Ok(self.snapshot());
-        }
-        let pending_matches = lock_unpoisoned(&self.pending_operator_rewrite)
-            .as_ref()
-            .is_some_and(|pending| {
-                matches!(
-                    &pending.kind,
-                    PendingOperatorRewriteKind::Document {
-                        path: pending_path,
-                        ..
-                    } if pending_path == Utf8Path::new(path)
-                )
-            });
-        if pending_matches
-            && self
-                .snapshot()
-                .active_buffer
-                .as_ref()
-                .is_some_and(|buffer| buffer.text == text)
-        {
-            return Ok(self.snapshot());
-        }
-        self.update_active_text(text);
-        let snapshot = self.snapshot();
-        let Some(buffer) = snapshot.active_buffer.as_ref() else {
-            return Err("No active text buffer to autosave".to_string());
+            workspace.view.active_file.clone()
         };
-        if is_operator_document(&buffer.path) && self.project_session().is_some() {
-            return Ok(snapshot);
+        if let Some(next) = next {
+            self.open_file_path(&next)
+        } else {
+            self.update_snapshot(|snapshot| snapshot.active_document_descriptor = None)
         }
-        let root = self
-            .project_root_path()
-            .ok_or_else(|| "No project is open".to_string())?;
-        let relative_path = Utf8PathBuf::from(&buffer.path);
-        let Some(path) = absolute_root_path(&root, &relative_path) else {
-            return Err("File path is outside the open project".to_string());
-        };
-        {
-            let _filesystem = lock_unpoisoned(&self.filesystem);
-            fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
-        }
-        self.after_file_saved(&buffer.path);
-        if !self.schedule_project_analysis(root) {
-            return Err("Project analysis worker is unavailable".to_string());
-        }
-        Ok(self.update_snapshot(|snapshot| {
-            snapshot.status = format!("Saved {}; analyzing project", buffer.path);
-        }))
     }
 
     pub fn set_editor_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
+        if matches!(mode, EditorViewMode::Gui) {
+            if let Err(error) = self.reconcile_external_files() {
+                return self.snapshot_with_error("project.reconcile", "", &error);
+            }
+            let _authoring = self.settled_authoring();
+            if self.project_session().is_none() {
+                self.focus_first_diagnostic();
+                return self.update_snapshot(|snapshot| {
+                    snapshot.settings.editor_view_mode = EditorViewMode::Text;
+                    snapshot.workspace_layout.active_sidebar_view =
+                        crate::dto::SidebarView::Problems;
+                    snapshot.workspace_layout.sidebar_collapsed = false;
+                    snapshot.status = "Fix the project errors before entering GUI".into();
+                });
+            }
+            let mut settings = self.snapshot().settings;
+            settings.editor_view_mode = mode;
+            return self.update_app_settings_locked(settings);
+        }
         let mut settings = self.snapshot().settings;
         settings.editor_view_mode = mode;
         self.update_app_settings(settings)
-    }
-
-    pub fn save_active_buffer(&self) -> AppSnapshot {
-        let snapshot = self.snapshot();
-        let Some(buffer) = snapshot.active_buffer else {
-            return snapshot;
-        };
-        let Some(root) = self.project_root_path() else {
-            return self.snapshot();
-        };
-        if self.project_session().is_some() {
-            match self.save_operator_draft(&buffer.path, &buffer.text) {
-                Ok(Some(snapshot)) => return snapshot,
-                Ok(None) => {}
-                Err(error) => {
-                    return self.snapshot_with_error("file.save", &buffer.path, &error);
-                }
-            }
-        }
-        let relative_path = Utf8PathBuf::from(&buffer.path);
-        let Some(path) = absolute_root_path(&root, &relative_path) else {
-            return self.snapshot_with_error(
-                "file.save",
-                &buffer.path,
-                "File path is outside the loaded project",
-            );
-        };
-        let result = {
-            let _filesystem = lock_unpoisoned(&self.filesystem);
-            fs::write(&path, &buffer.text)
-        };
-        match result {
-            Ok(()) => {
-                self.after_file_saved(&buffer.path);
-                self.apply_project_refresh_check(root.as_str(), check_package(&root))
-            }
-            Err(error) => self.snapshot_with_error("file.save", &buffer.path, &error.to_string()),
-        }
-    }
-
-    pub fn reload_active_buffer_from_disk(&self) -> AppSnapshot {
-        let snapshot = self.snapshot();
-        let Some(active_file) = snapshot.active_file else {
-            return snapshot;
-        };
-        self.open_file_path(&active_file)
     }
 
     pub fn create_file(&self, parent: &str, name: &str) -> AppSnapshot {
@@ -554,10 +400,11 @@ impl DesktopState {
         if let Err(error) = result {
             return self.snapshot_with_error("project.create", root.as_str(), &error);
         }
-        self.apply_project_open_check(root.as_str(), check_package(&root))
+        self.load_working_copy(&root)
     }
 
     pub fn create_sequence(&self, request: NewSequenceRequest) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
@@ -569,7 +416,6 @@ impl DesktopState {
                 "Sequence duration is outside the supported range",
             );
         };
-        let root = project.source.project_root().to_path_buf();
         let mut edited = (*project).clone();
         let result = dawn_project_io::insert_sequence(
             &mut edited,
@@ -577,11 +423,7 @@ impl DesktopState {
             request.object_key.clone(),
             dawn_language::values::DawnDuration(duration),
             request.frame_rate,
-        )
-        .and_then(|_| {
-            let _filesystem = lock_unpoisoned(&self.filesystem);
-            save_project(&edited).map(|_| ())
-        });
+        );
         if let Err(error) = result {
             return self.snapshot_with_error(
                 "sequence.create",
@@ -589,18 +431,40 @@ impl DesktopState {
                 &error.to_string(),
             );
         }
-        let refreshed = self.apply_project_refresh_check(root.as_str(), check_package(&root));
-        if refreshed
-            .diagnostics
-            .iter()
-            .any(|diagnostic| matches!(diagnostic.severity, DiagnosticSeverity::Error))
-        {
-            return refreshed;
+        let mut paths = std::collections::BTreeSet::from([request.file_path.clone()]);
+        if let Some(entrypoint) = &edited.source.entrypoint {
+            paths.insert(entrypoint.path().to_string());
         }
+        let texts = match super::generated_source_texts(&edited, &paths) {
+            Ok(texts) => texts,
+            Err(error) => {
+                return self.snapshot_with_error("sequence.create", &request.file_path, &error);
+            }
+        };
+        if let Err(error) =
+            self.accept_gui_sources(std::sync::Arc::new(edited), texts, "Sequence created")
+        {
+            return self.snapshot_with_error("sequence.create", &request.file_path, &error);
+        }
+        lock_unpoisoned(&self.gui_history).clear();
         self.open_file_path(&request.file_path)
     }
 
     pub fn delete_path(&self, path: &str) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
+        if lock_unpoisoned(&self.workspace)
+            .documents
+            .values()
+            .any(|document| {
+                document.buffer.dirty && path_matches_or_is_child(&document.buffer.path, path)
+            })
+        {
+            return self.snapshot_with_error(
+                "file.delete",
+                path,
+                "Save or discard edits before deleting this path",
+            );
+        }
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
@@ -632,19 +496,6 @@ impl DesktopState {
             Err(error) => self.snapshot_with_error("file.delete", path, &error.to_string()),
         }
     }
-
-    pub fn reload_project(&self) -> AppSnapshot {
-        let Some(root) = self.project_root_path() else {
-            return self.snapshot();
-        };
-        self.apply_project_refresh_check(root.as_str(), check_package(&root))
-    }
-}
-
-fn is_operator_document(path: &str) -> bool {
-    Utf8Path::new(path)
-        .file_name()
-        .is_some_and(|name| name.ends_with(".operator.dawn"))
 }
 
 fn remap_workspace_path(path: &str, source: &str, destination: &str) -> String {

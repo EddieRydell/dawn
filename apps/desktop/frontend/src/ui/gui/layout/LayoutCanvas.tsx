@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { commands } from "../../../api";
-import type { PreviewDocument } from "../../../types";
-import { runGuiEditCommand } from "../../../store";
+import type { GuiDocumentRequest, PreviewDocument } from "../../../types";
+import { runGuiEditCommand, useAppStore } from "../../../store";
 import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 import { denormalizeTransform, drawSpatialCanvas, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Point3, type Transform } from "../shared";
 import { SpatialControls, useSpacePressed, useSpatialViewport } from "../SpatialViewport";
@@ -36,6 +36,7 @@ function segmentIntersectsBox(from: { x: number; y: number }, to: { x: number; y
 export function LayoutCanvas({ document, selected, setSelected }: { document: PreviewDocument; selected: GuiFocus; setSelected: (id: GuiFocus) => void }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const gesture = useRef<Gesture>(null);
+  const gestureRequest = useRef<GuiDocumentRequest | null>(null);
   const pendingDraft = useRef<{ id: number; draft: Transform } | null>(null);
   const [revision, render] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -127,6 +128,7 @@ export function LayoutCanvas({ document, selected, setSelected }: { document: Pr
       onKeyDown={(event) => { if (event.key === "Home") { event.preventDefault(); spatial.reset(); } }}
       onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.nativeEvent.offsetX, y: event.nativeEvent.offsetY }); }}
       onPointerDown={(event) => {
+        gestureRequest.current = useAppStore.getState().guiRequest;
         if (event.button === 2) return;
         event.currentTarget.setPointerCapture(event.pointerId); setMenu(null);
         if (event.button === 1 || spacePressed.current) { gesture.current = { type: "pan", x: event.clientX, y: event.clientY }; return; }
@@ -162,7 +164,7 @@ export function LayoutCanvas({ document, selected, setSelected }: { document: Pr
         if (current?.type === "object") {
           pendingDraft.current = { id: current.id, draft: current.draft };
           render((value) => value + 1);
-          void runGuiEditCommand(() => commands.applyPreviewGuiEdit({ type: "updatePlacementTransform", id: current.id, transform: denormalizeTransform(current.draft) })).finally(() => {
+          void runGuiEditCommand((request) => commands.applyPreviewGuiEdit(request, { type: "updatePlacementTransform", id: current.id, transform: denormalizeTransform(current.draft) }), gestureRequest.current).finally(() => {
             pendingDraft.current = null;
             render((value) => value + 1);
           });

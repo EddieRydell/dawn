@@ -1,9 +1,9 @@
 import type { AppSnapshot, EditorViewMode } from "./types";
 
-type EditorViewSnapshot = Pick<AppSnapshot, "settings" | "activeDocumentDescriptor">;
+type EditorViewSnapshot = Pick<AppSnapshot, "settings" | "activeDocumentDescriptor" | "projectHealth">;
 
 export function effectiveEditorViewMode(snapshot: EditorViewSnapshot | null): EditorViewMode {
-  if (snapshot === null || (snapshot.settings.editorViewMode ?? "gui") === "text") {
+  if (snapshot === null || snapshot.projectHealth !== "ready" || snapshot.settings.editorViewMode === "text") {
     return "text";
   }
   return descriptorHasGuiView(snapshot.activeDocumentDescriptor) ? "gui" : "text";

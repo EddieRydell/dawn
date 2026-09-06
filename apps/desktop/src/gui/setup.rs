@@ -4,7 +4,6 @@ use dawn_language::controller::{ControllerId, ControllerPortAddress, ControllerP
 use dawn_language::element::{ElementCellAddress, ElementNodeId, ElementNodeKind};
 use dawn_language::patch::{PatchEdge, PatchNode, PatchNodeId, PatchPortId};
 use dawn_language::preview::PropInstanceId;
-use dawn_language::validation::validate_project;
 use dawn_project_io::ProjectSession;
 
 use super::model::source_identity_from_gui;
@@ -490,8 +489,7 @@ pub(super) fn edit_setup(
             port.slot_count = slot_count;
         }
     }
-    validate_project(&session.project)
-        .map_err(|error| GuiMutationError::Invalid(format!("{error:?}")))
+    Ok(())
 }
 
 fn tree_mut<'a>(

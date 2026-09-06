@@ -148,7 +148,7 @@ function ControlClipPanel({ document }: { document: SequenceEditorDocument }) {
           <strong>{clip.targetLabel}</strong>
           <span>{clip.controlType} · {clip.value}</span>
           <label>Start
-            <input type="number" min={0} step={0.01} defaultValue={clip.startSeconds} onBlur={(event) => void runGuiEditCommand(() => commands.applySequenceGuiEdit({
+            <input type="number" min={0} step={0.01} defaultValue={clip.startSeconds} onBlur={(event) => void runGuiEditCommand((request) => commands.applySequenceGuiEdit(request, {
               type: "moveControlClip",
               id: clip.id,
               startSeconds: Number(event.currentTarget.value),
@@ -157,14 +157,14 @@ function ControlClipPanel({ document }: { document: SequenceEditorDocument }) {
             }))} />
           </label>
           <label>Duration
-            <input type="number" min={0.001} step={0.01} defaultValue={clip.durationSeconds} onBlur={(event) => void runGuiEditCommand(() => commands.applySequenceGuiEdit({
+            <input type="number" min={0.001} step={0.01} defaultValue={clip.durationSeconds} onBlur={(event) => void runGuiEditCommand((request) => commands.applySequenceGuiEdit(request, {
               type: "resizeControlClip",
               id: clip.id,
               startSeconds: clip.startSeconds,
               durationSeconds: Number(event.currentTarget.value)
             }))} />
           </label>
-          <button type="button" onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteControlClip", id: clip.id }))}>
+          <button type="button" onClick={() => void runGuiEditCommand((request) => commands.applySequenceGuiEdit(request, { type: "deleteControlClip", id: clip.id }))}>
             <Trash2 size={THEME_METRICS.iconSizeExtraSmall} /> Delete
           </button>
         </div>
@@ -208,7 +208,7 @@ function EffectInspectorPanel({
             <div className="effect-param-actions">
               <button
                 type="button"
-                onClick={() => void runGuiEditCommand(() => commands.rebindDetachedAutomation(
+                onClick={() => void runGuiEditCommand((request) => commands.rebindDetachedAutomation(request, 
                   automationClip.id,
                   index,
                   binding.target,
@@ -220,7 +220,7 @@ function EffectInspectorPanel({
               <button
                 type="button"
                 className="danger"
-                onClick={() => void runGuiEditCommand(() => commands.discardDetachedAutomation(
+                onClick={() => void runGuiEditCommand((request) => commands.discardDetachedAutomation(request, 
                   automationClip.id,
                   index
                 ))}
@@ -233,8 +233,8 @@ function EffectInspectorPanel({
         <button
           type="button"
           onClick={() =>
-            void runGuiEditCommand(() =>
-              commands.applySequenceGuiEdit({ type: "deleteAutomationClip", id: automationClip.id })
+            void runGuiEditCommand((request) =>
+              commands.applySequenceGuiEdit(request, { type: "deleteAutomationClip", id: automationClip.id })
             ).then(() => {
               setSelected(null);
             })
@@ -266,7 +266,7 @@ function EffectInspectorPanel({
         <button
           type="button"
           onClick={() =>
-            void runGuiEditCommand(() => commands.applySequenceSelectionEdit({ type: "delete", selection: sequenceSelection })).then(() => {
+            void runGuiEditCommand((request) => commands.applySequenceSelectionEdit(request, { type: "delete", selection: sequenceSelection })).then(() => {
               setSelected(null);
             })
           }
@@ -288,8 +288,8 @@ function EffectInspectorPanel({
 
   const currentScriptValue = selectedEffectDefinitionValue(effect, document.effectDefinitions);
   const resizeEffect = (startSeconds: number, durationSeconds: number) =>
-    runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "resizeEffect",
         id: effect.id,
         startSeconds: Math.max(0, roundToNanosecond(startSeconds)),
@@ -309,8 +309,8 @@ function EffectInspectorPanel({
           <select
             value={String(effect.layerId)}
             onChange={(event) =>
-              void runGuiEditCommand(() =>
-                commands.applySequenceGuiEdit({
+              void runGuiEditCommand((request) =>
+                commands.applySequenceGuiEdit(request, {
                   type: "setEffectLayer",
                   id: effect.id,
                   layerId: Number(event.currentTarget.value)
@@ -365,8 +365,8 @@ function EffectInspectorPanel({
             onChange={(event) => {
               const definition = document.effectDefinitions[Number(event.currentTarget.value)]?.effect;
               if (definition === undefined) return;
-              void runGuiEditCommand(() =>
-                commands.applySequenceGuiEdit({
+              void runGuiEditCommand((request) =>
+                commands.applySequenceGuiEdit(request, {
                   type: "changeEffectDefinition",
                   id: effect.id,
                   effect: definition
@@ -388,8 +388,8 @@ function EffectInspectorPanel({
         <select
           value={effect.scope}
           onChange={(event) =>
-            void runGuiEditCommand(() =>
-              commands.applySequenceGuiEdit({
+            void runGuiEditCommand((request) =>
+              commands.applySequenceGuiEdit(request, {
                 type: "setEffectScope",
                 id: effect.id,
                 scope: event.currentTarget.value as SequenceEffectScope
@@ -414,8 +414,8 @@ function EffectInspectorPanel({
                 <TypedParamInput
                   param={param}
                   commitParam={(name, value) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "updateEffectParam",
                         id: effect.id,
                         name,
@@ -427,8 +427,8 @@ function EffectInspectorPanel({
                   gradientLibrary={document.gradientLibrary}
                   markCollections={document.markCollections}
                   linkCurve={(name, curve) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "linkEffectCurve",
                         id: effect.id,
                         name,
@@ -439,8 +439,8 @@ function EffectInspectorPanel({
                     ).then(() => undefined)
                   }
                   unlinkCurve={(name) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "unlinkEffectCurve",
                         id: effect.id,
                         name
@@ -448,8 +448,8 @@ function EffectInspectorPanel({
                     ).then(() => undefined)
                   }
                   linkGradient={(name, gradient) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "linkEffectGradient",
                         id: effect.id,
                         name,
@@ -460,8 +460,8 @@ function EffectInspectorPanel({
                     ).then(() => undefined)
                   }
                   unlinkGradient={(name) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "unlinkEffectGradient",
                         id: effect.id,
                         name
@@ -470,8 +470,6 @@ function EffectInspectorPanel({
                   }
                   automation={{
                     target: { type: "effectParam", effectId: effect.id, param: param.name },
-                    targetStartSeconds: effect.startSeconds,
-                    targetDurationSeconds: effect.durationSeconds,
                     automationClips: document.automationClips,
                     canCreateAutomationClip: document.lanes.some((lane) => targetsEqual(lane.target, effect.target)),
                     automationClipChooser,
@@ -497,7 +495,6 @@ function detachmentReasonLabel(reason: import("../../../types").SequenceAutomati
   switch (reason) {
     case "targetDeleted": return "target deleted";
     case "definitionChanged": return "definition changed";
-    case "operatorSchemaChanged": return "operator schema changed";
   }
 }
 
@@ -509,8 +506,8 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
         type="button"
         className="neutral-button"
         onClick={() =>
-          void runGuiEditCommand(() =>
-            commands.applySequenceGuiEdit({
+          void runGuiEditCommand((request) =>
+            commands.applySequenceGuiEdit(request, {
               type: "createLayer",
               name: `Layer ${document.layers.length + 1}`,
               color: defaultLayerColor(document.layers.length)
@@ -528,8 +525,8 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
               checked={layer.enabled}
               aria-label={`${layer.name} enabled`}
               onChange={(event) =>
-                void runGuiEditCommand(() =>
-                  commands.applySequenceGuiEdit({
+                void runGuiEditCommand((request) =>
+                  commands.applySequenceGuiEdit(request, {
                     type: "setLayerEnabled",
                     id: layer.id,
                     enabled: event.currentTarget.checked
@@ -541,8 +538,8 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
               value={layer.color}
               label={`${layer.name} color`}
               commit={(color) =>
-                runGuiEditCommand(() =>
-                  commands.applySequenceGuiEdit({
+                runGuiEditCommand((request) =>
+                  commands.applySequenceGuiEdit(request, {
                     type: "setLayerColor",
                     id: layer.id,
                     color
@@ -557,8 +554,8 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
               onBlur={(event) => {
                 const name = event.currentTarget.value.trim() || layer.name;
                 if (name === layer.name) return;
-                void runGuiEditCommand(() =>
-                  commands.applySequenceGuiEdit({
+                void runGuiEditCommand((request) =>
+                  commands.applySequenceGuiEdit(request, {
                     type: "renameLayer",
                     id: layer.id,
                     name
@@ -572,8 +569,8 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
                 onClick={() => {
                   const effectCount = document.effects.filter((effect) => effect.layerId === layer.id).length;
                   if (effectCount > 0 && !window.confirm(`Delete ${layer.name} and move ${effectCount} effects to Default?`)) return;
-                  void runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  void runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "deleteLayer",
                       id: layer.id,
                       migrateToLayerId: 0
@@ -620,8 +617,8 @@ function MarkInspectorPanel({
   const createCollection = () => {
     const name = "Marks";
     const key = nextCollectionKey(name, document.markCollections);
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "createMarkCollection",
         key,
         name,
@@ -635,8 +632,8 @@ function MarkInspectorPanel({
 
   const deleteCollection = (collection: SequenceMarkCollection) => {
     if (collection.marksSeconds.length > 0 && !window.confirm(`Delete ${collection.name} and ${collection.marksSeconds.length} marks?`)) return;
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "deleteMarkCollection",
         key: collection.key
       })
@@ -666,8 +663,8 @@ function MarkInspectorPanel({
     const nextTimeSeconds = roundToNanosecond(Math.max(0, timeSeconds));
     if (!Number.isFinite(nextTimeSeconds) || nextTimeSeconds === entry.timeSeconds) return;
     const nextRefs = selectedRefsAfterMove(selectedMarks.map((mark) => mark.ref), entry.collection, entry.ref, nextTimeSeconds);
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "moveMark",
         collectionKey: entry.ref.collectionKey,
         index: entry.ref.index,
@@ -683,8 +680,8 @@ function MarkInspectorPanel({
     const targetCollection = document.markCollections.find((collection) => collection.key === targetCollectionKey);
     if (targetCollection === undefined) return;
     const nextRefs = selectedRefsAfterReassign(selectedMarks.map((mark) => mark.ref), entry.ref, targetCollection, entry.timeSeconds);
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "reassignMarkCollection",
         collectionKey: entry.ref.collectionKey,
         index: entry.ref.index,
@@ -697,8 +694,8 @@ function MarkInspectorPanel({
 
   const deleteSelectedMark = (entry: SelectedMarkEntry) => {
     const nextRefs = selectedRefsAfterDelete(selectedMarks.map((mark) => mark.ref), entry.ref);
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "deleteMark",
         collectionKey: entry.ref.collectionKey,
         index: entry.ref.index
@@ -761,8 +758,8 @@ function MarkInspectorPanel({
                   value={collection.color}
                   label={`${collection.name} color`}
                   commit={(color) =>
-                    runGuiEditCommand(() =>
-                      commands.applySequenceGuiEdit({
+                    runGuiEditCommand((request) =>
+                      commands.applySequenceGuiEdit(request, {
                         type: "setMarkCollectionColor",
                         key: collection.key,
                         color
@@ -780,8 +777,8 @@ function MarkInspectorPanel({
                       const name = event.currentTarget.value.trim() || collection.name;
                       setEditingCollectionKey(null);
                       if (name === collection.name) return;
-                      void runGuiEditCommand(() =>
-                        commands.applySequenceGuiEdit({
+                      void runGuiEditCommand((request) =>
+                        commands.applySequenceGuiEdit(request, {
                           type: "renameMarkCollection",
                           key: collection.key,
                           name

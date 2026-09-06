@@ -1,6 +1,6 @@
 pub(super) fn sequence_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     sequence: &Sequence,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("sequence");
@@ -23,7 +23,7 @@ pub(super) fn sequence_value(
                 .iter()
                 .find(|asset| asset.id == *id)
                 .ok_or_else(|| ExportProjectError::InvalidReference {
-                    path: from_document.to_path_buf(),
+                    path: from_document.path().to_path_buf(),
                     reference: id.0.to_string(),
                     message: "sequence audio asset is missing from source metadata".to_string(),
                 })?;
@@ -101,7 +101,7 @@ pub(super) fn sequence_layer_value(layer: &SequenceLayer) -> Result<Value, Expor
 
 pub(super) fn sequence_effect_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     effect: &EffectInst,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -141,7 +141,7 @@ pub(super) fn sequence_effect_value(
 
 pub(super) fn composition_graph_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     graph: &SequenceCompositionGraph,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -170,7 +170,7 @@ pub(super) fn composition_graph_value(
 
 pub(super) fn composition_graph_node_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     node: &CompositionGraphNode,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -247,7 +247,7 @@ pub(super) fn mark_collection_value(
 
 pub(super) fn write_effect_fields(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     value: &mut Mapping,
     definition: &EffectRef,
     param_overrides: &IndexMap<Identifier, EffectParamValue>,
@@ -310,7 +310,7 @@ pub(super) fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportPr
 
 pub(super) fn graph_operator_name(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     operator: &OperatorRef,
 ) -> Result<String, ExportProjectError> {
     match operator {
@@ -384,7 +384,6 @@ fn detached_automation_binding_value(
             match binding.reason {
                 AutomationDetachmentReason::TargetDeleted => "target_deleted",
                 AutomationDetachmentReason::DefinitionChanged => "definition_changed",
-                AutomationDetachmentReason::OperatorSchemaChanged => "operator_schema_changed",
             }
             .to_string(),
         ),
@@ -499,7 +498,7 @@ pub(super) fn automation_mapping_value(
 
 pub(super) fn control_clip_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     clip: &ControlClip,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -585,7 +584,7 @@ pub(super) fn control_clip_value(
 
 pub(super) fn effect_param_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     param: &EffectParamValue,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -649,7 +648,7 @@ pub(super) fn effect_param_value(
 
 pub(super) fn array_item_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     param: &EffectParamValue,
 ) -> Result<Value, ExportProjectError> {
     match param {
@@ -675,7 +674,7 @@ pub(super) fn array_item_value(
 
 pub(super) fn gradient_source_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     source: &GradientSource,
 ) -> Result<Value, ExportProjectError> {
     match source {
@@ -691,7 +690,7 @@ pub(super) fn gradient_source_value(
 
 pub(super) fn curve_source_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     source: &CurveSource,
 ) -> Result<Value, ExportProjectError> {
     match source {
@@ -704,12 +703,12 @@ pub(super) fn curve_source_value(
         )?)),
     }
 }
-use camino::Utf8Path;
 use dawn_language::control::{ControlClip, ControlTarget, ControlValue};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
     CurveSource, EffectInst, EffectParamValue, EffectRef, EffectScope, GradientSource,
 };
+use dawn_language::identity::DocumentId;
 use dawn_language::operator::OperatorRef;
 use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationDetachmentReason, AutomationMapping,

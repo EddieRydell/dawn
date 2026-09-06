@@ -6,9 +6,8 @@ use dawn_package::{
     PreparedPackageCandidate, RegistryConfig, ResolvedModuleOrigin,
 };
 use dawn_project_io::{
-    PackageCompatibilityIssueKind, PackageCompatibilityReport, ProjectSession,
-    analyze_package_candidate, load_package_for_operator_reconciliation_with_cache,
-    load_package_with_cache, validate_registry_package_artifact,
+    PackageCompatibilityReport, ProjectSession, analyze_package_candidate, load_package_with_cache,
+    validate_registry_package_artifact,
 };
 
 use super::{DesktopState, lock_unpoisoned};
@@ -31,17 +30,14 @@ impl DesktopState {
     }
 
     pub fn check_package_updates(&self) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
         let Some(root) = self.snapshot().project_root else {
             return self.update_snapshot(|snapshot| {
                 snapshot.package.message = Some("Open a package project first".to_string());
             });
         };
         let root = Utf8Path::new(&root);
-        match prepare_loaded_candidate(
-            root,
-            CandidateResolution::UpdateAll,
-            CandidateLoadMode::ReconcileOperators(self.project_session().as_deref()),
-        ) {
+        match prepare_loaded_candidate(root, CandidateResolution::UpdateAll) {
             Ok((candidate, candidate_session)) => {
                 let report = self
                     .project_session()
@@ -65,6 +61,7 @@ impl DesktopState {
     }
 
     pub fn remove_package_dependency(&self, alias: &str) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
         let Some(root) = self.package_mutation_root() else {
             return self.snapshot();
         };
@@ -86,12 +83,8 @@ impl DesktopState {
         if let Err(error) = manifest.write(root) {
             return self.package_operation_error("Dependency removal failed", error);
         }
-        let prepared = prepare_loaded_candidate(
-            root,
-            CandidateResolution::UpdateAll,
-            CandidateLoadMode::Strict,
-        );
-        let (candidate, session) = match prepared {
+        let prepared = prepare_loaded_candidate(root, CandidateResolution::UpdateAll);
+        let (candidate, _session) = match prepared {
             Ok(candidate) => candidate,
             Err(error) => {
                 return self.rollback_manifest_operation(
@@ -110,10 +103,11 @@ impl DesktopState {
                 error.to_string(),
             );
         }
-        self.accept_loaded_package(root, session, format!("Removed dependency `{alias}`"))
+        self.accept_loaded_package(root, format!("Removed dependency `{alias}`"))
     }
 
     pub fn fork_package_dependency(&self, alias: &str) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
         let Some(root) = self.package_mutation_root() else {
             return self.snapshot();
         };
@@ -137,7 +131,6 @@ impl DesktopState {
         match forked {
             Ok(forked) => self.accept_loaded_package(
                 root,
-                forked.value,
                 format!(
                     "Forked {}@{} into {}",
                     forked.package, forked.version, forked.destination
@@ -168,48 +161,42 @@ impl DesktopState {
     }
 
     fn accept_package_candidate(&self, resolution: CandidateResolution) -> AppSnapshot {
+        let _authoring = self.settled_authoring();
         let snapshot = self.snapshot();
         let Some(root) = snapshot.project_root else {
             return self.update_snapshot(|snapshot| {
                 snapshot.package.message = Some("Open a package project first".to_string());
             });
         };
-        if let Some(dirty) = snapshot.tabs.iter().find(|tab| tab.dirty) {
+        let dirty = lock_unpoisoned(&self.workspace)
+            .documents
+            .values()
+            .find(|document| document.buffer.dirty)
+            .map(|document| document.buffer.path.clone());
+        if let Some(dirty) = dirty {
             return self.update_snapshot(|snapshot| {
-                snapshot.package.message = Some(format!(
-                    "Save `{}` before changing package versions",
-                    dirty.path
-                ));
+                snapshot.package.message =
+                    Some(format!("Save `{}` before changing package versions", dirty));
                 snapshot.status = "Package operation blocked by unsaved edits".to_string();
             });
         }
         let _filesystem = lock_unpoisoned(&self.filesystem);
 
         let root = Utf8Path::new(&root);
-        let (candidate, candidate_session) = match prepare_loaded_candidate(
-            root,
-            resolution.clone(),
-            CandidateLoadMode::ReconcileOperators(self.project_session().as_deref()),
-        ) {
-            Ok(candidate) => candidate,
-            Err(error) => {
-                return self.package_operation_error("Package synchronization failed", error);
-            }
-        };
+        let (candidate, candidate_session) =
+            match prepare_loaded_candidate(root, resolution.clone()) {
+                Ok(candidate) => candidate,
+                Err(error) => {
+                    return self.package_operation_error("Package synchronization failed", error);
+                }
+            };
         let report = self
             .project_session()
             .as_deref()
             .map_or_else(PackageCompatibilityReport::default, |current| {
                 analyze_package_candidate(current, &candidate_session)
             });
-        let has_non_reconcilable_changes = report.issues.iter().any(|issue| {
-            issue.breaking
-                && !matches!(
-                    issue.kind,
-                    PackageCompatibilityIssueKind::OperatorSchemaChanged
-                )
-        });
-        if has_non_reconcilable_changes {
+        if report.has_breaking_changes() {
             let mut status = package_status(root, self.project_session().as_deref());
             decorate_candidate_status(&mut status, &candidate, &report);
             status.message = Some(
@@ -222,46 +209,13 @@ impl DesktopState {
                     "Package candidate has breaking compatibility changes".to_string();
             });
         }
-        let staged_rewrite = if self.project_session().is_some() {
-            self.stage_package_operator_rewrite(root, candidate.clone(), candidate_session.clone())
-        } else {
-            Ok(false)
-        };
-        match staged_rewrite {
-            Ok(true) => {
-                let mut status = package_status(root, self.project_session().as_deref());
-                decorate_candidate_status(&mut status, &candidate, &report);
-                status.message = Some(
-                    "Review the staged operator migration to accept this package candidate"
-                        .to_string(),
-                );
-                return self.update_snapshot(|snapshot| {
-                    snapshot.package = status;
-                    snapshot.status = "Package update needs operator reconciliation".to_string();
-                });
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return self
-                    .package_operation_error("Package operator reconciliation failed", error);
-            }
-        }
-        if let Err(error) = validate_candidate_session(&candidate_session) {
-            return self.package_operation_error("Package candidate validation failed", error);
-        }
         if let Err(error) = candidate.lock.write(root) {
             return self
                 .package_operation_error("Package lockfile was not accepted", error.to_string());
         }
 
-        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         lock_unpoisoned(&self.gui_history).clear();
-        let had_project = self.project_session().is_some();
-        let _accepted = if had_project {
-            self.refresh_project(candidate_session, Vec::new())
-        } else {
-            self.replace_project(candidate_session, Vec::new())
-        };
+        self.load_working_copy(root);
         let mut status = package_status(root, self.project_session().as_deref());
         decorate_deprecation_status(&mut status, &candidate);
         if matches!(
@@ -301,12 +255,15 @@ impl DesktopState {
             });
             return None;
         };
-        if let Some(dirty) = snapshot.tabs.iter().find(|tab| tab.dirty) {
+        let dirty = lock_unpoisoned(&self.workspace)
+            .documents
+            .values()
+            .find(|document| document.buffer.dirty)
+            .map(|document| document.buffer.path.clone());
+        if let Some(dirty) = dirty {
             self.update_snapshot(|snapshot| {
-                snapshot.package.message = Some(format!(
-                    "Save `{}` before changing dependencies",
-                    dirty.path
-                ));
+                snapshot.package.message =
+                    Some(format!("Save `{}` before changing dependencies", dirty));
                 snapshot.status = "Package operation blocked by unsaved edits".to_string();
             });
             return None;
@@ -332,19 +289,9 @@ impl DesktopState {
         }
     }
 
-    fn accept_loaded_package(
-        &self,
-        root: &Utf8Path,
-        session: ProjectSession,
-        status: String,
-    ) -> AppSnapshot {
-        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
+    fn accept_loaded_package(&self, root: &Utf8Path, status: String) -> AppSnapshot {
         lock_unpoisoned(&self.gui_history).clear();
-        let _ = if self.project_session().is_some() {
-            self.refresh_project(session, Vec::new())
-        } else {
-            self.replace_project(session, Vec::new())
-        };
+        self.load_working_copy(root);
         let package = package_status(root, self.project_session().as_deref());
         self.update_snapshot(|snapshot| {
             snapshot.package = package;
@@ -353,63 +300,41 @@ impl DesktopState {
     }
 }
 
-enum CandidateLoadMode<'a> {
-    Strict,
-    ReconcileOperators(Option<&'a ProjectSession>),
-}
-
 fn prepare_loaded_candidate(
     root: &Utf8Path,
     resolution: CandidateResolution,
-    mode: CandidateLoadMode<'_>,
 ) -> Result<(PreparedPackageCandidate, ProjectSession), String> {
     let candidate = PackageService::prepare(root, resolution, validate_registry_package_artifact)
         .map_err(|error| error.to_string())?;
-    let strict = load_package_with_cache(
+    let loaded = load_package_with_cache(
         root,
         candidate.manifest.clone(),
         candidate.lock.clone(),
         &candidate.cache,
-    );
-    let loaded = match (strict, mode) {
-        (Ok(loaded), _) => loaded,
-        (Err(error), CandidateLoadMode::Strict) => return Err(error.to_string()),
-        (Err(error), CandidateLoadMode::ReconcileOperators(None)) => {
-            return Err(error.to_string());
-        }
-        (Err(strict_error), CandidateLoadMode::ReconcileOperators(Some(previous))) => {
-            load_package_for_operator_reconciliation_with_cache(
-                root,
-                candidate.manifest.clone(),
-                candidate.lock.clone(),
-                &candidate.cache,
-                &previous.project.definitions.operators,
-            )
-            .map_err(|reconciliation_error| {
-                format!(
-                    "{strict_error}; loading the candidate for operator reconciliation also failed: {reconciliation_error}"
-                )
-            })?
-        }
-    };
+    )
+    .map_err(|error| error.to_string())?;
     Ok((candidate, loaded.session))
 }
 
-fn validate_candidate_session(session: &ProjectSession) -> Result<(), String> {
-    for (id, sequence) in &session.project.sequences {
-        dawn_language::operator::validate_composition_graph(
-            &sequence.composition_graph,
-            &session.project.definitions.operators,
-        )
-        .map_err(|error| format!("{}: {}", id.0.object(), error.message))?;
-        dawn_language::validation::validate_sequence_by_id(&session.project, id)
-            .map_err(|error| format!("{}: {}", id.0.object(), error.message))?;
-    }
-    Ok(())
+pub(crate) fn package_status(root: &Utf8Path, session: Option<&ProjectSession>) -> PackageStatus {
+    package_status_with_sources(root, session, &dawn_project_io::SourceOverrides::new())
 }
 
-pub(crate) fn package_status(root: &Utf8Path, session: Option<&ProjectSession>) -> PackageStatus {
-    let manifest = match dawn_package::PackageManifest::read(root) {
+pub(super) fn package_status_with_sources(
+    root: &Utf8Path,
+    session: Option<&ProjectSession>,
+    sources: &dawn_project_io::SourceOverrides,
+) -> PackageStatus {
+    let manifest = sources
+        .get(Utf8Path::new(dawn_package::MANIFEST_FILE))
+        .map_or_else(
+            || PackageManifest::read(root).map_err(|error| error.to_string()),
+            |text| {
+                PackageManifest::parse_for_analysis(text.as_bytes())
+                    .map_err(|error| error.to_string())
+            },
+        );
+    let manifest = match manifest {
         Ok(manifest) => manifest,
         Err(error) => {
             return invalid_status(
@@ -419,7 +344,17 @@ pub(crate) fn package_status(root: &Utf8Path, session: Option<&ProjectSession>) 
             );
         }
     };
-    let lock = match read_optional_lock(root) {
+    let lock = sources
+        .get(Utf8Path::new(dawn_package::LOCK_FILE))
+        .map_or_else(
+            || read_optional_lock(root),
+            |text| {
+                Lockfile::parse_for_analysis(text.as_bytes())
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            },
+        );
+    let lock = match lock {
         Ok(lock) => lock,
         Err(error) => {
             return PackageStatus {

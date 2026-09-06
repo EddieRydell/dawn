@@ -4,7 +4,6 @@
 //! `desktop_state/`; this root owns shared state, service construction, and
 //! cross-workflow lifecycle coordination.
 
-use std::collections::BTreeSet;
 use std::sync::{
     Arc, Mutex, MutexGuard,
     atomic::{AtomicBool, Ordering},
@@ -15,37 +14,48 @@ use crate::dto::{
     PackageStatus, ProjectHealth, WorkspaceExplorerState, WorkspaceLayoutState,
 };
 use crate::persistence::PersistenceService;
-use crate::state_tasks::{
-    GuiHistory, GuiSaveScheduler, ProjectAnalysisScheduler, RenderRefreshScheduler,
-    gui_save_scheduler, project_analysis_scheduler, render_refresh_scheduler,
-};
+use crate::state_tasks::{GuiHistory, LatestScheduler, RenderRefreshPayload, WorkingCopyPayload};
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_project_io::{ProjectRecovery, ProjectSession};
+use dawn_project_io::ProjectSession;
+use workspace_state::WorkspaceState;
 
 #[derive(Clone)]
 pub(crate) enum LoadedProject {
     Closed,
     Ready(Arc<ProjectSession>),
-    Recovery(Arc<ProjectRecovery>),
+    Invalid,
+    Checking,
 }
 
-pub(crate) struct DesktopState {
-    snapshot: Mutex<AppSnapshot>,
-    project: Mutex<LoadedProject>,
+#[derive(Clone)]
+pub(crate) struct DesktopState(Arc<DesktopServices>);
+
+impl std::ops::Deref for DesktopState {
+    type Target = DesktopServices;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub(crate) struct DesktopServices {
+    workspace: Mutex<WorkspaceState>,
+    authoring: Mutex<()>,
+    on_snapshot: Box<dyn Fn(AppSnapshot) + Send + Sync>,
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    weak: std::sync::Weak<DesktopServices>,
     gui_history: Mutex<GuiHistory>,
-    gui_save: Mutex<GuiSaveScheduler>,
-    project_analysis: Mutex<ProjectAnalysisScheduler>,
-    render_refresh: Mutex<RenderRefreshScheduler>,
+    working_copy: LatestScheduler<WorkingCopyPayload>,
+    external_reconcile: LatestScheduler<(u32, Result<(), String>)>,
+    render_refresh: LatestScheduler<RenderRefreshPayload>,
     audio: Arc<Mutex<crate::audio::AudioEngine>>,
     sequence_render: Arc<Mutex<crate::rendering::SequenceRenderService>>,
     live_output: Mutex<crate::output::LiveOutputService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
-    pending_operator_rewrite: Mutex<Option<PendingOperatorRewriteState>>,
-    next_operator_rewrite_token: Mutex<u32>,
     filesystem: Arc<Mutex<()>>,
     persistence: PersistenceService,
     preview_wake: crate::preview::PreviewWake,
+    autosave_generation: std::sync::atomic::AtomicU32,
     audio_poll_running: AtomicBool,
     live_output_poll_running: AtomicBool,
 }
@@ -57,33 +67,71 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl DesktopState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(on_snapshot: impl Fn(AppSnapshot) + Send + Sync + 'static) -> Self {
         let audio = Arc::new(Mutex::new(crate::audio::AudioEngine::new()));
         let sequence_render = Arc::new(Mutex::new(crate::rendering::SequenceRenderService::new()));
         let output = crate::output::LiveOutputService::new(audio.clone(), sequence_render.clone());
         let preview_wake = crate::preview::PreviewWake::new();
-        Self {
-            snapshot: Mutex::new(empty_snapshot()),
-            project: Mutex::new(LoadedProject::Closed),
-            gui_history: Mutex::new(GuiHistory::new(100)),
-            gui_save: Mutex::new(gui_save_scheduler()),
-            project_analysis: Mutex::new(project_analysis_scheduler()),
-            render_refresh: Mutex::new(render_refresh_scheduler(preview_wake.clone())),
-            audio,
-            sequence_render,
-            live_output: Mutex::new(output),
-            sequence_clip_raster: Mutex::new(
-                crate::sequence_clip_raster::SequenceClipRasterService::new(),
-            ),
-            sequence_clipboard: Mutex::new(None),
-            pending_operator_rewrite: Mutex::new(None),
-            next_operator_rewrite_token: Mutex::new(1),
-            filesystem: Arc::new(Mutex::new(())),
-            persistence: PersistenceService::new(),
-            preview_wake,
-            audio_poll_running: AtomicBool::new(false),
-            live_output_poll_running: AtomicBool::new(false),
-        }
+        Self(Arc::new_cyclic(
+            |weak: &std::sync::Weak<DesktopServices>| {
+                let analysis_state = weak.clone();
+                let render_state = weak.clone();
+                let external_state = weak.clone();
+                DesktopServices {
+                    workspace: Mutex::new(WorkspaceState::new(empty_snapshot())),
+                    authoring: Mutex::new(()),
+                    on_snapshot: Box::new(on_snapshot),
+                    watcher: Mutex::new(None),
+                    weak: weak.clone(),
+                    gui_history: Mutex::new(GuiHistory::new(100)),
+                    working_copy: LatestScheduler::new(move |request| {
+                        let result = crate::state_tasks::analyze_working_copy(&request);
+                        if let Some(state) = analysis_state.upgrade() {
+                            DesktopState(state).complete_working_copy(request, result);
+                        }
+                    }),
+                    external_reconcile: LatestScheduler::new(
+                        move |(epoch, event): (u32, Result<(), String>)| {
+                            if let Some(inner) = external_state.upgrade() {
+                                let state = DesktopState(inner);
+                                let _authoring = lock_unpoisoned(&state.authoring);
+                                if state.snapshot().project_epoch != epoch {
+                                    return;
+                                }
+                                if let Err(error) = event.and_then(|()| {
+                                    state.reconcile_external_files_locked().map(|_| ())
+                                }) {
+                                    state.snapshot_with_error("project.watch", "", &error);
+                                }
+                            }
+                        },
+                    ),
+                    render_refresh: LatestScheduler::new(move |request: RenderRefreshPayload| {
+                        let result = crate::rendering::prepare_sequence_output(
+                            &request.project.project,
+                            &request.setup_id,
+                            &request.sequence_id,
+                        );
+                        if let Some(state) = render_state.upgrade() {
+                            DesktopState(state).complete_render_refresh(request, result);
+                        }
+                    }),
+                    audio,
+                    sequence_render,
+                    live_output: Mutex::new(output),
+                    sequence_clip_raster: Mutex::new(
+                        crate::sequence_clip_raster::SequenceClipRasterService::new(),
+                    ),
+                    sequence_clipboard: Mutex::new(None),
+                    filesystem: Arc::new(Mutex::new(())),
+                    persistence: PersistenceService::new(),
+                    preview_wake,
+                    autosave_generation: std::sync::atomic::AtomicU32::new(0),
+                    audio_poll_running: AtomicBool::new(false),
+                    live_output_poll_running: AtomicBool::new(false),
+                }
+            },
+        ))
     }
 
     pub fn persistence(&self) -> &PersistenceService {
@@ -104,14 +152,7 @@ impl DesktopState {
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
-        self.drain_gui_save_results();
-        self.drain_project_analysis_results();
-        self.drain_render_refresh_results();
-        let output = lock_unpoisoned(&self.live_output).snapshot();
-        let mut snapshot = lock_unpoisoned(&self.snapshot).clone();
-        snapshot.live_output = output;
-        snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
-        snapshot
+        lock_unpoisoned(&self.workspace).snapshot()
     }
 
     pub fn audio_snapshot(&self) -> AudioTransportSnapshot {
@@ -150,13 +191,20 @@ impl DesktopState {
 
     pub fn update_snapshot(&self, update: impl FnOnce(&mut AppSnapshot)) -> AppSnapshot {
         let snapshot = {
-            let mut snapshot = lock_unpoisoned(&self.snapshot);
+            let mut workspace = lock_unpoisoned(&self.workspace);
+            let mut snapshot = workspace.snapshot();
             update(&mut snapshot);
+            snapshot.state_revision = snapshot.state_revision.saturating_add(1);
             snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
-            snapshot.clone()
+            if let Err(error) = self.persistence.record_snapshot(&snapshot) {
+                snapshot.status = format!("Desktop state was not saved: {error}");
+            }
+            workspace.apply_view(snapshot.clone());
+            workspace.refresh_gui_projection();
+            workspace.snapshot()
         };
-        self.record_persistent_snapshot(&snapshot);
         self.preview_wake.notify();
+        (self.on_snapshot)(snapshot.clone());
         snapshot
     }
 
@@ -167,13 +215,26 @@ impl DesktopState {
     }
 
     pub fn update_app_settings(&self, settings: AppSettings) -> AppSnapshot {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        self.update_app_settings_locked(settings)
+    }
+
+    fn update_app_settings_locked(&self, settings: AppSettings) -> AppSnapshot {
         let settings = sanitize_app_settings(settings);
+        let changed_autosave =
+            self.snapshot().settings.autosave_project_edits != settings.autosave_project_edits;
+        if changed_autosave {
+            self.autosave_generation.fetch_add(1, Ordering::AcqRel);
+        }
         if let Err(error) = self.persistence.record_settings(settings.clone()) {
             return self.set_persistence_error(format!("Settings were not saved: {error}"));
         }
-        self.update_snapshot(|snapshot| {
-            snapshot.settings = settings;
-        })
+        let enabled = settings.autosave_project_edits;
+        let snapshot = self.update_snapshot(|snapshot| snapshot.settings = settings);
+        if changed_autosave && enabled {
+            self.schedule_working_copy(false);
+        }
+        snapshot
     }
 
     pub fn save_workspace_layout_state(&self, state: WorkspaceLayoutState) -> AppSnapshot {
@@ -189,7 +250,7 @@ impl DesktopState {
     }
 
     pub fn set_render_error_if_changed(&self, message: String) {
-        let current = lock_unpoisoned(&self.snapshot).render_error.clone();
+        let current = lock_unpoisoned(&self.workspace).view.render_error.clone();
         if current.as_deref() != Some(message.as_str()) {
             self.update_snapshot(|snapshot| {
                 snapshot.render_error = Some(message);
@@ -198,7 +259,7 @@ impl DesktopState {
     }
 
     pub fn clear_render_error_if_set(&self) {
-        let current = lock_unpoisoned(&self.snapshot).render_error.is_some();
+        let current = lock_unpoisoned(&self.workspace).view.render_error.is_some();
         if current {
             self.update_snapshot(|snapshot| {
                 snapshot.render_error = None;
@@ -240,12 +301,12 @@ impl DesktopState {
 
     pub(super) fn suspend_live_output(&self) {
         let output = lock_unpoisoned(&self.live_output).suspend();
-        lock_unpoisoned(&self.snapshot).live_output = output;
+        lock_unpoisoned(&self.workspace).view.live_output = output;
     }
 
     pub(super) fn disable_live_output(&self) {
         let output = lock_unpoisoned(&self.live_output).disable();
-        lock_unpoisoned(&self.snapshot).live_output = output;
+        lock_unpoisoned(&self.workspace).view.live_output = output;
     }
 
     pub(super) fn resume_live_output_after_prepare(&self) {
@@ -261,29 +322,30 @@ impl DesktopState {
 
 mod audio;
 mod diagnostics;
-pub(super) use diagnostics::{project_diagnostic, project_diagnostics};
+pub(super) use diagnostics::project_diagnostics;
 mod editor_projection;
-pub(super) use editor_projection::{
-    descriptor_for_path, editor_buffer, editor_buffer_for_path, generated_source_texts,
-    recovery_descriptor_for_path, recovery_editor_buffer, refresh_clean_buffers,
-    restored_active_buffers, upsert_tab,
-};
+pub(super) use editor_projection::{descriptor_for_path, generated_source_texts};
 mod filesystem;
 mod gui_editing;
-mod operator_rewrite;
 mod packages;
-pub(crate) use packages::{decorate_deprecation_status, package_status};
+pub(crate) use packages::package_status;
 mod project_lifecycle;
 mod rendering;
 mod search;
 mod settings;
 pub(super) use settings::{sanitize_app_settings, sanitize_workspace_layout};
+mod transitions;
+mod working_copy;
 mod workspace;
 mod workspace_projection;
+mod workspace_state;
 pub(super) use workspace_projection::{FsEntryKind, recovery_workspace_entries, workspace_entries};
 
 fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
+        gui_projection: None,
+        state_revision: 0,
+        project_epoch: 0,
         settings: AppSettings::default(),
         workspace_layout: WorkspaceLayoutState::default(),
         workspace_explorer: WorkspaceExplorerState::default(),
@@ -302,7 +364,6 @@ fn empty_snapshot() -> AppSnapshot {
         preview_open: false,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: crate::output::disabled_snapshot(0),
-        pending_operator_rewrite: None,
         package: PackageStatus {
             readiness: PackageReadiness::NoProject,
             root: None,
@@ -317,25 +378,6 @@ fn empty_snapshot() -> AppSnapshot {
             message: None,
         },
     }
-}
-
-pub(crate) struct PendingOperatorRewriteState {
-    pub token: u32,
-    pub project_revision: u32,
-    pub target_documents: BTreeSet<dawn_language::identity::DocumentId>,
-    pub kind: PendingOperatorRewriteKind,
-}
-
-pub(crate) enum PendingOperatorRewriteKind {
-    Document {
-        path: Utf8PathBuf,
-        compiled: Box<dawn_project_io::CompiledOperatorDocument>,
-    },
-    PackageUpdate {
-        root: Utf8PathBuf,
-        candidate: Box<dawn_package::PreparedPackageCandidate>,
-        session: Box<ProjectSession>,
-    },
 }
 
 fn absolute_project_path(

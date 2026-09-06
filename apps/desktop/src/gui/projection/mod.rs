@@ -183,8 +183,6 @@ pub(super) fn project_sequence(
             control_clips,
             composition_graph,
             automation_clips: automation_clips(sequence),
-            mode: crate::dto::GuiDocumentMode::Editable,
-            recovery_items: Vec::new(),
         },
     }
 }
@@ -228,9 +226,6 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
                         }
                         AutomationDetachmentReason::DefinitionChanged => {
                             SequenceAutomationDetachmentReason::DefinitionChanged
-                        }
-                        AutomationDetachmentReason::OperatorSchemaChanged => {
-                            SequenceAutomationDetachmentReason::OperatorSchemaChanged
                         }
                     },
                 })

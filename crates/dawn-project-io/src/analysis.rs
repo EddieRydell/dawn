@@ -45,87 +45,41 @@ pub enum RecoveryDocumentKind {
 pub struct RecoveryObject {
     pub key: String,
     pub kind: SourceObjectKind,
-    pub sequence: Option<RecoverySequence>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecoverySequence {
-    pub duration_seconds: f32,
-    pub frame_rate: f32,
-    pub layers: Vec<RecoverySequenceLayer>,
-    pub mark_collections: Vec<RecoveryMarkCollection>,
-    pub items: Vec<RecoverySequenceItem>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecoverySequenceLayer {
-    pub id: u32,
-    pub name: String,
-    pub color: String,
-    pub enabled: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecoveryMarkCollection {
-    pub key: String,
-    pub name: String,
-    pub color: String,
-    pub marks_seconds: Vec<f32>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RecoverySequenceItemKind {
-    Effect,
-    AutomationClip,
-    ControlClip,
-    GraphNode,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct RecoverySequenceItem {
-    pub kind: RecoverySequenceItemKind,
-    pub id: String,
-    pub placement: RecoverySequencePlacement,
-    pub valid: bool,
-    pub message: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum RecoverySequencePlacement {
-    Timeline {
-        start_seconds: f32,
-        duration_seconds: f32,
-        lane: RecoveryTimelineLane,
-    },
-    Graph {
-        x: f32,
-        y: f32,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RecoveryTimelineLane {
-    Layer(u32),
-    Lane(u32),
 }
 
 pub(crate) fn analyze_project_documents(
     root: &Utf8Path,
     manifest: Option<dawn_package::PackageManifest>,
+    overrides: &crate::SourceOverrides,
+    checked_dsl_documents: &indexmap::IndexSet<Utf8PathBuf>,
     diagnostics: &mut Vec<IoDiagnostic>,
 ) -> ProjectRecovery {
     let mut documents = IndexMap::new();
-    for path in project_file_inventory(root) {
+    let paths: std::collections::BTreeSet<_> = project_file_inventory(root)
+        .into_iter()
+        .chain(overrides.keys().cloned())
+        .collect();
+    for path in paths {
         let absolute = root.join(&path);
         let kind = document_kind(&path);
         let document = match kind {
+            RecoveryDocumentKind::Effect | RecoveryDocumentKind::Operator
+                if checked_dsl_documents.contains(&path) =>
+            {
+                RecoveryDocument {
+                    kind,
+                    objects: Vec::new(),
+                }
+            }
             RecoveryDocumentKind::Effect => {
-                analyze_dsl_document(&path, &absolute, true, diagnostics)
+                analyze_dsl_document(&path, &absolute, overrides.get(&path), true, diagnostics)
             }
             RecoveryDocumentKind::Operator => {
-                analyze_dsl_document(&path, &absolute, false, diagnostics)
+                analyze_dsl_document(&path, &absolute, overrides.get(&path), false, diagnostics)
             }
-            RecoveryDocumentKind::Dawn => analyze_dawn_document(&path, &absolute, diagnostics),
+            RecoveryDocumentKind::Dawn => {
+                analyze_dawn_document(&path, &absolute, overrides.get(&path), diagnostics)
+            }
             RecoveryDocumentKind::Other => RecoveryDocument {
                 kind,
                 objects: Vec::new(),
@@ -140,7 +94,7 @@ pub(crate) fn analyze_project_documents(
     }
 }
 
-fn project_file_inventory(root: &Utf8Path) -> Vec<Utf8PathBuf> {
+pub(crate) fn project_file_inventory(root: &Utf8Path) -> Vec<Utf8PathBuf> {
     let mut pending = vec![Utf8PathBuf::new()];
     let mut files = Vec::new();
     while let Some(relative) = pending.pop() {
@@ -182,27 +136,29 @@ fn document_kind(path: &Utf8Path) -> RecoveryDocumentKind {
 fn analyze_dsl_document(
     path: &Utf8Path,
     absolute: &Utf8Path,
+    override_text: Option<&String>,
     effect: bool,
     diagnostics: &mut Vec<IoDiagnostic>,
 ) -> RecoveryDocument {
-    let text = match fs::read_to_string(absolute) {
-        Ok(text) => text,
-        Err(error) => {
-            push_diagnostic(
-                diagnostics,
-                IoDiagnostic {
-                    path: path.to_path_buf(),
-                    range: None,
-                    severity: IoDiagnosticSeverity::Error,
-                    code: IoDiagnosticCode::IoRead,
-                    message: error.to_string(),
-                    detail: None,
-                    related: Vec::new(),
-                },
-            );
-            String::new()
-        }
-    };
+    let text =
+        match override_text.map_or_else(|| fs::read_to_string(absolute), |text| Ok(text.clone())) {
+            Ok(text) => text,
+            Err(error) => {
+                push_diagnostic(
+                    diagnostics,
+                    IoDiagnostic {
+                        path: path.to_path_buf(),
+                        range: None,
+                        severity: IoDiagnosticSeverity::Error,
+                        code: IoDiagnosticCode::IoRead,
+                        message: error.to_string(),
+                        detail: None,
+                        related: Vec::new(),
+                    },
+                );
+                String::new()
+            }
+        };
     let local = if effect {
         crate::diagnostics::effect_diagnostics(path, &text)
     } else {
@@ -224,29 +180,31 @@ fn analyze_dsl_document(
 fn analyze_dawn_document(
     path: &Utf8Path,
     absolute: &Utf8Path,
+    override_text: Option<&String>,
     diagnostics: &mut Vec<IoDiagnostic>,
 ) -> RecoveryDocument {
-    let text = match fs::read_to_string(absolute) {
-        Ok(text) => text,
-        Err(error) => {
-            push_diagnostic(
-                diagnostics,
-                IoDiagnostic {
-                    path: path.to_path_buf(),
-                    range: None,
-                    severity: IoDiagnosticSeverity::Error,
-                    code: IoDiagnosticCode::IoRead,
-                    message: error.to_string(),
-                    detail: None,
-                    related: Vec::new(),
-                },
-            );
-            return RecoveryDocument {
-                kind: RecoveryDocumentKind::Dawn,
-                objects: Vec::new(),
-            };
-        }
-    };
+    let text =
+        match override_text.map_or_else(|| fs::read_to_string(absolute), |text| Ok(text.clone())) {
+            Ok(text) => text,
+            Err(error) => {
+                push_diagnostic(
+                    diagnostics,
+                    IoDiagnostic {
+                        path: path.to_path_buf(),
+                        range: None,
+                        severity: IoDiagnosticSeverity::Error,
+                        code: IoDiagnosticCode::IoRead,
+                        message: error.to_string(),
+                        detail: None,
+                        related: Vec::new(),
+                    },
+                );
+                return RecoveryDocument {
+                    kind: RecoveryDocumentKind::Dawn,
+                    objects: Vec::new(),
+                };
+            }
+        };
     analyze_dawn_text(path, &text, diagnostics)
 }
 
@@ -322,13 +280,12 @@ fn analyze_dawn_text(
             );
             continue;
         };
-        let sequence = (kind == SourceObjectKind::Sequence)
-            .then(|| analyze_sequence(path, object_value, diagnostics))
-            .flatten();
+        if kind == SourceObjectKind::Sequence {
+            analyze_sequence(path, object_value, diagnostics);
+        }
         objects.push(RecoveryObject {
             key: key.to_string(),
             kind,
-            sequence,
         });
     }
 
@@ -412,12 +369,8 @@ fn source_object_kind(value: &str) -> Option<SourceObjectKind> {
     })
 }
 
-fn analyze_sequence(
-    path: &Utf8Path,
-    value: &Value,
-    diagnostics: &mut Vec<IoDiagnostic>,
-) -> Option<RecoverySequence> {
-    let duration_seconds = parse_field(
+fn analyze_sequence(path: &Utf8Path, value: &Value, diagnostics: &mut Vec<IoDiagnostic>) {
+    parse_field(
         diagnostics,
         string_field(path, value, "duration")
             .and_then(|duration| {
@@ -440,7 +393,7 @@ fn analyze_sequence(
             }),
         IoDiagnosticCode::SequenceField,
     );
-    let frame_rate = parse_field(
+    parse_field(
         diagnostics,
         f32_field(path, value, "frame_rate").and_then(|frame_rate| {
             if frame_rate.is_finite() && frame_rate > 0.0 {
@@ -455,63 +408,34 @@ fn analyze_sequence(
         }),
         IoDiagnosticCode::SequenceField,
     );
-    let (Some(duration_seconds), Some(frame_rate)) = (duration_seconds, frame_rate) else {
-        return None;
-    };
-
-    let layers = analyze_layers(path, value, diagnostics);
-    let mark_collections = analyze_mark_collections(path, value, diagnostics);
-    let mut items = Vec::new();
-    analyze_timeline_items(
-        path,
-        value,
-        TimelineItemSchema::Effect,
-        diagnostics,
-        &mut items,
-    );
-    analyze_timeline_items(
-        path,
-        value,
-        TimelineItemSchema::AutomationClip,
-        diagnostics,
-        &mut items,
-    );
-    analyze_control_items(path, value, diagnostics, &mut items);
-    analyze_graph_items(path, value, diagnostics, &mut items);
-    Some(RecoverySequence {
-        duration_seconds,
-        frame_rate,
-        layers,
-        mark_collections,
-        items,
-    })
+    analyze_layers(path, value, diagnostics);
+    analyze_mark_collections(path, value, diagnostics);
+    analyze_timeline_items(path, value, TimelineItemSchema::Effect, diagnostics);
+    analyze_timeline_items(path, value, TimelineItemSchema::AutomationClip, diagnostics);
+    analyze_control_items(path, value, diagnostics);
+    analyze_graph_items(path, value, diagnostics);
 }
 
-fn analyze_layers(
-    path: &Utf8Path,
-    value: &Value,
-    diagnostics: &mut Vec<IoDiagnostic>,
-) -> Vec<RecoverySequenceLayer> {
+fn analyze_layers(path: &Utf8Path, value: &Value, diagnostics: &mut Vec<IoDiagnostic>) {
     let values = match sequence_values(path, value, "layers") {
         Ok(values) => values,
         Err(error) => {
             push_load_error(diagnostics, error, IoDiagnosticCode::SequenceField);
-            return Vec::new();
+            return;
         }
     };
-    let mut layers = Vec::new();
     let mut ids = BTreeMap::new();
     for layer in values {
         let Some(id) = collect_item_field(diagnostics, u32_field(path, layer, "id")) else {
             continue;
         };
-        let Some(name) = collect_item_field(
+        let Some(_) = collect_item_field(
             diagnostics,
             string_field(path, layer, "name").map(str::to_string),
         ) else {
             continue;
         };
-        let Some(color) = collect_item_field(
+        let Some(_) = collect_item_field(
             diagnostics,
             string_field(path, layer, "color").and_then(|color| {
                 parse_color(color)
@@ -527,8 +451,7 @@ fn analyze_layers(
         ) else {
             continue;
         };
-        let Some(enabled) = collect_item_field(diagnostics, bool_field(path, layer, "enabled"))
-        else {
+        let Some(_) = collect_item_field(diagnostics, bool_field(path, layer, "enabled")) else {
             continue;
         };
         if let Some(previous_range) = ids.insert(id, source_range_for_value(path, layer)) {
@@ -546,44 +469,32 @@ fn analyze_layers(
             push_diagnostic(diagnostics, diagnostic);
             continue;
         }
-        layers.push(RecoverySequenceLayer {
-            id,
-            name,
-            color,
-            enabled,
-        });
     }
-    layers
 }
 
-fn analyze_mark_collections(
-    path: &Utf8Path,
-    value: &Value,
-    diagnostics: &mut Vec<IoDiagnostic>,
-) -> Vec<RecoveryMarkCollection> {
+fn analyze_mark_collections(path: &Utf8Path, value: &Value, diagnostics: &mut Vec<IoDiagnostic>) {
     let values = match optional_sequence(path, value, "mark_collections") {
         Ok(Some(values)) => values,
-        Ok(None) => return Vec::new(),
+        Ok(None) => return,
         Err(error) => {
             push_load_error(diagnostics, error, IoDiagnosticCode::SequenceField);
-            return Vec::new();
+            return;
         }
     };
-    let mut collections = Vec::new();
     for collection in values {
-        let Some(key) = collect_item_field(
+        let Some(_) = collect_item_field(
             diagnostics,
             string_field(path, collection, "key").map(str::to_string),
         ) else {
             continue;
         };
-        let Some(name) = collect_item_field(
+        let Some(_) = collect_item_field(
             diagnostics,
             string_field(path, collection, "name").map(str::to_string),
         ) else {
             continue;
         };
-        let Some(color) = collect_item_field(
+        let Some(_) = collect_item_field(
             diagnostics,
             string_field(path, collection, "color").and_then(|color| {
                 parse_color(color)
@@ -606,7 +517,6 @@ fn analyze_mark_collections(
                 continue;
             }
         };
-        let mut marks_seconds = Vec::new();
         for mark in marks {
             let result = mark
                 .as_str()
@@ -621,18 +531,9 @@ fn analyze_mark_collections(
                     })
                 })
                 .map(|time| time.as_seconds_f32());
-            if let Some(mark) = collect_item_field(diagnostics, result) {
-                marks_seconds.push(mark);
-            }
+            collect_item_field(diagnostics, result);
         }
-        collections.push(RecoveryMarkCollection {
-            key,
-            name,
-            color,
-            marks_seconds,
-        });
     }
-    collections
 }
 
 #[derive(Clone, Copy)]
@@ -646,13 +547,6 @@ impl TimelineItemSchema {
         match self {
             Self::Effect => "effects",
             Self::AutomationClip => "automation_clips",
-        }
-    }
-
-    fn kind(self) -> RecoverySequenceItemKind {
-        match self {
-            Self::Effect => RecoverySequenceItemKind::Effect,
-            Self::AutomationClip => RecoverySequenceItemKind::AutomationClip,
         }
     }
 
@@ -688,7 +582,6 @@ fn analyze_timeline_items(
     sequence: &Value,
     schema: TimelineItemSchema,
     diagnostics: &mut Vec<IoDiagnostic>,
-    items: &mut Vec<RecoverySequenceItem>,
 ) {
     let values = match if schema.required() {
         sequence_values(path, sequence, schema.field()).map(Some)
@@ -703,28 +596,7 @@ fn analyze_timeline_items(
         }
     };
     for value in values {
-        let id = u32_field(path, value, "id");
-        let start = string_field(path, value, "start").and_then(parse_duration_as_time);
-        let duration = string_field(path, value, "duration").and_then(parse_duration);
-        let lane = u32_field(path, value, schema.lane().field());
-        let (Ok(id), Ok(start), Ok(duration), Ok(lane)) = (id, start, duration, lane) else {
-            push_item_shape_errors(path, value, schema.lane(), diagnostics);
-            continue;
-        };
-        items.push(RecoverySequenceItem {
-            kind: schema.kind(),
-            id: id.to_string(),
-            placement: RecoverySequencePlacement::Timeline {
-                start_seconds: start.as_seconds_f32(),
-                duration_seconds: duration.as_seconds_f32(),
-                lane: match schema.lane() {
-                    TimelineLaneField::Layer => RecoveryTimelineLane::Layer(lane),
-                    TimelineLaneField::Lane => RecoveryTimelineLane::Lane(lane),
-                },
-            },
-            valid: true,
-            message: None,
-        });
+        push_item_shape_errors(path, value, schema.lane(), diagnostics);
     }
 }
 
@@ -749,12 +621,7 @@ fn push_item_shape_errors(
     }
 }
 
-fn analyze_control_items(
-    path: &Utf8Path,
-    sequence: &Value,
-    diagnostics: &mut Vec<IoDiagnostic>,
-    _items: &mut Vec<RecoverySequenceItem>,
-) {
+fn analyze_control_items(path: &Utf8Path, sequence: &Value, diagnostics: &mut Vec<IoDiagnostic>) {
     let values = match optional_sequence(path, sequence, "control_clips") {
         Ok(Some(values)) => values,
         Ok(None) => return,
@@ -779,12 +646,7 @@ fn analyze_control_items(
     }
 }
 
-fn analyze_graph_items(
-    path: &Utf8Path,
-    sequence: &Value,
-    diagnostics: &mut Vec<IoDiagnostic>,
-    items: &mut Vec<RecoverySequenceItem>,
-) {
+fn analyze_graph_items(path: &Utf8Path, sequence: &Value, diagnostics: &mut Vec<IoDiagnostic>) {
     let graph = match required_field(path, sequence, "composition_graph") {
         Ok(graph) => graph,
         Err(error) => {
@@ -809,13 +671,7 @@ fn analyze_graph_items(
             ))
         });
         match (id, parsed) {
-            (Ok(id), Ok((x, y))) => items.push(RecoverySequenceItem {
-                kind: RecoverySequenceItemKind::GraphNode,
-                id: id.to_string(),
-                placement: RecoverySequencePlacement::Graph { x, y },
-                valid: true,
-                message: None,
-            }),
+            (Ok(_), Ok(_)) => {}
             (id, parsed) => {
                 if let Err(error) = id {
                     push_load_error(diagnostics, error, IoDiagnosticCode::SequenceItem);

@@ -2,16 +2,14 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
 use super::model::*;
 use crate::dto::{AppSettings, AppSnapshot, WorkspaceLayoutState};
 
-const FILE_NAME: &str = "desktop-state-v1.json";
+const FILE_NAME: &str = "desktop-state-v2.json";
 const MAX_RECENT_PROJECTS: usize = 10;
-const SAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
 pub(crate) fn sequence_viewport_key(path: &str, object_key: &str) -> String {
     format!("{path}::{object_key}")
@@ -33,17 +31,22 @@ impl PersistenceService {
         let path = persistence_path(app)?;
         let mut inner = self.inner();
         inner.path = Some(path.clone());
-        if !path.exists() {
+        let previous_path = path.with_file_name("desktop-state-v1.json");
+        let migrating = !path.exists() && previous_path.exists();
+        if !path.exists() && !migrating {
             inner.write_allowed = true;
             return Ok(None);
         }
-        let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        let store =
-            serde_json::from_str::<PersistedStore>(&text).map_err(|error| error.to_string())?;
+        let text = fs::read_to_string(if migrating { &previous_path } else { &path })
+            .map_err(|error| error.to_string())?;
+        let store = decode_store(&text, migrating)?;
         store.validate()?;
         let last_project = store.last_project.clone();
         inner.store = store;
         inner.write_allowed = true;
+        if migrating {
+            inner.save_now()?;
+        }
         Ok(last_project)
     }
 
@@ -90,7 +93,7 @@ impl PersistenceService {
         inner.store.projects.insert(project_root.clone(), session);
         inner.store.last_project = Some(project_root);
         trim_recent_projects(&mut inner.store);
-        inner.save_debounced()
+        inner.save_now()
     }
 
     pub fn record_editor_state(
@@ -108,7 +111,7 @@ impl PersistenceService {
             .entry(project_root.to_string())
             .or_insert_with(PersistedProjectSession::new);
         session.editor_states.insert(update.path, update.state);
-        inner.save_debounced()
+        inner.save_now()
     }
 
     pub fn record_sequence_viewport(
@@ -129,7 +132,7 @@ impl PersistenceService {
             sequence_viewport_key(&update.path, &update.object_key),
             update.state,
         );
-        inner.save_debounced()
+        inner.save_now()
     }
 
     pub fn remap_project_paths(
@@ -251,20 +254,10 @@ struct PersistenceInner {
     path: Option<PathBuf>,
     store: PersistedStore,
     write_allowed: bool,
-    last_save: Option<Instant>,
+    last_saved_text: Option<String>,
 }
 
 impl PersistenceInner {
-    fn save_debounced(&mut self) -> Result<(), String> {
-        if self
-            .last_save
-            .is_some_and(|last_save| last_save.elapsed() < SAVE_DEBOUNCE)
-        {
-            return Ok(());
-        }
-        self.save_now()
-    }
-
     fn save_now(&mut self) -> Result<(), String> {
         let Some(path) = self.path.clone() else {
             return Ok(());
@@ -274,10 +267,34 @@ impl PersistenceInner {
             .ok_or_else(|| "Persistence path has no parent directory.".to_string())?;
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         let text = serde_json::to_string_pretty(&self.store).map_err(|error| error.to_string())?;
-        fs::write(path, text).map_err(|error| error.to_string())?;
-        self.last_save = Some(Instant::now());
+        if self.last_saved_text.as_ref() == Some(&text) {
+            return Ok(());
+        }
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, &text).map_err(|error| error.to_string())?;
+        fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
+        self.last_saved_text = Some(text);
         Ok(())
     }
+}
+
+fn decode_store(text: &str, migrating: bool) -> Result<PersistedStore, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if migrating {
+        if value["version"] != 1 {
+            return Err("Expected desktop state version 1 for migration".into());
+        }
+        value["version"] = serde_json::json!(VERSION);
+        if let Some(settings) = value
+            .get_mut("settings")
+            .and_then(serde_json::Value::as_object_mut)
+            && let Some(autosave) = settings.remove("autosaveTextEdits")
+        {
+            settings.insert("autosaveProjectEdits".into(), autosave);
+        }
+    }
+    serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
 fn persistence_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -312,4 +329,64 @@ fn remap_workspace_path(path: &str, source: &str, destination: &str) -> String {
         .and_then(|suffix| suffix.strip_prefix('/'))
         .map(|suffix| format!("{destination}/{suffix}"))
         .unwrap_or_else(|| path.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v1_migration_preserves_desktop_state_and_renames_autosave_once() {
+        let mut original = serde_json::to_value(PersistedStore::default()).unwrap();
+        original["settings"]["autosaveProjectEdits"] = serde_json::json!(false);
+        original["workspaceLayout"]["sidebarWidthPx"] = serde_json::json!(345.0);
+        original["lastProject"] = serde_json::json!("C:/project");
+        let mut previous = original.clone();
+        previous["version"] = serde_json::json!(1);
+        let settings = previous["settings"].as_object_mut().unwrap();
+        let autosave = settings.remove("autosaveProjectEdits").unwrap();
+        settings.insert("autosaveTextEdits".into(), autosave);
+        let migrated = decode_store(&previous.to_string(), true).unwrap();
+        migrated.validate().unwrap();
+        assert_eq!(serde_json::to_value(&migrated).unwrap(), original);
+        assert!(!migrated.settings.autosave_project_edits);
+        let reloaded = decode_store(&serde_json::to_string(&migrated).unwrap(), false).unwrap();
+        assert_eq!(serde_json::to_value(reloaded).unwrap(), original);
+    }
+
+    #[test]
+    fn rapid_persisted_changes_reach_disk_without_a_throttle() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(FILE_NAME);
+        let service = PersistenceService::new();
+        {
+            let mut inner = service.inner();
+            inner.path = Some(path.clone());
+            inner.write_allowed = true;
+        }
+        service
+            .record_workspace_layout(WorkspaceLayoutState::default())
+            .unwrap();
+        for cursor in [1, 41] {
+            service
+                .record_editor_state(
+                    "C:/project",
+                    PersistedEditorViewStateUpdate {
+                        path: "project.dawn".into(),
+                        state: PersistedEditorViewState {
+                            cursor_anchor: cursor,
+                            cursor_head: cursor,
+                            scroll_top: cursor as f32,
+                        },
+                    },
+                )
+                .unwrap();
+        }
+        let stored = decode_store(&fs::read_to_string(&path).unwrap(), false).unwrap();
+        assert_eq!(
+            stored.projects["C:/project"].editor_states["project.dawn"].cursor_head,
+            41
+        );
+        assert!(!path.with_extension("json.tmp").exists());
+    }
 }

@@ -98,7 +98,7 @@ impl LiveOutputService {
     }
 
     pub(crate) fn suspend(&mut self) -> LiveOutputSnapshot {
-        self.resume_after_prepare = matches!(
+        self.resume_after_prepare |= matches!(
             self.snapshot.state,
             LiveOutputState::Preparing | LiveOutputState::Holding | LiveOutputState::Streaming
         );

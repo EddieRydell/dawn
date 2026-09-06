@@ -20,8 +20,8 @@ export function FixtureInspector({ document, selected }: { document: PropDocumen
               step="any"
               defaultValue={fixture.bulbDiameterMeters}
               onBlur={(event) =>
-                void runGuiEditCommand(() =>
-                  commands.applyPropGuiEdit({
+                void runGuiEditCommand((request) =>
+                  commands.applyPropGuiEdit(request, {
                     type: "updateBulbDiameter",
                     objectKey: fixture.objectKey,
                     bulbDiameterMeters: Number(event.currentTarget.value)

@@ -17,19 +17,28 @@ pub(in crate::gui) fn effect_params(
         .filter_map(|param| {
             let kind = param_kind(&param.ty)?;
             let override_value = effect.param_overrides.get(&param.name);
-            let value = override_value
+            let mut value = override_value
                 .map(|value| effect_param_value(session, value))
                 .or_else(|| param.default.as_ref().and_then(default_param_value))
                 .or_else(|| default_value_for_type(&param.ty))?;
+            let automation = param_automation(
+                sequence,
+                &AutomationTarget::EffectParam {
+                    effect_id: effect.id.clone(),
+                    param: param.name.clone(),
+                },
+                &effect.start,
+                &effect.duration,
+                &mut value,
+            );
             Some(SequenceEffectParam {
                 name: param.name.as_str().to_string(),
                 kind,
                 options: param_options(&param.ty),
-                editable: automation_for_param(sequence, effect.id.0, param.name.as_str())
-                    .is_none(),
+                editable: automation.is_none(),
                 curve_source: override_value.and_then(curve_source),
                 gradient_source: override_value.and_then(gradient_source),
-                automation: automation_for_param(sequence, effect.id.0, param.name.as_str()),
+                automation,
                 value,
             })
         })
@@ -94,27 +103,28 @@ fn graph_operator_params(
         .filter_map(|declaration| {
             let kind = param_kind(&declaration.ty)?;
             let override_value = operator.params.get(&declaration.name);
-            let value = override_value
+            let mut value = override_value
                 .map(|value| effect_param_value(session, value))
                 .or_else(|| declaration.default.as_ref().and_then(default_param_value))?;
+            let automation = param_automation(
+                sequence,
+                &AutomationTarget::CompositionNodeParam {
+                    node_id: node_id.clone(),
+                    param: declaration.name.clone(),
+                },
+                &dawn_language::values::DawnTime::from_nanos(0),
+                &sequence.duration,
+                &mut value,
+            );
             Some(SequenceEffectParam {
                 name: declaration.name.as_str().to_string(),
                 kind,
                 options: param_options(&declaration.ty),
-                editable: automation_for_composition_param(
-                    sequence,
-                    node_id,
-                    declaration.name.as_str(),
-                )
-                .is_none(),
+                editable: automation.is_none(),
                 value,
                 curve_source: override_value.and_then(curve_source),
                 gradient_source: override_value.and_then(gradient_source),
-                automation: automation_for_composition_param(
-                    sequence,
-                    node_id,
-                    declaration.name.as_str(),
-                ),
+                automation,
             })
         })
         .collect()
@@ -223,49 +233,25 @@ fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
     }
 }
 
-fn automation_for_param(
+fn param_automation(
     sequence: &dawn_language::sequence::Sequence,
-    effect_id: u32,
-    param: &str,
+    target: &AutomationTarget,
+    start: &dawn_language::values::DawnTime,
+    duration: &dawn_language::values::DawnDuration,
+    value: &mut SequenceEffectParamValue,
 ) -> Option<SequenceParamAutomation> {
     sequence.automation_clips.iter().find_map(|clip| {
-        clip.bindings
+        let binding = clip
+            .bindings
             .iter()
-            .find(|binding| {
-                binding
-                    .effect_param()
-                    .is_some_and(|(target_effect, target_param)| {
-                        target_effect.0 == effect_id && target_param.as_str() == param
-                    })
-            })
-            .map(|binding| SequenceParamAutomation {
-                clip_id: clip.id.0,
-                mapping: automation_mapping_to_gui(&binding.mapping),
-            })
-    })
-}
-
-fn automation_for_composition_param(
-    sequence: &dawn_language::sequence::Sequence,
-    node_id: &CompositionGraphNodeId,
-    param: &str,
-) -> Option<SequenceParamAutomation> {
-    sequence.automation_clips.iter().find_map(|clip| {
-        clip.bindings
-            .iter()
-            .find(|binding| {
-                matches!(
-                    &binding.target,
-                    AutomationTarget::CompositionNodeParam {
-                        node_id: target_node_id,
-                        param: target_param,
-                    } if target_node_id == node_id && target_param.as_str() == param
-                )
-            })
-            .map(|binding| SequenceParamAutomation {
-                clip_id: clip.id.0,
-                mapping: automation_mapping_to_gui(&binding.mapping),
-            })
+            .find(|binding| &binding.target == target)?;
+        if let SequenceEffectParamValue::Curve { points } = value {
+            *points = curve_points(&clip.curve_in_range(start, duration));
+        }
+        Some(SequenceParamAutomation {
+            clip_id: clip.id.0,
+            mapping: automation_mapping_to_gui(&binding.mapping),
+        })
     })
 }
 

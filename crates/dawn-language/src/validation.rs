@@ -9,7 +9,6 @@ use crate::operator::{effect_param_matches_type, validate_composition_graph};
 use crate::preview::PreviewValidationError;
 use crate::sequence::{
     AutomationMapping, AutomationTarget, CompositionGraphNodeKind, MarkCollectionKey, Sequence,
-    SequenceId,
 };
 
 pub const MAX_SEQUENCE_FRAME_COUNT: u32 = 250_000;
@@ -243,8 +242,7 @@ pub fn validate_sequence(
     if sequence.duration.0.is_zero() {
         return Err(sequence_error("sequence duration must be positive"));
     }
-    let frame_count = (sequence.duration.as_nanos() * u128::from(sequence.frame_rate))
-        .div_ceil(u128::from(crate::values::NANOS_PER_SECOND));
+    let frame_count = sequence.frame_count();
     if frame_count > u128::from(MAX_SEQUENCE_FRAME_COUNT) {
         return Err(sequence_error(format!(
             "sequence exceeds the frame budget of {MAX_SEQUENCE_FRAME_COUNT} frames"
@@ -420,17 +418,6 @@ pub fn validate_sequence(
         }
     }
     Ok(())
-}
-
-pub fn validate_sequence_by_id(
-    project: &DawnProject,
-    sequence_id: &SequenceId,
-) -> Result<(), SequenceValidationError> {
-    let sequence = project
-        .sequences
-        .get(sequence_id)
-        .ok_or_else(|| sequence_error("sequence was not found"))?;
-    validate_sequence(project, sequence)
 }
 
 fn ensure_unique<T>(

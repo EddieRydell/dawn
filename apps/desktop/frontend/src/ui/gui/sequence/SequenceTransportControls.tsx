@@ -122,8 +122,8 @@ async function chooseAudioWithResizePrompt(document: SequenceEditorDocument) {
     `Resize sequence to ${formatSeconds(durationSeconds)} to match ${result.document.document.audio.fileName}?`
   );
   if (!resize) return;
-  await runGuiEditCommand(() =>
-    commands.applySequenceGuiEdit({
+  await runGuiEditCommand((request) =>
+    commands.applySequenceGuiEdit(request, {
       type: "setDuration",
       durationSeconds
     })

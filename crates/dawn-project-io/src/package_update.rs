@@ -151,14 +151,9 @@ fn compare_source_objects(
         for object in document.objects() {
             match candidate_objects.get(object.id()) {
                 None => {
-                    let kind = if matches!(object.kind(), SourceObjectKind::OperatorDefinition) {
-                        PackageCompatibilityIssueKind::OperatorSchemaChanged
-                    } else {
-                        PackageCompatibilityIssueKind::ObjectRemoved
-                    };
                     issues.push(issue(
                         package,
-                        kind,
+                        PackageCompatibilityIssueKind::ObjectRemoved,
                         format!(
                             "{} `{}` was removed from `{}`",
                             object_kind_name(object.kind()),

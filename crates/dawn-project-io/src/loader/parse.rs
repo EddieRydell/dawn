@@ -61,7 +61,6 @@ pub(crate) fn parse_detached_automation_binding(
     let reason = match string_field(path, value, "reason")? {
         "target_deleted" => AutomationDetachmentReason::TargetDeleted,
         "definition_changed" => AutomationDetachmentReason::DefinitionChanged,
-        "operator_schema_changed" => AutomationDetachmentReason::OperatorSchemaChanged,
         other => {
             return Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),

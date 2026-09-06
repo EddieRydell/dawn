@@ -29,7 +29,14 @@ fn reorders_are_composed_into_packing_without_changing_output() {
         })
         .collect::<Vec<_>>();
     let mut patch = project.patches[&setup.patch].clone();
-    let before = prepare_patch(tree, &patch, profiles, &frames).unwrap();
+    let before = prepare_patch(
+        tree,
+        &patch,
+        profiles,
+        &frames,
+        &OutputElements::prepare(tree, profiles).unwrap(),
+    )
+    .unwrap();
     let element_ids = tree
         .nodes
         .iter()
@@ -113,7 +120,14 @@ fn reorders_are_composed_into_packing_without_changing_output() {
             cell_count,
         }),
     );
-    let identity = prepare_patch(tree, &patch, profiles, &frames).unwrap();
+    let identity = prepare_patch(
+        tree,
+        &patch,
+        profiles,
+        &frames,
+        &OutputElements::prepare(tree, profiles).unwrap(),
+    )
+    .unwrap();
     assert_eq!(identity.steps.len(), before.steps.len());
     assert_eq!(identity.value_layouts, before.value_layouts);
     assert_eq!(identity.fixture_programs, before.fixture_programs);
@@ -151,7 +165,14 @@ fn reorders_are_composed_into_packing_without_changing_output() {
         unreachable!()
     };
     order.reverse();
-    let reordered = prepare_patch(tree, &patch, profiles, &frames).unwrap();
+    let reordered = prepare_patch(
+        tree,
+        &patch,
+        profiles,
+        &frames,
+        &OutputElements::prepare(tree, profiles).unwrap(),
+    )
+    .unwrap();
     assert_eq!(reordered.steps.len(), before.steps.len());
     assert!(reordered.steps.iter().any(|step| matches!(step,
         PatchStep::Filter { filter: PreparedFilter::PackRgb { order, .. }, .. } if *order == [1, 2, 0]

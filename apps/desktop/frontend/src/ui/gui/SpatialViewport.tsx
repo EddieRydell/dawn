@@ -14,7 +14,6 @@ export function useSpatialViewport(bounds: RenderBounds, resetKey?: string, sess
     size.current = { width, height };
     if (previousKey.current !== key) { previousKey.current = key; setView(fitViewport(bounds, width, height)); }
   }, [bounds, key]);
-  useEffect(() => { previousKey.current = ""; }, [key]);
   useEffect(() => { if (sessionKey !== undefined) sessionViewports.set(sessionKey, view); }, [sessionKey, view]);
   const zoomAt = useCallback((factor: number, x: number, y: number) => { setView((v) => {
     const scale = clamp(v.scale * factor, v.fitScale * 0.05, v.fitScale * 64);

@@ -19,7 +19,6 @@ pub mod fixture_profile;
 pub mod identity;
 pub mod model;
 pub mod operator;
-pub mod operator_rewrite;
 pub mod patch;
 pub mod preview;
 pub mod sampling;

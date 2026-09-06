@@ -25,7 +25,7 @@ export function SetupEditor({ document }: { document: SetupDocument }) {
                   aria-label={`Element ${element.id} name`}
                   onBlur={(event) => {
                     if (event.currentTarget.value !== element.name) {
-                      void runGuiEditCommand(() => commands.applySetupGuiEdit({
+                      void runGuiEditCommand((request) => commands.applySetupGuiEdit(request, {
                         type: "renameElement",
                         id: element.id,
                         name: event.currentTarget.value
@@ -44,7 +44,7 @@ export function SetupEditor({ document }: { document: SetupDocument }) {
                     onBlur={(event) => {
                       const cells = Number(event.currentTarget.value);
                       if (cells !== element.cellCount) {
-                        void runGuiEditCommand(() => commands.applySetupGuiEdit({
+                        void runGuiEditCommand((request) => commands.applySetupGuiEdit(request, {
                           type: "setElementCellCount",
                           id: element.id,
                           cells
@@ -87,7 +87,7 @@ export function SetupEditor({ document }: { document: SetupDocument }) {
               <button
                 key={`${edge.fromNode}:${edge.fromPort}:${edge.toNode}:${edge.toPort}`}
                 title="Remove patch edge"
-                onClick={() => void runGuiEditCommand(() => commands.applySetupGuiEdit({
+                onClick={() => void runGuiEditCommand((request) => commands.applySetupGuiEdit(request, {
                   type: "disconnectPatch",
                   ...edge
                 }))}
@@ -136,7 +136,7 @@ function PreviewLink({ link, document }: { link: SetupDocument["previewLinks"][n
         ))}
       </select>
       <input className="setup-number" type="number" min={0} value={startCell} onChange={(event) => { setStartCell(Number(event.currentTarget.value)); }} />
-      <button onClick={() => void runGuiEditCommand(() => commands.applySetupGuiEdit({
+      <button onClick={() => void runGuiEditCommand((request) => commands.applySetupGuiEdit(request, {
         type: "autoLinkPreview",
         propId: link.propId,
         node,
@@ -162,7 +162,7 @@ function ControllerPort({
       <span>Port {port.id}</span>
       <label>Address <input type="number" min={0} value={address} disabled={readOnly} onChange={(event) => { setAddress(Number(event.currentTarget.value)); }} /></label>
       <label>Slots <input type="number" min={1} max={512} value={slotCount} disabled={readOnly} onChange={(event) => { setSlotCount(Number(event.currentTarget.value)); }} /></label>
-      <button disabled={readOnly} title={readOnly ? "Fork the dependency package before editing this controller." : undefined} onClick={() => void runGuiEditCommand(() => commands.applySetupGuiEdit({
+      <button disabled={readOnly} title={readOnly ? "Fork the dependency package before editing this controller." : undefined} onClick={() => void runGuiEditCommand((request) => commands.applySetupGuiEdit(request, {
         type: "setControllerPort",
         controller,
         port: port.id,

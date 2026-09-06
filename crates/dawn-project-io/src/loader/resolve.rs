@@ -989,17 +989,13 @@ impl DomainResolver<'_> {
                 .map(|edge| parse_graph_edge(path, edge))
                 .collect::<Result<Vec<_>, _>>()?,
         };
-        let defer_validation = self.loader.operator_reconciliation.is_some()
-            && document_id.module_id() == self.loader.source_graph.project_module_id();
-        if !defer_validation {
-            validate_composition_graph(&graph, &self.project.definitions.operators).map_err(
-                |error| LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: None,
-                    message: error.message,
-                },
-            )?;
-        }
+        validate_composition_graph(&graph, &self.project.definitions.operators).map_err(
+            |error| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: error.message,
+            },
+        )?;
         Ok(graph)
     }
 

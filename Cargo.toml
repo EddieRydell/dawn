@@ -32,6 +32,7 @@ libm = "0.2.15"
 micromath = { version = "2.1.0", default-features = false }
 indexmap = "2.14.0"
 ignore = "0.4.23"
+notify = "=8.2.0"
 kira = "0.12.1"
 marked-yaml = "0.8.0"
 pathdiff = { version = "0.2.3", features = ["camino"] }

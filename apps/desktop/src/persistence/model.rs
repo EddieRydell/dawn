@@ -5,7 +5,7 @@ use specta::Type;
 
 use crate::dto::{AppSettings, AppSnapshot, WorkspaceExplorerState, WorkspaceLayoutState};
 
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

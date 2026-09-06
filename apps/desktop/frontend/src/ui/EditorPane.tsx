@@ -7,15 +7,19 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { commands, setCurrentGuiRequest } from "../api";
-import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange, WorkspaceLayoutState } from "../types";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { commands } from "../api";
+import type { AppSnapshot, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange, WorkspaceLayoutState } from "../types";
 import { commandRegistry, FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
 import { effectiveEditorViewMode } from "../editorViewMode";
 import { runSnapshotCommand, useAppStore, type AppStaticSnapshot } from "../store";
+import { runWorkspaceTransition } from "../workspaceTransitions";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 import { THEME_METRICS } from "../theme";
+import { scheduleViewStateSave } from "../viewStatePersistence";
+import { sameGuiDocument } from "../snapshotState";
+import { resolveDocumentSyncFailure } from "../store";
 import { NAVIGATE_TO_TEXT_EVENT, navigateToText, type TextNavigation } from "../workspace/navigation";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
@@ -34,9 +38,14 @@ export function EditorPane({
   const guiDocument = useAppStore((store) => store.guiDocument);
   const guiResetRevision = useAppStore((store) => store.guiResetRevision);
   const localText = useAppStore((store) => store.localText);
+  const failedDocumentSync = useAppStore((store) => store.failedDocumentSync);
   const restoreState = useAppStore((store) => store.restoreState);
   const setGuiDocument = useAppStore((store) => store.setGuiDocument);
-  const setGuiRequest = useAppStore((store) => store.setGuiRequest);
+  const activeGuiRequest = useAppStore((store) => store.guiRequest);
+  const guiDocumentRevision = useAppStore((store) => store.guiDocumentRevision);
+  const guiEditPending = useAppStore((store) => store.guiEditPending);
+  const projectionPending = activeGuiRequest !== null && guiDocumentRevision !== activeGuiRequest.projectRevision;
+  const interactionPending = projectionPending || guiEditPending;
   const setLocalText = useAppStore((store) => store.setLocalText);
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -50,23 +59,16 @@ export function EditorPane({
   const applyingRestoredEditorState = useRef(false);
   const restoredEditorPath = useRef<string | null>(null);
   const activeBuffer = snapshot.activeBuffer;
-  const activeDescriptor = snapshot.activeDocumentDescriptor;
   const activePath = activeBuffer?.path ?? null;
   const viewMode = effectiveEditorViewMode(snapshot);
   const activeExternalState = activeBufferExternalState(activeBuffer);
   const activeConflicted = activeExternalState !== "current";
-  const availableGuiRequest = useMemo(
-    () => guiRequestForDescriptor(activeDescriptor, snapshot.activeFile),
-    [activeDescriptor, snapshot.activeFile]
-  );
-  const activeGuiRequest = viewMode === "gui" ? availableGuiRequest : null;
   const nextGuiPath = activeGuiRequest?.path ?? null;
   const nextGuiView = activeGuiRequest?.view ?? null;
   const nextGuiObjectKey = activeGuiRequest?.objectKey ?? null;
   const activeSequenceDocument =
     viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
-  const editableSequenceDocument =
-    activeSequenceDocument?.mode === "editable" ? activeSequenceDocument : null;
+  const editableSequenceDocument = activeSequenceDocument;
   const activeSequenceAudio = activeSequenceDocument?.audio ?? null;
   const activeSequenceAudioKey =
     nextGuiPath !== null && nextGuiView === "sequence"
@@ -124,26 +126,24 @@ export function EditorPane({
   }, [localText]);
 
   useEffect(() => {
-    if (!snapshot.settings.autosaveTextEdits) {
-      window.clearTimeout(autosaveTimer);
-    }
-  }, [snapshot.settings.autosaveTextEdits]);
-
-  useEffect(() => {
-    setGuiRequest(activeGuiRequest);
-    setCurrentGuiRequest(activeGuiRequest);
     if (activeGuiRequest === null) {
       setGuiDocument(null);
       return;
     }
+    if (useAppStore.getState().guiDocumentRevision === activeGuiRequest.projectRevision) return;
     let cancelled = false;
+    const isCurrent = () => !cancelled
+      && useAppStore.getState().guiRequest === activeGuiRequest
+      && useAppStore.getState().snapshot?.projectRevision === snapshot.projectRevision;
     commands
       .getGuiDocument(activeGuiRequest)
-      .then((document) => {
-        if (!cancelled) setGuiDocument(document);
+      .then((result) => {
+        if (isCurrent() && result.projectRevision === activeGuiRequest.projectRevision
+          && result.request.projectRevision === activeGuiRequest.projectRevision
+          && sameGuiDocument(result.request, activeGuiRequest)) setGuiDocument(result.document);
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
+        if (isCurrent() && useAppStore.getState().guiDocumentRevision !== activeGuiRequest.projectRevision) {
           setGuiDocument({ type: "blocked", reason: String(error), diagnostics: [] });
         }
       });
@@ -153,11 +153,11 @@ export function EditorPane({
   }, [
     activeGuiRequest,
     setGuiDocument,
-    setGuiRequest
+    snapshot.projectRevision
   ]);
 
   useEffect(() => {
-    if (activeSequenceAudioKey === null || nextGuiPath === null || nextGuiView !== "sequence") {
+    if (activeGuiRequest === null || activeSequenceAudioKey === null || nextGuiPath === null || nextGuiView !== "sequence") {
       if (loadedSequenceAudioKey.current !== null) {
         loadedSequenceAudioKey.current = null;
         void runSnapshotCommand(commands.unloadAudio);
@@ -170,13 +170,9 @@ export function EditorPane({
     }
     loadedSequenceAudioKey.current = activeSequenceAudioKey;
     void runSnapshotCommand(() =>
-      commands.loadSequenceAudio({
-        path: nextGuiPath,
-        view: "sequence",
-        objectKey: nextGuiObjectKey
-      })
+      commands.loadSequenceAudio(activeGuiRequest)
     );
-  }, [activeSequenceAudioKey, nextGuiObjectKey, nextGuiPath, nextGuiView]);
+  }, [activeGuiRequest, activeSequenceAudioKey, nextGuiObjectKey, nextGuiPath, nextGuiView]);
 
   useEffect(() => {
     return () => {
@@ -217,12 +213,6 @@ export function EditorPane({
             }
             const text = update.state.doc.toString();
             setLocalText(text);
-            if (activePath !== null) {
-              scheduleDocumentAnalysis(activePath, text);
-            }
-            if (activePath !== null && snapshot.settings.autosaveTextEdits) {
-              scheduleAutosave(activePath, text);
-            }
           }
         }
       )
@@ -242,7 +232,7 @@ export function EditorPane({
         setEditorView(null);
       });
     };
-  }, [activeConflicted, activePath, setLocalText, snapshot.settings.autosaveTextEdits, viewMode]);
+  }, [activeConflicted, activePath, setLocalText, viewMode]);
 
   useEffect(() => {
     if (!view.current || viewMode !== "text" || activePath === null) return;
@@ -296,7 +286,7 @@ export function EditorPane({
   }
 
   return (
-    <section className={`editor-shell ${editableSequenceDocument !== null ? "has-editor-toolbar" : ""} ${activeConflicted ? "has-conflict-banner" : ""}`}>
+    <section className={`editor-shell ${editableSequenceDocument !== null ? "has-editor-toolbar" : ""} ${activeConflicted || failedDocumentSync !== null ? "has-conflict-banner" : ""}`}>
       <div className="tab-strip">
         {snapshot.tabs.map((tab) => (
           <button
@@ -312,15 +302,15 @@ export function EditorPane({
               size={THEME_METRICS.iconSizeSmall}
               onClick={(event) => {
                 event.stopPropagation();
-                void runSnapshotCommand(() => commands.closeFile(tab.path));
+                void runWorkspaceTransition({ type: "closeFile", path: tab.path });
               }}
             />
           </button>
         ))}
       </div>
-      {snapshot.projectHealth === "recovery" && (
-        <div className="recovery-banner">
-          <span>The project model has errors. GUI views are read-only; text editing and Problems remain available.</span>
+      {snapshot.projectHealth === "invalid" && (
+        <div className="project-invalid-banner">
+          <span>The project has errors. Fix them in Text to use GUI editing.</span>
           <button
             type="button"
             onClick={() => {
@@ -347,40 +337,49 @@ export function EditorPane({
         </div>
       )}
       {editableSequenceDocument !== null && (
-        <div className="editor-toolbar">
+        <div className="editor-toolbar" inert={interactionPending}>
           <SequenceTransportControls
             document={editableSequenceDocument}
             previewOpen={snapshot.previewOpen}
           />
         </div>
       )}
-      {activeConflicted && (
+      {failedDocumentSync !== null && (
+        <div className="conflict-banner">
+          <span>Your latest text has not been accepted because the document changed.</span>
+          <button type="button" onClick={() => void resolveDocumentSyncFailure(false)}>Discard Pending Text</button>
+          <button type="button" onClick={() => void resolveDocumentSyncFailure(true)}>Keep My Text</button>
+        </div>
+      )}
+      {activeConflicted && failedDocumentSync === null && (
         <div className="conflict-banner">
           <span>
             {activeExternalState === "deletedOnDisk"
               ? "This file was deleted on disk."
               : "This file changed on disk."}
           </span>
-          <button type="button" onClick={() => void runSnapshotCommand(commands.reloadActiveBufferFromDisk)}>
+          <button type="button" onClick={() => activeBuffer !== null && void runSnapshotCommand(() => commands.resolveExternalConflict(snapshot.projectEpoch, activeBuffer.path, activeBuffer.documentRevision, "reload"))}>
             <RefreshCw size={THEME_METRICS.iconSizeSmall} />
             Reload from Disk
           </button>
-          <button type="button" onClick={() => void runSnapshotCommand(commands.flushAutosave)}>
+          <button type="button" onClick={() => activeBuffer !== null && void runSnapshotCommand(() => commands.resolveExternalConflict(snapshot.projectEpoch, activeBuffer.path, activeBuffer.documentRevision, "keepWorkingCopy"))}>
             <Save size={THEME_METRICS.iconSizeSmall} />
             Keep Mine
           </button>
         </div>
       )}
       {viewMode === "gui" ? (
-        <GuiEditor
-          guiDocument={guiDocument}
-          snapshot={snapshot}
-          workspaceLayout={workspaceLayout}
-          onWorkspaceLayoutChange={onWorkspaceLayoutChange}
-          sequenceSelection={sequenceSelection}
-          setSequenceSelection={setSequenceSelection}
-          resetRevision={guiResetRevision}
-        />
+        <div className="gui-projection" inert={interactionPending} aria-busy={interactionPending}>
+          <GuiEditor
+            guiDocument={guiDocument}
+            snapshot={snapshot}
+            workspaceLayout={workspaceLayout}
+            onWorkspaceLayoutChange={onWorkspaceLayoutChange}
+            sequenceSelection={sequenceSelection}
+            setSequenceSelection={setSequenceSelection}
+            resetRevision={guiResetRevision}
+          />
+        </div>
       ) : (
         <div className="editor-scrollbar-shell">
           <div ref={editorHost} className={`editor-host ${activeConflicted ? "conflicted" : ""}`} />
@@ -395,24 +394,6 @@ export function EditorPane({
       )}
     </section>
   );
-}
-
-function guiRequestForDescriptor(
-  descriptor: AppSnapshot["activeDocumentDescriptor"],
-  activePath: string | null
-): GuiDocumentRequest | null {
-  if (descriptor === null || activePath === null) return null;
-  const defaultObject =
-    descriptor.defaultObjectKeys.find((item) => item.view === "sequence") ??
-    descriptor.defaultObjectKeys.find((item) => item.view === "setup") ??
-    descriptor.defaultObjectKeys.find((item) => item.view === "preview") ??
-    descriptor.defaultObjectKeys.find((item) => item.view === "prop");
-  if (defaultObject === undefined) return null;
-  return {
-    path: activePath,
-    view: defaultObject.view,
-    objectKey: defaultObject.objectKey
-  };
 }
 
 function sequenceAudioKey(path: string, objectKey: string | null, audio: SequenceAudio | null): string | null {
@@ -605,73 +586,9 @@ function EditorScrollbar({
   );
 }
 
-let autosaveTimer: number | undefined;
-let documentAnalysisTimer: number | undefined;
-let editorViewStateTimer: number | undefined;
-let autosaveQueue = Promise.resolve();
-let documentAnalysisQueue = Promise.resolve();
-
-function scheduleDocumentAnalysis(path: string, text: string) {
-  window.clearTimeout(documentAnalysisTimer);
-  documentAnalysisTimer = window.setTimeout(() => {
-    documentAnalysisQueue = documentAnalysisQueue
-      .catch(() => undefined)
-      .then(async () => {
-        const current = useAppStore.getState();
-        if (current.snapshot?.activeFile !== path || current.localText !== text) return;
-        const snapshot = await commands.updateActiveText(text);
-        useAppStore.getState().setSnapshot(snapshot, "command", true);
-        useAppStore.getState().setError(null);
-      })
-      .catch((error: unknown) => {
-        useAppStore.getState().setError(String(error));
-      });
-  }, THEME_METRICS.documentAnalysisDelayMs);
-}
-
-function scheduleAutosave(path: string, text: string) {
-  window.clearTimeout(autosaveTimer);
-  autosaveTimer = window.setTimeout(() => {
-    autosaveQueue = autosaveQueue
-      .catch(() => undefined)
-      .then(async () => {
-        await documentAnalysisQueue.catch(() => undefined);
-        const current = useAppStore.getState();
-        if (current.snapshot?.activeFile !== path || current.localText !== text) return;
-        const snapshot = await commands.autosaveActiveText(path, text);
-        useAppStore.getState().setSnapshot(snapshot, "command", true);
-        useAppStore.getState().setError(null);
-        await refreshAfterProjectAnalysis(path, snapshot.projectRevision);
-      })
-      .catch((error: unknown) => {
-        useAppStore.getState().setError(String(error));
-      });
-  }, 450);
-}
-
-async function refreshAfterProjectAnalysis(path: string, projectRevision: number) {
-  for (const delayMultiplier of [1, 2, 4, 8]) {
-    await new Promise<void>((resolve) => {
-      window.setTimeout(resolve, THEME_METRICS.projectAnalysisPollDelayMs * delayMultiplier);
-    });
-    const current = useAppStore.getState();
-    if (current.snapshot?.activeFile !== path) return;
-    const snapshot = await commands.getSnapshot();
-    if (
-      snapshot.projectRevision !== projectRevision
-      || !snapshot.status.includes("analyzing project")
-    ) {
-      useAppStore.getState().setSnapshot(snapshot, "command", true);
-      return;
-    }
-  }
-}
-
 function scheduleEditorViewStateSave(path: string, state: PersistedEditorViewState) {
-  window.clearTimeout(editorViewStateTimer);
-  editorViewStateTimer = window.setTimeout(() => {
-    void commands.saveEditorViewState({ path, state });
-  }, 250);
+  scheduleViewStateSave(JSON.stringify(["editor", path]), () => commands.saveEditorViewState({ path, state }),
+    (error) => { useAppStore.getState().setError(String(error)); });
 }
 
 function readEditorViewState(view: EditorView): PersistedEditorViewState {

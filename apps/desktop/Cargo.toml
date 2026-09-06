@@ -17,6 +17,7 @@ dawn-output.workspace = true
 dawn-elaboration.workspace = true
 glam.workspace = true
 ignore.workspace = true
+notify.workspace = true
 indexmap.workspace = true
 kira.workspace = true
 rfd.workspace = true

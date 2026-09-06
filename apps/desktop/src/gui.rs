@@ -21,8 +21,9 @@ mod setup;
 
 use edit::{edit_fixture, edit_layout, edit_sequence};
 use projection::{project_fixture, project_layout, project_sequence};
+pub(crate) use selection::copy_sequence_selection;
 use selection::{
-    copy_sequence_selection, delete_sequence_selection, move_effect_selection, move_mark_selection,
+    delete_sequence_selection, move_effect_selection, move_mark_selection,
     paste_sequence_clipboard, resize_effect_selection,
 };
 use setup::{edit_setup, project_setup};
@@ -32,9 +33,7 @@ pub(crate) use dispatch::{
     ClipboardEffect, ClipboardMark, SequenceClipboard, SequenceSelectionMutation,
     apply_sequence_selection_edit,
 };
-pub use document::{
-    GuiMutationError, blocked, project_gui_document, project_recovery_gui_document,
-};
+pub use document::{GuiMutationError, blocked, project_gui_document};
 pub(crate) use document::{
     ResolvedGuiObject, affected_paths, ensure_owned_gui_document, gui_diagnostic, resolve_request,
 };

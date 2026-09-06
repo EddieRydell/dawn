@@ -18,39 +18,34 @@ export const commands = {
 	planWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<WorkspacePathChangePlan, string>(__TAURI_INVOKE("plan_workspace_path_change", { request })),
 	applyWorkspacePathChange: (request: WorkspacePathChangeRequest) => typedError<AppSnapshot, string>(__TAURI_INVOKE("apply_workspace_path_change", { request })),
 	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,({...v,rowHeights:Object.fromEntries(Object.entries(v.rowHeights).map(([k,v])=>[k,v]))})]))}) as typeof v)),
-	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
-	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
+	openProjectDialog: () => __TAURI_INVOKE<string | null>("open_project_dialog"),
 	chooseNewProjectParentDirectory: () => __TAURI_INVOKE<string | null>("choose_new_project_parent_directory"),
-	createNewProject: (parentPath: string, directoryName: string) => __TAURI_INVOKE<AppSnapshot>("create_new_project", { parentPath, directoryName }),
 	createSequence: (request: NewSequenceRequest) => __TAURI_INVOKE<AppSnapshot>("create_sequence", { request }),
 	openFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_file", { path }),
-	closeFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("close_file", { path }),
 	setActiveFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("set_active_file", { path }),
-	updateActiveText: (text: string) => __TAURI_INVOKE<AppSnapshot>("update_active_text", { text }),
-	autosaveActiveText: (path: string, text: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("autosave_active_text", { path, text })),
+	updateDocument: (update: DocumentUpdate) => typedError<AppSnapshot, string>(__TAURI_INVOKE("update_document", { update })),
+	saveAll: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("save_all")),
+	requestTransition: (request: TransitionRequest) => typedError<TransitionResult, string>(__TAURI_INVOKE("request_transition", { request })),
+	completeClose: (epoch: number, revision: number) => typedError<null, string>(__TAURI_INVOKE("complete_close", { epoch, revision })),
+	reconcileExternalFiles: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("reconcile_external_files")),
+	resolveExternalConflict: (epoch: number, path: string, revision: number, decision: ExternalConflictDecision) => typedError<AppSnapshot, string>(__TAURI_INVOKE("resolve_external_conflict", { epoch, path, revision, decision })),
 	setEditorViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_editor_view_mode", { mode }),
 	saveEditorViewState: (update: PersistedEditorViewStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_editor_view_state", { update }),
 	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update: ({...update,state:({...update.state,rowHeights:Object.fromEntries(Object.entries(update.state.rowHeights).map(([k,v])=>[k,v]))})}) }),
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
 	redoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("redo_active_edit"),
-	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocument>("get_gui_document", { request }),
+	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocumentResult>("get_gui_document", { request }),
 	requestSequenceClipRasters: (request: SequenceClipRasterRequest) => __TAURI_INVOKE<SequenceClipRasterResponse>("request_sequence_clip_rasters", { request }),
 	takeSequenceClipRasterResults: (request: GuiDocumentRequest, requestId: number) => __TAURI_INVOKE<SequenceClipRasterResultBatch>("take_sequence_clip_raster_results", { request, requestId }).then((v) => (({...v,ready:v.ready.map(i=>i)}) as typeof v)),
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	finishCompositionGraphEditing: () => __TAURI_INVOKE<AppSnapshot>("finish_composition_graph_editing"),
 	rebindDetachedAutomation: (request: GuiDocumentRequest, clipId: number, detachedIndex: number, target: SequenceAutomationTarget, mapping: SequenceAutomationMapping) => __TAURI_INVOKE<GuiEditResult>("rebind_detached_automation", { request, clipId, detachedIndex, target, mapping }),
 	discardDetachedAutomation: (request: GuiDocumentRequest, clipId: number, detachedIndex: number) => __TAURI_INVOKE<GuiEditResult>("discard_detached_automation", { request, clipId, detachedIndex }),
-	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
+	applySequenceSelectionEdit: (request: GuiDocumentRequest, edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { request, edit }),
 	chooseSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiEditResult>("choose_sequence_audio", { request }),
-	flushAutosave: () => __TAURI_INVOKE<AppSnapshot>("flush_autosave"),
-	validateOperatorRewrite: (token: number, resolution: OperatorRewriteResolution) => __TAURI_INVOKE<OperatorRewriteValidation>("validate_operator_rewrite", { token, resolution }),
-	applyOperatorRewrite: (token: number, resolution: OperatorRewriteResolution) => __TAURI_INVOKE<AppSnapshot>("apply_operator_rewrite", { token, resolution }),
-	cancelOperatorRewrite: (token: number) => __TAURI_INVOKE<AppSnapshot>("cancel_operator_rewrite", { token }),
-	reloadActiveBufferFromDisk: () => __TAURI_INVOKE<AppSnapshot>("reload_active_buffer_from_disk"),
 	createFile: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_file", { parent, name }),
 	createDirectory: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_directory", { parent, name }),
 	deletePath: (path: string) => __TAURI_INVOKE<AppSnapshot>("delete_path", { path }),
-	reloadProject: () => __TAURI_INVOKE<AppSnapshot>("reload_project"),
 	toggleProjectTree: () => __TAURI_INVOKE<AppSnapshot>("toggle_project_tree"),
 	loadSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("load_sequence_audio", { request }),
 	unloadAudio: () => __TAURI_INVOKE<AppSnapshot>("unload_audio"),
@@ -68,7 +63,7 @@ export type AppSettings = {
 	reopenLastProject: boolean,
 	editorViewMode?: EditorViewMode,
 	reopenPreviewWindow: boolean,
-	autosaveTextEdits: boolean,
+	autosaveProjectEdits: boolean,
 	sequenceInitialZoomMode: SequenceInitialZoomMode,
 	sequenceInitialPxPerSecond: number,
 	sequenceInitialLaneHeightPx: number,
@@ -76,12 +71,15 @@ export type AppSettings = {
 };
 
 export type AppSnapshot = {
+	stateRevision: number,
+	projectEpoch: number,
 	settings: AppSettings,
 	workspaceLayout: WorkspaceLayoutState,
 	workspaceExplorer: WorkspaceExplorerState,
 	projectRoot: string | null,
 	projectHealth: ProjectHealth,
 	projectRevision: number,
+	guiProjection: GuiDocumentResult | null,
 	projectEntries: WorkspaceEntry[],
 	tabs: EditorBuffer[],
 	activeFile: string | null,
@@ -94,7 +92,6 @@ export type AppSnapshot = {
 	previewOpen: boolean,
 	audioTransport: AudioTransportSnapshot,
 	liveOutput: LiveOutputSnapshot,
-	pendingOperatorRewrite: PendingOperatorRewrite | null,
 	package: PackageStatus,
 };
 
@@ -131,6 +128,15 @@ export type DocumentObjectDescriptor = {
 	kind: ObjectKind,
 };
 
+export type DocumentSaveState = { type: "saved" } | { type: "dirty" } | { type: "saving" } | { type: "failed"; message: string } | { type: "conflict" };
+
+export type DocumentUpdate = {
+	projectEpoch: number,
+	path: string,
+	expectedDocumentRevision: number,
+	text: string,
+};
+
 export type DocumentViewId = "text" | "setup" | "preview" | "prop" | "sequence";
 
 export type EditorBuffer = {
@@ -138,6 +144,9 @@ export type EditorBuffer = {
 	name: string,
 	text: string,
 	dirty: boolean,
+	documentRevision: number,
+	savedRevision: number,
+	saveState: DocumentSaveState,
 	externalState: BufferExternalState,
 };
 
@@ -156,6 +165,8 @@ export type ElementTarget = {
 };
 
 export type ElementTargetKind = "group" | "element";
+
+export type ExternalConflictDecision = "reload" | "keepWorkingCopy";
 
 export type Geometry = { type: "points"; points: Point3Meters[] } | { type: "lines"; points: Point3Meters[]; pixels: number } | { type: "arc"; center: Point3Meters; radiusMeters: number; startDegrees: number; endDegrees: number; pixels: number };
 
@@ -183,12 +194,17 @@ export type GeometryRenderPoint = {
 
 export type GuiDocument = { type: "setup"; document: SetupGuiDocument } | { type: "sequence"; document: SequenceGuiDocument } | { type: "preview"; document: PreviewGuiDocument } | { type: "prop"; document: PropGuiDocument } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnostic[] };
 
-export type GuiDocumentMode = "editable" | "recovery";
-
 export type GuiDocumentRequest = {
+	projectRevision: number,
 	path: string,
 	view: DocumentViewId,
 	objectKey: string | null,
+};
+
+export type GuiDocumentResult = {
+	request: GuiDocumentRequest,
+	projectRevision: number,
+	document: GuiDocument,
 };
 
 export type GuiEditCommand = { type: "setup"; edit: SetupGuiEdit } | { type: "sequence"; edit: SequenceGuiEdit } | { type: "preview"; edit: PreviewGuiEdit } | { type: "prop"; edit: PropGuiEdit };
@@ -205,19 +221,6 @@ export type GuiObjectRef = {
 	kind: ObjectKind,
 	id: string,
 };
-
-export type InvalidSequenceLane = { type: "layer"; layerId: number } | { type: "lane"; laneIndex: number };
-
-export type InvalidSequencePlaceholder = {
-	kind: InvalidSequencePlaceholderKind,
-	id: string,
-	placement: InvalidSequencePlacement,
-	message: string | null,
-};
-
-export type InvalidSequencePlaceholderKind = "effect" | "automationClip" | "controlClip" | "graphNode";
-
-export type InvalidSequencePlacement = { type: "timeline"; startSeconds: number; durationSeconds: number; lane: InvalidSequenceLane } | { type: "graph"; x: number; y: number };
 
 export type LiveOutputControllerSnapshot = {
 	id: string,
@@ -246,128 +249,6 @@ export type NewSequenceRequest = {
 };
 
 export type ObjectKind = "project" | "setup" | "controller" | "elementTree" | "preview" | "prop" | "fixtureProfile" | "patch" | "sequence" | "curve" | "gradient" | "effect" | "operator";
-
-export type OperatorDefinitionCandidate = {
-	name: string,
-	params: OperatorSchemaParam[],
-	inputPorts: string[],
-};
-
-export type OperatorDefinitionKey = {
-	moduleId: string,
-	document: string,
-	name: string,
-};
-
-export type OperatorDefinitionResolution = {
-	definition: OperatorDefinitionKey,
-	replacementName: string | null,
-};
-
-export type OperatorDefinitionRewriteDescription = {
-	definition: OperatorDefinitionKey,
-	oldName: string,
-	exactReplacement: string | null,
-	candidates: OperatorDefinitionCandidate[],
-	usageCount: number,
-	usages: OperatorRewriteUsageDescription[],
-	removedOrChangedParams: string[],
-	newRequiredParams: OperatorRequiredParamDescription[],
-	removedPorts: string[],
-	newPorts: string[],
-};
-
-export type OperatorParameterResolution = {
-	definition: OperatorDefinitionKey,
-	oldName: string,
-	newName: string | null,
-};
-
-export type OperatorPortResolution = {
-	definition: OperatorDefinitionKey,
-	oldName: string,
-	newName: string | null,
-};
-
-export type OperatorRequiredConnectionResolution = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	inputPort: string,
-	fromNode: string,
-	fromPort: string,
-};
-
-export type OperatorRequiredParamDescription = {
-	name: string,
-	valueType: string,
-};
-
-export type OperatorRequiredValueResolution = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	name: string,
-	value: SequenceEffectParamValue,
-};
-
-export type OperatorRewriteResolution = {
-	definitions: OperatorDefinitionResolution[],
-	usageDefinitions: OperatorUsageDefinitionResolution[],
-	parameters: OperatorParameterResolution[],
-	usageParameters: OperatorUsageParameterResolution[],
-	ports: OperatorPortResolution[],
-	usagePorts: OperatorUsagePortResolution[],
-	requiredValues: OperatorRequiredValueResolution[],
-	requiredConnections: OperatorRequiredConnectionResolution[],
-};
-
-export type OperatorRewriteUsageDescription = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	upstreamSources: OperatorUpstreamSourceDescription[],
-};
-
-export type OperatorRewriteValidation = {
-	valid: boolean,
-	errors: string[],
-};
-
-export type OperatorSchemaParam = {
-	name: string,
-	valueType: string,
-	required: boolean,
-};
-
-export type OperatorUpstreamSourceDescription = {
-	nodeId: string,
-	port: string,
-	label: string,
-};
-
-export type OperatorUsageDefinitionResolution = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	replacementName: string | null,
-};
-
-export type OperatorUsageParameterResolution = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	oldName: string,
-	newName: string | null,
-};
-
-export type OperatorUsagePortResolution = {
-	sequencePath: string,
-	sequenceName: string,
-	nodeId: string,
-	oldName: string,
-	newName: string | null,
-};
 
 export type PackageCacheState = "ready" | "missing" | "local" | "error" | "unknown";
 
@@ -413,12 +294,6 @@ export type PackageStatus = {
 	modules: PackageModuleStatus[],
 	warnings: PackageCompatibilityWarning[],
 	message: string | null,
-};
-
-export type PendingOperatorRewrite = {
-	token: number,
-	path: string,
-	definitions: OperatorDefinitionRewriteDescription[],
 };
 
 export type PersistedEditorViewState = {
@@ -482,7 +357,7 @@ export type ProjectDiagnostic = {
 	related: RelatedDiagnosticLocation[],
 };
 
-export type ProjectHealth = "closed" | "ready" | "recovery";
+export type ProjectHealth = "closed" | "ready" | "checking" | "invalid";
 
 export type ProjectRestoreState = {
 	editorStates: { [key in string]: PersistedEditorViewState },
@@ -584,7 +459,7 @@ export type SequenceAutomationClip = {
 	detachedBindings: SequenceDetachedAutomationBinding[],
 };
 
-export type SequenceAutomationDetachmentReason = "targetDeleted" | "definitionChanged" | "operatorSchemaChanged";
+export type SequenceAutomationDetachmentReason = "targetDeleted" | "definitionChanged";
 
 export type SequenceAutomationMapping = { type: "float"; min: number; max: number } | { type: "int"; min: number; max: number } | { type: "bool" } | { type: "enum"; values: string[] } | { type: "curve"; min: number; max: number };
 
@@ -802,8 +677,6 @@ export type SequenceGuiDocument = {
 	controlClips: SequenceControlClip[],
 	compositionGraph: SequenceCompositionGraph,
 	automationClips: SequenceAutomationClip[],
-	mode: GuiDocumentMode,
-	recoveryItems: InvalidSequencePlaceholder[],
 };
 
 export type SequenceGuiEdit = { type: "setDuration"; durationSeconds: number } | { type: "setAudio"; import: string | null } | { type: "moveControlClip"; id: number; startSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "resizeControlClip"; id: number; startSeconds: number; durationSeconds: number } | { type: "deleteControlClip"; id: number } | { type: "addEffect"; effect: SequenceEffectReference; target: ElementTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "createLayer"; name: string; color: string } | { type: "createLayerAt"; name: string; color: string; x: number; y: number } | { type: "renameLayer"; id: number; name: string } | { type: "setLayerColor"; id: number; color: string } | { type: "setLayerEnabled"; id: number; enabled: boolean } | { type: "deleteLayer"; id: number; migrateToLayerId: number } | { type: "setEffectLayer"; id: number; layerId: number } | { type: "moveEffect"; id: number; startSeconds: number; target: ElementTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectDefinition"; id: number; effect: SequenceEffectReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: ElementTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurve"; id: number; name: string; sourceModuleId: string; sourcePath: string; objectKey: string } | { type: "unlinkEffectCurve"; id: number; name: string } | { type: "linkEffectGradient"; id: number; name: string; sourceModuleId: string; sourcePath: string; objectKey: string } | { type: "unlinkEffectGradient"; id: number; name: string } | { type: "addGraphOperatorNode"; operator: SequenceGraphOperator; x: number; y: number } | { type: "moveGraphNode"; nodeId: string; x: number; y: number } | { type: "deleteGraphNode"; nodeId: string } | { type: "connectGraphNodes"; fromNode: string; fromPort: string; toNode: string; toPort: string } | { type: "disconnectGraphNodes"; fromNode: string; fromPort: string; toNode: string; toPort: string } | { type: "updateGraphOperatorParam"; nodeId: string; name: string; value: SequenceEffectParamValue } | { type: "linkGraphOperatorCurve"; nodeId: string; name: string; sourceModuleId: string; sourcePath: string; objectKey: string } | { type: "unlinkGraphOperatorCurve"; nodeId: string; name: string } | { type: "linkGraphOperatorGradient"; nodeId: string; name: string; sourceModuleId: string; sourcePath: string; objectKey: string } | { type: "unlinkGraphOperatorGradient"; nodeId: string; name: string } | { type: "addAutomationClip"; startSeconds: number; durationSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "createAndBindAutomationClip"; target: SequenceAutomationTarget; mapping: SequenceAutomationMapping } | { type: "moveAutomationClip"; id: number; startSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "resizeAutomationClip"; id: number; startSeconds: number; durationSeconds: number } | { type: "updateAutomationCurve"; id: number; curve: SequenceCurvePoint[] } | { type: "updateAutomationParamMapping"; clipId: number; target: SequenceAutomationTarget; mapping: SequenceAutomationMapping } | { type: "deleteAutomationClip"; id: number } | { type: "bindAutomationParam"; clipId: number; target: SequenceAutomationTarget; mapping: SequenceAutomationMapping } | { type: "unbindAutomationParam"; clipId: number; target: SequenceAutomationTarget } | { type: "rebindDetachedAutomation"; clipId: number; detachedIndex: number; target: SequenceAutomationTarget; mapping: SequenceAutomationMapping } | { type: "discardDetachedAutomation"; clipId: number; detachedIndex: number } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "reassignMarkCollection"; collectionKey: string; index: number; targetCollectionKey: string } | { type: "deleteMark"; collectionKey: string; index: number };
@@ -961,6 +834,17 @@ export type Transform = {
 	scale: Scale3,
 };
 
+export type TransitionDecision = "saveAll" | "discard" | "cancel";
+
+export type TransitionRequest = {
+	transition: WorkspaceTransition,
+	projectEpoch: number,
+	projectRevision: number,
+	decision: TransitionDecision | null,
+};
+
+export type TransitionResult = { type: "applied"; snapshot: AppSnapshot; closeApplication: boolean } | { type: "needsDecision"; snapshot: AppSnapshot; dirtyPaths: string[] } | { type: "cancelled"; snapshot: AppSnapshot };
+
 export type WorkspaceEntry = {
 	path: string,
 	kind: WorkspaceEntryKind,
@@ -1021,6 +905,8 @@ export type WorkspacePathOwnership = "project" | { pathDependency: {
 	module_id: string,
 	module_root: string,
 } };
+
+export type WorkspaceTransition = { type: "closeFile"; path: string } | { type: "reloadFile"; path: string } | { type: "reloadProject" } | { type: "openProject"; path: string } | { type: "createProject"; parentPath: string; directoryName: string } | { type: "closeApplication" };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

@@ -1,41 +1,51 @@
 use std::sync::Arc;
 
+use crate::gui::GuiMutationError;
+use dawn_language::sequence::SequenceId;
+use dawn_project_io::ProjectSession;
+
 use super::{DesktopState, generated_source_texts, lock_unpoisoned};
 use crate::dto::{
-    AppSnapshot, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
-    SequenceSelectionEdit, SequenceSelectionEditResult,
+    AppSnapshot, GuiDocumentRequest, GuiEditCommand, GuiEditResult, SequenceSelectionEdit,
+    SequenceSelectionEditResult,
 };
 use crate::state_tasks::GuiHistoryEntry;
 
 impl DesktopState {
-    pub fn get_gui_document(&self, request: GuiDocumentRequest) -> GuiDocument {
-        if let Some(project) = self.project_session() {
-            return crate::gui::project_gui_document(Some(&project), &request);
+    pub fn get_gui_document(&self, request: GuiDocumentRequest) -> crate::dto::GuiDocumentResult {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        let revision = self.snapshot().project_revision;
+        let document = if revision != request.project_revision {
+            crate::gui::blocked(
+                "The project changed. Request the current GUI document.",
+                Vec::new(),
+            )
+        } else if let Some(project) = self.project_session() {
+            crate::gui::project_gui_document(Some(&project), &request)
+        } else {
+            crate::gui::blocked(
+                "The current project source is not ready for GUI editing.",
+                self.snapshot().diagnostics,
+            )
+        };
+        crate::dto::GuiDocumentResult {
+            request,
+            project_revision: revision,
+            document,
         }
-        if let Some(recovery) = self.project_recovery() {
-            let diagnostics = self
-                .snapshot()
-                .diagnostics
-                .into_iter()
-                .filter(|diagnostic| {
-                    diagnostic.path == request.path
-                        || diagnostic.path.ends_with(&format!("/{}", request.path))
-                        || diagnostic.path.ends_with(&format!("\\{}", request.path))
-                })
-                .collect();
-            return crate::gui::project_recovery_gui_document(&recovery, &request, diagnostics);
-        }
-        crate::gui::blocked("No project is loaded.", Vec::new())
     }
 
     pub fn request_sequence_clip_rasters(
         &self,
         request: crate::dto::SequenceClipRasterRequest,
     ) -> crate::dto::SequenceClipRasterResponse {
+        let _authoring = lock_unpoisoned(&self.authoring);
         let snapshot = self.snapshot();
         let project_revision = snapshot.project_revision;
         let raster_settings = snapshot.settings.effect_raster;
-        let project = self.project_session();
+        let project = (request.document.project_revision == project_revision)
+            .then(|| self.project_session())
+            .flatten();
         let setup_id = project
             .as_ref()
             .map(|project| project.project.root.setup.clone());
@@ -72,66 +82,80 @@ impl DesktopState {
         request: GuiDocumentRequest,
         edit: GuiEditCommand,
     ) -> GuiEditResult {
-        let Some(project) = self.project_session() else {
-            let snapshot = self.snapshot();
-            return GuiEditResult {
-                snapshot,
-                document: crate::gui::blocked("No project is loaded.", Vec::new()),
-            };
-        };
-        let affected_paths = match crate::gui::affected_paths(&project, &request) {
-            Ok(paths) => paths,
-            Err(error) => {
-                let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
-                return GuiEditResult {
-                    snapshot,
-                    document: crate::gui::blocked(error.message(), Vec::new()),
-                };
-            }
-        };
-        if let Some(path) = self.dirty_affected_path(&affected_paths) {
-            let message = format!("Save or reload {path} before using GUI edits.");
-            let snapshot = self.snapshot_with_error("gui.dirty", &path, &message);
-            return GuiEditResult {
-                snapshot,
-                document: crate::gui::blocked(message, Vec::new()),
-            };
+        match self.mutate_gui_project(&request, |session| {
+            crate::gui::apply_edit(session, &request, edit)
+        }) {
+            Ok((result, ())) => result,
+            Err(error) => self.gui_edit_error(&request, error),
         }
+    }
 
-        let before = Arc::clone(&project);
-        let mut edited = (*project).clone();
-        if let Err(error) = crate::gui::apply_edit(&mut edited, &request, edit) {
-            let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
-            return GuiEditResult {
-                snapshot,
-                document: crate::gui::blocked(error.message(), Vec::new()),
-            };
+    fn mutate_gui_project<T>(
+        &self,
+        request: &GuiDocumentRequest,
+        mutate: impl FnOnce(&mut ProjectSession) -> Result<T, GuiMutationError>,
+    ) -> Result<(GuiEditResult, T), GuiMutationError> {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        self.mutate_gui_project_locked(request, mutate)
+    }
+
+    fn mutate_gui_project_locked<T>(
+        &self,
+        request: &GuiDocumentRequest,
+        mutate: impl FnOnce(&mut ProjectSession) -> Result<T, GuiMutationError>,
+    ) -> Result<(GuiEditResult, T), GuiMutationError> {
+        if self.snapshot().project_revision != request.project_revision {
+            return Err(GuiMutationError::Blocked(
+                "The project changed before the GUI edit arrived.".into(),
+            ));
         }
-        let generated_text = match generated_source_texts(&edited, &affected_paths) {
-            Ok(text) => text,
-            Err(message) => {
-                let snapshot = self.snapshot_with_error("gui.edit", &request.path, &message);
-                return GuiEditResult {
-                    snapshot,
-                    document: crate::gui::blocked(message, Vec::new()),
-                };
-            }
-        };
-        let document = crate::gui::project_gui_document(Some(&edited), &request);
+        let before = self
+            .project_session()
+            .ok_or_else(|| GuiMutationError::Blocked("No project is loaded.".to_string()))?;
+        let affected_paths = crate::gui::affected_paths(&before, request)?;
+        let mut edited = (*before).clone();
+        let value = mutate(&mut edited)?;
+        dawn_language::validation::validate_project(&edited.project)
+            .map_err(|error| GuiMutationError::Invalid(format!("{error:?}")))?;
+        let generated_text =
+            generated_source_texts(&edited, &affected_paths).map_err(GuiMutationError::Invalid)?;
         let edited = Arc::new(edited);
+        let snapshot = self
+            .accept_gui_sources(Arc::clone(&edited), generated_text, "GUI edit applied")
+            .map_err(GuiMutationError::Invalid)?;
+        let document = match &snapshot.gui_projection {
+            Some(projection)
+                if projection.request.path == request.path
+                    && projection.request.view == request.view
+                    && projection.request.object_key == request.object_key =>
+            {
+                projection.document.clone()
+            }
+            _ => crate::gui::project_gui_document(Some(&edited), request),
+        };
         lock_unpoisoned(&self.gui_history).push_undo(GuiHistoryEntry {
             before,
             after: Arc::clone(&edited),
             affected_paths: affected_paths.clone(),
             status_path: request.path.clone(),
         });
-        self.schedule_gui_save(Arc::clone(&edited), affected_paths, request.path.clone());
-        let snapshot = self.apply_gui_project_update(edited, "GUI edit applied", generated_text);
-        GuiEditResult { snapshot, document }
+        Ok((GuiEditResult { snapshot, document }, value))
+    }
+
+    fn gui_edit_error(
+        &self,
+        _request: &GuiDocumentRequest,
+        error: GuiMutationError,
+    ) -> GuiEditResult {
+        GuiEditResult {
+            snapshot: self.snapshot(),
+            document: crate::gui::blocked(error.message(), Vec::new()),
+        }
     }
 
     pub fn finish_composition_graph_editing(&self) -> AppSnapshot {
-        lock_unpoisoned(&self.render_refresh).invalidate_pending();
+        let _authoring = lock_unpoisoned(&self.authoring);
+        self.render_refresh.invalidate_pending();
         let render_error = self
             .project_session()
             .and_then(|session| self.refresh_render_session(&session.project));
@@ -143,134 +167,98 @@ impl DesktopState {
 
     pub fn apply_sequence_selection_edit(
         &self,
+        request: GuiDocumentRequest,
         edit: SequenceSelectionEdit,
     ) -> SequenceSelectionEditResult {
-        let Some(request) = self.active_sequence_gui_request() else {
-            return SequenceSelectionEditResult {
-                snapshot: self.snapshot_with_error(
-                    "gui.sequence.selection",
-                    "",
-                    "No active sequence GUI document is available.",
-                ),
-                document: crate::gui::blocked(
-                    "No active sequence GUI document is available.",
-                    Vec::new(),
-                ),
-                selection: None,
-                copied_count: 0,
-                skipped_count: 0,
-            };
-        };
-        let Some(project) = self.project_session() else {
-            return SequenceSelectionEditResult {
-                snapshot: self.snapshot(),
-                document: crate::gui::blocked("No project is loaded.", Vec::new()),
-                selection: None,
-                copied_count: 0,
-                skipped_count: 0,
-            };
-        };
-        let affected_paths = match crate::gui::affected_paths(&project, &request) {
-            Ok(paths) => paths,
-            Err(error) => {
-                return SequenceSelectionEditResult {
-                    snapshot: self.snapshot_with_error(
-                        "gui.sequence.selection",
-                        &request.path,
-                        error.message(),
-                    ),
-                    document: crate::gui::blocked(error.message(), Vec::new()),
-                    selection: None,
-                    copied_count: 0,
-                    skipped_count: 0,
-                };
-            }
-        };
-        if let Some(path) = self.dirty_affected_path(&affected_paths) {
-            let message = format!("Save or reload {path} before using GUI edits.");
-            return SequenceSelectionEditResult {
-                snapshot: self.snapshot_with_error("gui.dirty", &path, &message),
-                document: crate::gui::blocked(message, Vec::new()),
-                selection: None,
-                copied_count: 0,
-                skipped_count: 0,
-            };
-        }
-
-        let before =
-            (!matches!(&edit, SequenceSelectionEdit::Copy { .. })).then(|| Arc::clone(&project));
-        let mut edited = (*project).clone();
-        let mutation = crate::gui::apply_sequence_selection_edit(
-            &mut edited,
-            &request,
-            edit,
-            &mut lock_unpoisoned(&self.sequence_clipboard),
-        );
-        let mutation = match mutation {
-            Ok(mutation) => mutation,
-            Err(error) => {
-                return SequenceSelectionEditResult {
-                    snapshot: self.snapshot_with_error(
-                        "gui.sequence.selection",
-                        &request.path,
-                        error.message(),
-                    ),
-                    document: crate::gui::blocked(error.message(), Vec::new()),
-                    selection: None,
-                    copied_count: 0,
-                    skipped_count: 0,
-                };
-            }
-        };
-        let document = crate::gui::project_gui_document(Some(&edited), &request);
-        let snapshot = if let Some(before) = before {
-            let generated_text = match generated_source_texts(&edited, &affected_paths) {
-                Ok(text) => text,
-                Err(message) => {
-                    return SequenceSelectionEditResult {
-                        snapshot: self.snapshot_with_error(
-                            "gui.sequence.selection",
-                            &request.path,
-                            &message,
-                        ),
-                        document: crate::gui::blocked(message, Vec::new()),
-                        selection: None,
-                        copied_count: 0,
-                        skipped_count: 0,
-                    };
-                }
-            };
-            let edited = Arc::new(edited);
-            lock_unpoisoned(&self.gui_history).push_undo(GuiHistoryEntry {
-                before,
-                after: Arc::clone(&edited),
-                affected_paths: affected_paths.clone(),
-                status_path: request.path.clone(),
-            });
-            self.schedule_gui_save(Arc::clone(&edited), affected_paths, request.path.clone());
-            self.apply_gui_project_update(edited, "GUI selection edit applied", generated_text)
+        let outcome = if let SequenceSelectionEdit::Copy { selection } = edit {
+            self.copy_gui_selection(&request, selection)
         } else {
-            self.snapshot()
+            let _authoring = lock_unpoisoned(&self.authoring);
+            let mut clipboard = lock_unpoisoned(&self.sequence_clipboard);
+            let mut candidate_clipboard = clipboard.clone();
+            let result = self.mutate_gui_project_locked(&request, |session| {
+                crate::gui::apply_sequence_selection_edit(
+                    session,
+                    &request,
+                    edit,
+                    &mut candidate_clipboard,
+                )
+            });
+            if result.is_ok() {
+                *clipboard = candidate_clipboard;
+            }
+            result
         };
-        SequenceSelectionEditResult {
-            snapshot,
-            document,
-            selection: mutation.selection,
-            copied_count: mutation.copied_count,
-            skipped_count: mutation.skipped_count,
+        match outcome {
+            Ok((result, mutation)) => SequenceSelectionEditResult {
+                snapshot: result.snapshot,
+                document: result.document,
+                selection: mutation.selection,
+                copied_count: mutation.copied_count,
+                skipped_count: mutation.skipped_count,
+            },
+            Err(error) => {
+                let result = self.gui_edit_error(&request, error);
+                SequenceSelectionEditResult {
+                    snapshot: result.snapshot,
+                    document: result.document,
+                    selection: None,
+                    copied_count: 0,
+                    skipped_count: 0,
+                }
+            }
         }
     }
 
+    fn copy_gui_selection(
+        &self,
+        request: &GuiDocumentRequest,
+        selection: crate::dto::SequenceSelection,
+    ) -> Result<(GuiEditResult, crate::gui::SequenceSelectionMutation), GuiMutationError> {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        if self.snapshot().project_revision != request.project_revision {
+            return Err(GuiMutationError::Blocked(
+                "The project changed before copying".into(),
+            ));
+        }
+        if !matches!(request.view, crate::dto::DocumentViewId::Sequence) {
+            return Err(GuiMutationError::Invalid(
+                "Copy requires a sequence GUI document.".to_string(),
+            ));
+        }
+        let snapshot = self.snapshot();
+        let project = self
+            .project_session()
+            .ok_or_else(|| GuiMutationError::Blocked("No project is loaded.".to_string()))?;
+        let resolved =
+            crate::gui::resolve_request(&project, request).map_err(GuiMutationError::Invalid)?;
+        crate::gui::ensure_owned_gui_document(&project, &resolved)?;
+        let (clipboard, copied_count, skipped_count) = crate::gui::copy_sequence_selection(
+            &project,
+            &SequenceId(resolved.identity),
+            &selection,
+        )?;
+        *lock_unpoisoned(&self.sequence_clipboard) = clipboard;
+        Ok((
+            GuiEditResult {
+                snapshot,
+                document: crate::gui::project_gui_document(Some(&project), request),
+            },
+            crate::gui::SequenceSelectionMutation {
+                selection: Some(selection),
+                copied_count,
+                skipped_count,
+            },
+        ))
+    }
+
     pub fn undo_active_edit(&self) -> AppSnapshot {
+        let _authoring = lock_unpoisoned(&self.authoring);
         let Some(entry) = lock_unpoisoned(&self.gui_history).peek_undo() else {
             return self.update_snapshot(|snapshot| {
                 snapshot.status = "No GUI edit to undo".to_string();
             });
         };
-        if let Some(path) = self.dirty_affected_path(&entry.affected_paths) {
-            let message = format!("Save or reload {path} before undoing GUI edits.");
-            return self.snapshot_with_error("gui.undo.dirty", &path, &message);
-        }
         let generated_text = match generated_source_texts(&entry.before, &entry.affected_paths) {
             Ok(text) => text,
             Err(message) => {
@@ -285,24 +273,19 @@ impl DesktopState {
             history.push_redo(entry.clone());
             entry
         };
-        self.schedule_gui_save(
-            Arc::clone(&entry.before),
-            entry.affected_paths.clone(),
-            entry.status_path.clone(),
-        );
-        self.apply_gui_project_update(entry.before, "GUI edit undone", generated_text)
+        self.accept_gui_sources(entry.before, generated_text, "GUI edit undone")
+            .unwrap_or_else(|error| {
+                self.snapshot_with_error("gui.undo", &entry.status_path, &error)
+            })
     }
 
     pub fn redo_active_edit(&self) -> AppSnapshot {
+        let _authoring = lock_unpoisoned(&self.authoring);
         let Some(entry) = lock_unpoisoned(&self.gui_history).peek_redo() else {
             return self.update_snapshot(|snapshot| {
                 snapshot.status = "No GUI edit to redo".to_string();
             });
         };
-        if let Some(path) = self.dirty_affected_path(&entry.affected_paths) {
-            let message = format!("Save or reload {path} before redoing GUI edits.");
-            return self.snapshot_with_error("gui.redo.dirty", &path, &message);
-        }
         let generated_text = match generated_source_texts(&entry.after, &entry.affected_paths) {
             Ok(text) => text,
             Err(message) => {
@@ -317,11 +300,9 @@ impl DesktopState {
             history.push_undo_from_redo(entry.clone());
             entry
         };
-        self.schedule_gui_save(
-            Arc::clone(&entry.after),
-            entry.affected_paths.clone(),
-            entry.status_path.clone(),
-        );
-        self.apply_gui_project_update(entry.after, "GUI edit redone", generated_text)
+        self.accept_gui_sources(entry.after, generated_text, "GUI edit redone")
+            .unwrap_or_else(|error| {
+                self.snapshot_with_error("gui.redo", &entry.status_path, &error)
+            })
     }
 }

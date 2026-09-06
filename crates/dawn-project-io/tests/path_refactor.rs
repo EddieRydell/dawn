@@ -207,6 +207,31 @@ fn moves_local_and_nested_path_dependency_roots_without_changing_module_ids() {
         .expect("write lock");
     fs::create_dir(root.join("libraries")).expect("destination parent");
 
+    let nested_path = Utf8PathBuf::from("modules/local/nested/nested.effect.dawn");
+    let original = fs::read_to_string(root.join(&nested_path)).unwrap();
+    let edited = original.replace("param float repeats = 1.0;", "param float repeats = 3.0;");
+    assert_ne!(edited, original);
+    let report = dawn_project_io::check_package_with_overrides(
+        &root,
+        &BTreeMap::from([(nested_path.clone(), edited.clone())]),
+    );
+    let unsaved = report.session.expect("path dependency override compiles");
+    let document = unsaved
+        .source
+        .document_for_workspace_path(&nested_path)
+        .unwrap();
+    assert_eq!(document.module_id(), nested_id);
+    assert_eq!(
+        dawn_project_io::source_document_text(&unsaved, &document)
+            .unwrap()
+            .unwrap(),
+        edited
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(&nested_path)).unwrap(),
+        original
+    );
+
     let session = load_package(&root).expect("load").session;
     let plan = plan_path_change(
         &session,

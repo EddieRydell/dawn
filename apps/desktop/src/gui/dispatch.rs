@@ -10,11 +10,6 @@ pub fn apply_edit(
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
             edit_sequence(session, &resolved, edit)?;
-            let sequence_id = SequenceId(resolved.identity.clone());
-            dawn_language::validation::validate_sequence_by_id(&session.project, &sequence_id)
-                .map_err(|error| GuiMutationError::Invalid(error.message))?;
-            dawn_language::validation::validate_project(&session.project)
-                .map_err(|error| GuiMutationError::Invalid(format!("{error:?}")))?;
         }
         (DocumentViewId::Setup, GuiEditCommand::Setup { edit }) => {
             edit_setup(session, edit)?;
@@ -65,23 +60,6 @@ pub(crate) fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     clipboard: &mut Option<SequenceClipboard>,
 ) -> Result<SequenceSelectionMutation, GuiMutationError> {
-    let mut candidate_clipboard = clipboard.clone();
-    let result =
-        apply_sequence_selection_edit_inner(session, request, edit, &mut candidate_clipboard)?;
-    let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    let sequence_id = SequenceId(resolved.identity.clone());
-    dawn_language::validation::validate_sequence_by_id(&session.project, &sequence_id)
-        .map_err(|error| GuiMutationError::Invalid(error.message))?;
-    *clipboard = candidate_clipboard;
-    Ok(result)
-}
-
-fn apply_sequence_selection_edit_inner(
-    session: &mut ProjectSession,
-    request: &GuiDocumentRequest,
-    edit: SequenceSelectionEdit,
-    clipboard: &mut Option<SequenceClipboard>,
-) -> Result<SequenceSelectionMutation, GuiMutationError> {
     if !matches!(request.view, DocumentViewId::Sequence) {
         return Err(GuiMutationError::Invalid(
             "Sequence selection edits require a sequence GUI document.".to_string(),
@@ -91,16 +69,9 @@ fn apply_sequence_selection_edit_inner(
     ensure_owned_gui_document(session, &resolved)?;
     let sequence_id = SequenceId(resolved.identity.clone());
     match edit {
-        SequenceSelectionEdit::Copy { selection } => {
-            let (next_clipboard, copied_count, skipped_count) =
-                copy_sequence_selection(session, &sequence_id, &selection)?;
-            *clipboard = next_clipboard;
-            Ok(SequenceSelectionMutation {
-                selection: Some(selection),
-                copied_count,
-                skipped_count,
-            })
-        }
+        SequenceSelectionEdit::Copy { .. } => Err(GuiMutationError::Invalid(
+            "Copy must use the read-only selection path.".to_string(),
+        )),
         SequenceSelectionEdit::Cut { selection } => {
             let (next_clipboard, copied_count, skipped_count) =
                 copy_sequence_selection(session, &sequence_id, &selection)?;

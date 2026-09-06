@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
 
     use camino::{Utf8Path, Utf8PathBuf};
@@ -17,7 +17,7 @@ mod tests {
             .session
     }
 
-    fn starter_copy() -> (tempfile::TempDir, Utf8PathBuf) {
+    pub(crate) fn starter_copy() -> (tempfile::TempDir, Utf8PathBuf) {
         let workspace = Utf8Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Utf8Path::parent)
@@ -48,6 +48,7 @@ mod tests {
     fn setup_projection_contains_all_five_sections() {
         let session = starter();
         let request = GuiDocumentRequest {
+            project_revision: 0,
             path: "setups/main.setup.dawn".to_string(),
             view: DocumentViewId::Setup,
             object_key: Some("main".to_string()),
@@ -90,7 +91,7 @@ mod tests {
     #[test]
     fn path_change_rejects_stale_revision() {
         let (_temporary, root) = starter_copy();
-        let state = crate::desktop_state::DesktopState::new();
+        let state = crate::desktop_state::DesktopState::new(|_| {});
         let snapshot = state.open_project_path(root.as_str());
         let error = state
             .plan_workspace_path_change(WorkspacePathChangeRequest {
@@ -105,10 +106,21 @@ mod tests {
     #[test]
     fn structural_path_change_rejects_dirty_open_text() {
         let (_temporary, root) = starter_copy();
-        let state = crate::desktop_state::DesktopState::new();
+        let state = crate::desktop_state::DesktopState::new(|_| {});
         state.open_project_path(root.as_str());
-        state.open_file_path("sequences/layer_test.sequence.dawn");
-        state.update_active_text("dirty text".to_string());
+        let mut settings = state.snapshot().settings;
+        settings.autosave_project_edits = false;
+        state.update_app_settings(settings);
+        let snapshot = state.open_file_path("sequences/layer_test.sequence.dawn");
+        let buffer = snapshot.active_buffer.unwrap();
+        state
+            .update_document(crate::dto::DocumentUpdate {
+                project_epoch: snapshot.project_epoch,
+                path: buffer.path,
+                expected_document_revision: buffer.document_revision,
+                text: format!("{}\n# unsaved change\n", buffer.text),
+            })
+            .unwrap();
         let revision = state.snapshot().project_revision;
         let error = state
             .apply_workspace_path_change(WorkspacePathChangeRequest {

@@ -1,5 +1,7 @@
-import { commands, getCurrentGuiRequest } from "./api";
+import { commands } from "./api";
 import { effectiveEditorViewMode } from "./editorViewMode";
+import { openProjectDialog, runWorkspaceTransition, useTransitionStore } from "./workspaceTransitions";
+import { navigateToText } from "./workspace/navigation";
 import { runSnapshotCommand, useAppStore } from "./store";
 import type { SidebarView } from "./types";
 
@@ -52,17 +54,15 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     window.dispatchEvent(new CustomEvent("dawn:new-sequence"));
   }, hasProject),
   "file.openProject": command("Open Project...", "File", ["folder", "workspace"], async () => {
-    await runSnapshotCommand(commands.openProjectDialog);
+    await openProjectDialog();
   }, always, "Ctrl+O"),
-  "file.save": command("Save", "File", ["write"], async () => {
-    const store = useAppStore.getState();
-    if (store.snapshot === null || store.snapshot.activeBuffer === null || effectiveEditorViewMode(store.snapshot) !== "text") return;
-    await runSnapshotCommand(() => commands.updateActiveText(store.localText));
-    await runSnapshotCommand(commands.flushAutosave);
+  "file.save": command("Save All", "File", ["write"], async () => {
+    await runSnapshotCommand(commands.saveAll);
   }, hasProject, "Ctrl+S"),
   "file.reloadFromDisk": command("Reload From Disk", "File", ["revert"], async () => {
-    await runSnapshotCommand(commands.reloadActiveBufferFromDisk);
-    await refreshActiveGuiDocument();
+    const path = useAppStore.getState().snapshot?.activeFile;
+    if (path !== null && path !== undefined) await runWorkspaceTransition({ type: "reloadFile", path });
+    useAppStore.getState().resetGuiLocalState();
   }, hasProject),
   "file.settings": command("Settings...", "File", ["preferences"], () => {
     window.dispatchEvent(new CustomEvent("dawn:settings"));
@@ -70,16 +70,19 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
   "edit.undo": command("Undo", "Edit", ["history"], async () => {
     if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
     await runSnapshotCommand(commands.undoActiveEdit);
-    await refreshActiveGuiDocument();
   }, hasProject, "Ctrl+Z"),
   "edit.redo": command("Redo", "Edit", ["history"], async () => {
     if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
     await runSnapshotCommand(commands.redoActiveEdit);
-    await refreshActiveGuiDocument();
   }, hasProject, "Ctrl+Shift+Z / Ctrl+Y"),
   "view.toggleGuiMode": command("Toggle GUI / Text Mode", "View", ["editor"], async () => {
     const mode = (useAppStore.getState().snapshot?.settings.editorViewMode ?? "gui") === "gui" ? "text" : "gui";
-    await runSnapshotCommand(() => commands.setEditorViewMode(mode));
+    const snapshot = await runSnapshotCommand(() => commands.setEditorViewMode(mode));
+    if (mode === "gui" && snapshot.projectHealth !== "ready" && snapshot.activeFile !== null) {
+      const diagnostic = snapshot.diagnostics.find((item) => item.severity === "error");
+      await navigateToText(snapshot.activeFile, diagnostic?.range ?? null);
+      focusSidebar("problems")();
+    }
   }, hasProject),
   "view.toggleProjectTree": command("Toggle Side Bar", "View", ["collapse", "panel"], async () => {
     await runSnapshotCommand(commands.toggleProjectTree);
@@ -95,7 +98,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT));
   }, always, "Ctrl+Shift+P"),
   "project.reload": command("Reload / Check Project", "Project", ["refresh", "diagnostics"], async () => {
-    await runSnapshotCommand(commands.reloadProject);
+    await runWorkspaceTransition({ type: "reloadProject" });
   }, hasProject, "Ctrl+R"),
   "packages.sync": command("Synchronize Packages", "Packages", ["lock", "cache"], async () => {
     await runSnapshotCommand(commands.syncPackages);
@@ -110,6 +113,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
 
 export function installGlobalShortcuts() {
   const onKeyDown = (event: KeyboardEvent) => {
+    if (useTransitionStore.getState().inProgress) return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (!ctrl) return;
     const key = event.key.toLowerCase();
@@ -140,13 +144,4 @@ function command(
   return shortcut === undefined
     ? { label, category, keywords, enabled, run }
     : { label, category, keywords, shortcut, enabled, run };
-}
-
-async function refreshActiveGuiDocument() {
-  const request = getCurrentGuiRequest();
-  if (request === null) return;
-  const document = await commands.getGuiDocument(request);
-  const store = useAppStore.getState();
-  store.setGuiDocument(document);
-  store.resetGuiLocalState();
 }

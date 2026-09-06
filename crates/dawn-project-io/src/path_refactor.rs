@@ -502,8 +502,8 @@ fn prepare_writes(candidate: &ProjectSession) -> Result<BTreeMap<Utf8PathBuf, Ve
         ) {
             continue;
         }
-        let text = document_text(candidate, document_id.path(), document)
-            .map_err(|error| error.to_string())?;
+        let text =
+            document_text(candidate, document_id, document).map_err(|error| error.to_string())?;
         writes.insert(module.root.join(document_id.path()), text.into_bytes());
     }
     for module in candidate.source.source_graph.modules().values() {
@@ -619,7 +619,7 @@ fn validate_candidate(candidate: &ProjectSession) -> Result<(), String> {
             module.origin,
             ResolvedModuleOrigin::RegistryDependency { .. }
         ) {
-            let _ = document_text(candidate, document_id.path(), document)
+            let _ = document_text(candidate, document_id, document)
                 .map_err(|error| error.to_string())?;
         }
     }

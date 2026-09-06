@@ -3,6 +3,12 @@ use crate::dto::{AppSnapshot, GuiDocumentRequest};
 
 impl DesktopState {
     pub fn load_sequence_audio(&self, request: GuiDocumentRequest) -> AppSnapshot {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        if request.project_revision != self.snapshot().project_revision
+            || self.project_session().is_none()
+        {
+            return self.snapshot();
+        }
         let audio = self.resolve_sequence_audio(&request);
         let sequence_id = self.resolve_sequence_id(&request);
         let audio_transport = lock_unpoisoned(&self.audio).load(audio);
@@ -22,8 +28,14 @@ impl DesktopState {
     }
 
     pub fn unload_audio(&self) -> AppSnapshot {
+        let _authoring = lock_unpoisoned(&self.authoring);
         let audio_transport = lock_unpoisoned(&self.audio).unload();
-        self.unload_render_session();
+        if self.snapshot().project_health == crate::dto::ProjectHealth::Ready {
+            lock_unpoisoned(&self.workspace).render_target = None;
+            self.unload_render_session();
+        } else {
+            self.invalidate_prepared_project();
+        }
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
             snapshot.render_error = None;
@@ -69,7 +81,8 @@ impl DesktopState {
         &self,
     ) -> Result<crate::rendering::AudioClockRenderedFrame, crate::rendering::SequenceRenderError>
     {
-        self.drain_render_refresh_results();
+        self.render_refresh.finish_pending();
+        let _authoring = lock_unpoisoned(&self.authoring);
         let audio_transport = self.audio_snapshot();
         lock_unpoisoned(&self.sequence_render).render_current_sequence_frame(&audio_transport)
     }
@@ -78,12 +91,14 @@ impl DesktopState {
         &self,
     ) -> Result<crate::rendering::AudioClockRenderIdentity, crate::rendering::SequenceRenderError>
     {
-        self.drain_render_refresh_results();
+        self.render_refresh.finish_pending();
+        let _authoring = lock_unpoisoned(&self.authoring);
         let audio_transport = self.audio_snapshot();
         lock_unpoisoned(&self.sequence_render).active_render_identity(&audio_transport)
     }
 
     pub fn preview_scene(&self) -> Option<crate::preview::PreviewScene> {
+        let _authoring = lock_unpoisoned(&self.authoring);
         let session = self.project_session()?;
         Some(crate::preview::PreviewScene::from_project(
             self.project_revision(),
@@ -92,6 +107,7 @@ impl DesktopState {
     }
 
     pub fn preview_scene_revision(&self) -> Option<u64> {
+        let _authoring = lock_unpoisoned(&self.authoring);
         self.project_session().map(|_| self.project_revision())
     }
 }

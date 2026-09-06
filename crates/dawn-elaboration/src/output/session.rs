@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use dawn_language::controller::{ControllerId, ControllerPortId};
@@ -11,12 +10,13 @@ use dawn_language::validation::validate_project;
 use dawn_language::values::{SampleTime, sample_time_from_seconds_f32};
 
 use super::controls::{prepare_controls, prepare_fixture_behaviors};
+use super::elements::OutputElements;
 use super::errors::{SequenceOutputPrepareError, SequenceOutputRenderError};
 use super::frame::{ControllerPortFrame, RenderedSequenceFrame};
 use super::patch::prepare_patch;
+use crate::RenderError;
+use crate::sequence::elaboration::prepare_validated_sequence;
 use crate::sequence::timeline::{frame_at_or_before, sample_time_for_frame};
-use crate::{RenderError, elaborate_sequence};
-use dawn_runtime::element::ElementLayout;
 use dawn_runtime::sequence::{PreparedSequence, SequenceWorkspace};
 
 static NEXT_OUTPUT_ID: AtomicU32 = AtomicU32::new(1);
@@ -96,9 +96,15 @@ impl PreparedSequenceOutput {
                     .insert(profile.clone(), definition.clone());
             }
         }
-        let controls = prepare_controls(&tree, &profiles, &sequence_definition.control_clips)?;
-        let fixture_behaviors = prepare_fixture_behaviors(&tree, &profiles)?;
-        let sequence = elaborate_sequence(project, setup_id, sequence_id)
+        let elements = OutputElements::prepare(&tree, &profiles)?;
+        let controls = prepare_controls(
+            &tree,
+            &profiles,
+            &sequence_definition.control_clips,
+            &elements,
+        )?;
+        let fixture_behaviors = prepare_fixture_behaviors(&tree, &profiles, &elements)?;
+        let sequence = prepare_validated_sequence(project, setup_id, sequence_definition)
             .map_err(SequenceOutputPrepareError::Render)?;
         let patch = project.patches.get(&setup.patch).ok_or_else(|| {
             SequenceOutputPrepareError::InvalidPatch("setup patch is missing".to_string())
@@ -141,31 +147,7 @@ impl PreparedSequenceOutput {
             }
             controller_ports = selected;
         }
-        let patch = prepare_patch(&tree, patch, &profiles, &controller_ports)?;
-        let mut elements = Vec::new();
-        for (node_id, node) in &tree.nodes {
-            let layout = match &node.kind {
-                ElementNodeKind::Group { .. } => continue,
-                ElementNodeKind::Color { cells, .. } => ElementLayout::Color(*cells),
-                ElementNodeKind::Scalar { cells } => ElementLayout::Scalar(*cells),
-                ElementNodeKind::Indexed { cells, .. } => ElementLayout::Indexed(*cells),
-                ElementNodeKind::Fixture { profile } => ElementLayout::Fixture(
-                    u32::try_from(profiles.definitions[profile].functions.len()).map_err(|_| {
-                        SequenceOutputPrepareError::InvalidPatch(
-                            "fixture function count exceeds u32".to_string(),
-                        )
-                    })?,
-                ),
-            };
-            elements.push((*node_id, layout));
-        }
-        let element_indexes = tree
-            .nodes
-            .iter()
-            .filter(|(_, node)| !matches!(node.kind, ElementNodeKind::Group { .. }))
-            .enumerate()
-            .map(|(index, (id, _))| (*id, index))
-            .collect::<HashMap<_, _>>();
+        let patch = prepare_patch(&tree, patch, &profiles, &controller_ports, &elements)?;
         let mut offset = 0;
         let mut color_spans = Vec::new();
         for element in &sequence.elements {
@@ -188,7 +170,7 @@ impl PreparedSequenceOutput {
                     })
                 };
                 color_spans.push((
-                    index32(element_indexes[&element_id])?,
+                    elements.indexes[&element_id],
                     index32(offset)?..index32(end)?,
                 ));
             }
@@ -198,7 +180,7 @@ impl PreparedSequenceOutput {
             sequence: PreparedSequence {
                 workspace_key: NEXT_OUTPUT_ID.fetch_add(1, Ordering::Relaxed),
                 signals: sequence,
-                elements: elements.into_boxed_slice(),
+                elements: elements.layouts.into_boxed_slice(),
                 controls: controls.into_boxed_slice(),
                 fixture_behaviors,
                 patch,

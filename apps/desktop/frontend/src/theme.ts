@@ -133,7 +133,6 @@ export const THEME_METRICS = {
   tooltipDelayMs: cssNumber("--dawn-tooltip-delay-ms"),
   searchDebounceMs: cssNumber("--dawn-search-debounce-ms"),
   documentAnalysisDelayMs: cssNumber("--dawn-document-analysis-delay-ms"),
-  projectAnalysisPollDelayMs: cssNumber("--dawn-project-analysis-poll-delay-ms"),
   sequenceLeftGutter: cssNumber("--dawn-sequence-left-gutter"),
   sequenceTop: cssNumber("--dawn-sequence-top"),
   sequenceAudioStripTop: cssNumber("--dawn-sequence-audio-strip-top"),

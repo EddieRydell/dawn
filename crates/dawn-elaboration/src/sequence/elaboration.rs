@@ -1,9 +1,8 @@
 use dawn_language::dsl::DslBindCache;
 use dawn_language::model::DawnProject;
-use dawn_language::sequence::SequenceId;
+use dawn_language::sequence::{Sequence, SequenceId};
 use dawn_language::setup::SetupId;
 use dawn_language::validation::validate_sequence;
-use dawn_language::values::sample_duration_from_dawn_duration;
 use indexmap::{IndexMap, IndexSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -13,7 +12,7 @@ use super::effects::preparation::{PrepareEffectContext, prepare_effect_inst};
 use super::elements::prepare_elements;
 use super::renderer::RenderError;
 use super::targets::PreparedTargetCache;
-use super::timeline::{frame_count, prepare_timing};
+use super::timeline::prepare_timing;
 use crate::{PreparedLayer, PreparedSignalGraph};
 
 static NEXT_SEQUENCE_ID: AtomicU32 = AtomicU32::new(1);
@@ -22,6 +21,24 @@ pub fn elaborate_sequence(
     project: &DawnProject,
     setup_id: &SetupId,
     sequence_id: &SequenceId,
+) -> Result<PreparedSignalGraph, RenderError> {
+    let sequence =
+        project
+            .sequences
+            .get(sequence_id)
+            .ok_or_else(|| RenderError::MissingSequence {
+                sequence_id: sequence_id.clone(),
+            })?;
+    validate_sequence(project, sequence).map_err(|error| RenderError::BadGraph {
+        message: error.message,
+    })?;
+    prepare_validated_sequence(project, setup_id, sequence)
+}
+
+pub(crate) fn prepare_validated_sequence(
+    project: &DawnProject,
+    setup_id: &SetupId,
+    sequence: &Sequence,
 ) -> Result<PreparedSignalGraph, RenderError> {
     let setup = project
         .setups
@@ -33,17 +50,7 @@ pub fn elaborate_sequence(
         .element_trees
         .get(&setup.elements)
         .ok_or(RenderError::MissingElementTree)?;
-    let sequence =
-        project
-            .sequences
-            .get(sequence_id)
-            .ok_or_else(|| RenderError::MissingSequence {
-                sequence_id: sequence_id.clone(),
-            })?;
-    validate_sequence(project, sequence).map_err(|error| RenderError::BadGraph {
-        message: error.message,
-    })?;
-    prepare_timing(sequence)?;
+    let timing = prepare_timing(sequence)?;
 
     let (elements, groups) = prepare_elements(project, tree)?;
     let mut pixel_count = 0;
@@ -120,12 +127,6 @@ pub fn elaborate_sequence(
             })?;
     }
     let frame_rate = sequence.frame_rate;
-    let duration = sample_duration_from_dawn_duration(&sequence.duration).map_err(|_| {
-        RenderError::InvalidTiming {
-            reason: "sequence duration exceeds the runtime clock range".to_string(),
-        }
-    })?;
-    let frame_count = frame_count(&sequence.duration, frame_rate)?;
     let mut programs = sample_programs
         .into_values()
         .map(Arc::unwrap_or_clone)
@@ -163,8 +164,8 @@ pub fn elaborate_sequence(
     Ok(PreparedSignalGraph {
         workspace_key: NEXT_SEQUENCE_ID.fetch_add(1, Ordering::Relaxed),
         frame_rate,
-        frame_count,
-        duration,
+        frame_count: timing.frame_count,
+        duration: timing.duration,
         elements: elements
             .iter()
             .map(|element| dawn_runtime::signal::PreparedElement {

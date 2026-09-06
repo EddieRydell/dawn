@@ -1,7 +1,7 @@
-use camino::Utf8Path;
 use dawn_language::controller::*;
 use dawn_language::element::*;
 use dawn_language::fixture_profile::*;
+use dawn_language::identity::DocumentId;
 use dawn_language::patch::*;
 use dawn_language::preview::*;
 use dawn_language::setup::Setup;
@@ -14,7 +14,7 @@ use crate::source::SourceObjectKind;
 
 pub(super) fn setup_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     setup: &Setup,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("setup");
@@ -140,7 +140,7 @@ pub(super) fn controller_value(controller: &Controller) -> Result<Value, ExportP
 
 pub(super) fn element_tree_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     tree: &ElementTree,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("element_tree");
@@ -234,7 +234,7 @@ pub(super) fn element_tree_value(
 
 pub(super) fn preview_layout_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     layout: &PreviewLayout,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("preview_layout");
@@ -310,7 +310,7 @@ pub(super) fn prop_definition_value(
 
 pub(super) fn patch_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     patch: &PatchGraph,
 ) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("patch");
@@ -346,7 +346,7 @@ pub(super) fn patch_value(
 
 fn patch_node_value(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     id: PatchNodeId,
     node: &PatchNode,
 ) -> Result<Value, ExportProjectError> {
@@ -377,7 +377,7 @@ fn patch_node_value(
                 }
                 _ => {
                     return Err(ExportProjectError::InvalidReference {
-                        path: from.to_path_buf(),
+                        path: from.path().to_path_buf(),
                         reference: id.0.to_string(),
                         message: "patch source has a non-source value type".to_string(),
                     });
@@ -411,7 +411,7 @@ fn patch_node_value(
 
 fn write_filter(
     session: &ProjectSession,
-    from: &Utf8Path,
+    from: &DocumentId,
     value: &mut Mapping,
     filter: &FilterDefinition,
 ) -> Result<(), ExportProjectError> {

@@ -59,9 +59,9 @@ export function SettingsDialog() {
             <section>
               <h3>Editor</h3>
               <Checkbox
-                label="Autosave text edits"
-                checked={draft.autosaveTextEdits}
-                onChange={(autosaveTextEdits) => void update({ ...draft, autosaveTextEdits })}
+                label="Autosave project edits"
+                checked={draft.autosaveProjectEdits}
+                onChange={(autosaveProjectEdits) => void update({ ...draft, autosaveProjectEdits })}
               />
             </section>
 

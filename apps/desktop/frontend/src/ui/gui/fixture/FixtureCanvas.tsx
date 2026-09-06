@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { commands } from "../../../api";
-import type { PropDocument } from "../../../types";
-import { runGuiEditCommand } from "../../../store";
+import type { GuiDocumentRequest, PropDocument } from "../../../types";
+import { runGuiEditCommand, useAppStore } from "../../../store";
 import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 import { BlockedGui } from "../BlockedGui";
 import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type GuiFocus, type Point3 } from "../shared";
@@ -37,6 +37,7 @@ type Gesture =
 export function FixtureCanvas({ document, selected, setSelected }: { document: PropDocument; selected: GuiFocus; setSelected: (id: GuiFocus) => void }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const gesture = useRef<Gesture>(null);
+  const gestureRequest = useRef<GuiDocumentRequest | null>(null);
   const pendingDraft = useRef<{ pointIndex: number; draft: Point3 } | null>(null);
   const [revision, render] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -126,6 +127,7 @@ export function FixtureCanvas({ document, selected, setSelected }: { document: P
       onKeyDown={(event) => { if (event.key === "Home") { event.preventDefault(); spatial.reset(); } }}
       onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.nativeEvent.offsetX, y: event.nativeEvent.offsetY }); }}
       onPointerDown={(event) => {
+        gestureRequest.current = useAppStore.getState().guiRequest;
         if (event.button === 2) return;
         event.currentTarget.setPointerCapture(event.pointerId); setMenu(null);
         if (event.button === 1 || spacePressed.current) { gesture.current = { type: "pan", x: event.clientX, y: event.clientY }; return; }
@@ -162,7 +164,7 @@ export function FixtureCanvas({ document, selected, setSelected }: { document: P
         if (current?.type === "point") {
           pendingDraft.current = { pointIndex: current.pointIndex, draft: current.draft };
           render((value) => value + 1);
-          void runGuiEditCommand(() => commands.applyPropGuiEdit({ type: "movePoint", objectKey: current.objectKey, pointIndex: current.pointIndex, point: denormalizePoint(current.draft) })).finally(() => {
+          void runGuiEditCommand((request) => commands.applyPropGuiEdit(request, { type: "movePoint", objectKey: current.objectKey, pointIndex: current.pointIndex, point: denormalizePoint(current.draft) }), gestureRequest.current).finally(() => {
             pendingDraft.current = null;
             render((value) => value + 1);
           });

@@ -115,6 +115,13 @@ pub struct PackageValidationIssue {
     pub message: String,
 }
 
+fn validation_result(issues: Vec<PackageValidationIssue>) -> Result<(), PackageError> {
+    match issues.into_iter().next() {
+        Some(issue) => Err(PackageError::Invalid(issue.message)),
+        None => Ok(()),
+    }
+}
+
 fn push_package_validation_issue(
     issues: &mut Vec<PackageValidationIssue>,
     field_path: impl Into<String>,
@@ -292,6 +299,10 @@ impl PackageManifest {
             column: 0,
             message: error.to_string(),
         })?;
+        Self::parse_for_analysis(&bytes)
+    }
+
+    pub fn parse_for_analysis(bytes: &[u8]) -> Result<Self, PackageFileParseError> {
         if bytes.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(PackageFileParseError {
                 field_path: None,
@@ -300,10 +311,45 @@ impl PackageManifest {
                 message: format!("manifest exceeds {MAX_MANIFEST_BYTES} bytes"),
             });
         }
-        parse_json_with_path(&bytes)
+        parse_json_with_path(bytes)
     }
 
     pub fn validation_issues(&self, root: &Utf8Path) -> Vec<PackageValidationIssue> {
+        let mut issues = self.contract_issues();
+        if let Some(project) = &self.project {
+            collect_path_issue(
+                &mut issues,
+                "project.entrypoint",
+                &project.entrypoint,
+                |value| require_file(root, value, "project.entrypoint"),
+            );
+        }
+        for (group, export) in &self.exports {
+            for (index, document) in export.documents.iter().enumerate() {
+                let field_path = format!("exports.{group}.documents[{index}]");
+                collect_path_issue(&mut issues, &field_path, document, |value| {
+                    require_file(root, value, "export document")
+                });
+            }
+        }
+        for (alias, dependency) in &self.dependencies {
+            if let Dependency::Path { path } = dependency {
+                let field_path = format!("dependencies.{alias}");
+                collect_path_issue(&mut issues, &field_path, path, |value| {
+                    require_directory(root, value, "path dependency")
+                });
+            }
+        }
+        for path in self.assets.keys() {
+            let field_path = format!("assets.{path}");
+            collect_path_issue(&mut issues, &field_path, path, |value| {
+                require_file(root, value, "asset")
+            });
+        }
+        issues
+    }
+
+    fn contract_issues(&self) -> Vec<PackageValidationIssue> {
         let mut issues = Vec::new();
 
         if self.manifest_version != MANIFEST_VERSION {
@@ -354,12 +400,6 @@ impl PackageManifest {
                 &project.entrypoint,
                 |value| require_dawn_document(value, "project.entrypoint"),
             );
-            collect_path_issue(
-                &mut issues,
-                "project.entrypoint",
-                &project.entrypoint,
-                |value| require_file(root, value, "project.entrypoint"),
-            );
         }
         for (group, export) in &self.exports {
             let group_path = format!("exports.{group}");
@@ -393,9 +433,6 @@ impl PackageManifest {
                         format!("export group `{group}` lists `{document}` more than once"),
                     );
                 }
-                collect_path_issue(&mut issues, &field_path, document, |value| {
-                    require_file(root, value, "export document")
-                });
             }
         }
         for (alias, dependency) in &self.dependencies {
@@ -410,9 +447,6 @@ impl PackageManifest {
             if let Dependency::Path { path } = dependency {
                 collect_path_issue(&mut issues, &field_path, path, |value| {
                     validate_relative_path(value, "path dependency")
-                });
-                collect_path_issue(&mut issues, &field_path, path, |value| {
-                    require_directory(root, value, "path dependency")
                 });
             }
         }
@@ -439,9 +473,6 @@ impl PackageManifest {
                     format!("audio asset `{path}` must be MP3, WAV, OGG, or FLAC"),
                 );
             }
-            collect_path_issue(&mut issues, &field_path, path, |value| {
-                require_file(root, value, "asset")
-            });
         }
         if let Some(publication) = &self.publication {
             if publication.display_name.trim().is_empty() || publication.display_name.len() > 80 {
@@ -513,132 +544,11 @@ impl PackageManifest {
     }
 
     pub fn validate(&self, root: &Utf8Path) -> Result<(), PackageError> {
-        self.validate_contract()?;
-        if let Some(project) = &self.project {
-            require_file(root, &project.entrypoint, "project.entrypoint")?;
-        }
-        for export in self.exports.values() {
-            for document in &export.documents {
-                require_file(root, document, "export document")?;
-            }
-        }
-        for dependency in self.dependencies.values() {
-            if let Dependency::Path { path } = dependency {
-                require_directory(root, path, "path dependency")?;
-            }
-        }
-        for path in self.assets.keys() {
-            require_file(root, path, "asset")?;
-        }
-        Ok(())
+        validation_result(self.validation_issues(root))
     }
 
     pub fn validate_contract(&self) -> Result<(), PackageError> {
-        if self.manifest_version != MANIFEST_VERSION {
-            return Err(PackageError::Invalid(format!(
-                "manifestVersion must be {MANIFEST_VERSION}"
-            )));
-        }
-        if self.module_id.get_version_num() != 4 {
-            return Err(PackageError::Invalid(
-                "moduleId must be a version 4 UUID".to_string(),
-            ));
-        }
-        if !valid_language_version(&self.language_version) {
-            return Err(PackageError::Invalid(
-                "languageVersion must be an exact major.minor language version".to_string(),
-            ));
-        }
-        if !is_bounded_version_requirement(&self.requires_dawn) {
-            return Err(PackageError::Invalid(
-                "requiresDawn must have lower and upper semantic-version bounds".to_string(),
-            ));
-        }
-        if self.exports.is_empty() {
-            return Err(PackageError::Invalid(
-                "at least one export group is required".to_string(),
-            ));
-        }
-        if let Some(project) = &self.project {
-            validate_relative_path(&project.entrypoint, "project.entrypoint")?;
-            require_dawn_document(&project.entrypoint, "project.entrypoint")?;
-        }
-        for (group, export) in &self.exports {
-            if !valid_alias(group) {
-                return Err(PackageError::Invalid(format!(
-                    "invalid export group `{group}`"
-                )));
-            }
-            if export.documents.is_empty() {
-                return Err(PackageError::Invalid(format!(
-                    "export group `{group}` is empty"
-                )));
-            }
-            let mut documents = BTreeSet::new();
-            for document in &export.documents {
-                validate_relative_path(document, "export document")?;
-                require_dawn_document(document, "export document")?;
-                if !documents.insert(document) {
-                    return Err(PackageError::Invalid(format!(
-                        "export group `{group}` lists `{document}` more than once"
-                    )));
-                }
-            }
-        }
-        for (alias, dependency) in &self.dependencies {
-            if !valid_alias(alias) {
-                return Err(PackageError::Invalid(format!(
-                    "invalid dependency alias `{alias}`"
-                )));
-            }
-            if let Dependency::Path { path } = dependency {
-                validate_relative_path(path, "path dependency")?;
-            }
-        }
-        for (path, asset) in &self.assets {
-            validate_relative_path(path, "asset")?;
-            if asset.kind != AssetKind::Audio {
-                return Err(PackageError::Invalid(format!(
-                    "unsupported asset kind for `{path}`"
-                )));
-            }
-            let extension = Utf8Path::new(path)
-                .extension()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            if !matches!(extension.as_str(), "mp3" | "wav" | "ogg" | "flac") {
-                return Err(PackageError::Invalid(format!(
-                    "audio asset `{path}` must be MP3, WAV, OGG, or FLAC"
-                )));
-            }
-        }
-        if let Some(publication) = &self.publication {
-            if publication.display_name.trim().is_empty()
-                || publication.display_name.len() > 80
-                || publication.summary.trim().is_empty()
-                || publication.summary.len() > 240
-            {
-                return Err(PackageError::Invalid(
-                    "invalid publication metadata".to_string(),
-                ));
-            }
-            spdx::Expression::parse(&publication.license).map_err(|error| {
-                PackageError::Invalid(format!(
-                    "publication license must be a valid SPDX expression: {error}"
-                ))
-            })?;
-            if publication.tags.len() > 10 || publication.tags.iter().any(|tag| !valid_tag(tag)) {
-                return Err(PackageError::Invalid(
-                    "invalid publication tags".to_string(),
-                ));
-            }
-            if publication.tags.iter().collect::<BTreeSet<_>>().len() != publication.tags.len() {
-                return Err(PackageError::Invalid(
-                    "publication tags must be unique".to_string(),
-                ));
-            }
-        }
-        Ok(())
+        validation_result(self.contract_issues())
     }
 
     pub fn validate_runtime_compatibility(&self) -> Result<(), PackageError> {
@@ -879,7 +789,11 @@ impl Lockfile {
             column: 0,
             message: error.to_string(),
         })?;
-        parse_json_with_path(&bytes)
+        Self::parse_for_analysis(&bytes)
+    }
+
+    pub fn parse_for_analysis(bytes: &[u8]) -> Result<Self, PackageFileParseError> {
+        parse_json_with_path(bytes)
     }
 
     pub fn validation_issues(&self, manifest: &PackageManifest) -> Vec<PackageValidationIssue> {
@@ -1083,105 +997,7 @@ impl Lockfile {
     }
 
     pub fn validate_manifest(&self, manifest: &PackageManifest) -> Result<(), PackageError> {
-        if self.lock_version != LOCK_VERSION {
-            return Err(PackageError::Invalid(
-                "unsupported lockfile version".to_string(),
-            ));
-        }
-        let expected = manifest_hash(manifest)?;
-        if self.manifest_sha256 != expected {
-            return Err(PackageError::Invalid(
-                "dawn.lock does not match dawn-package.json".to_string(),
-            ));
-        }
-        if self.registry.trim().is_empty() {
-            return Err(PackageError::Invalid(
-                "dawn.lock registry is empty".to_string(),
-            ));
-        }
-        let mut module_ids = BTreeMap::from([(manifest.module_id, "project".to_string())]);
-        for (package, locked) in &self.packages {
-            validate_sha256(&locked.archive_sha256, "locked archive hash")?;
-            if locked.module_id.get_version_num() != 4 {
-                return Err(PackageError::Invalid(format!(
-                    "locked package `{package}` has an invalid moduleId"
-                )));
-            }
-            if let Some(existing) = module_ids.insert(locked.module_id, package.to_string()) {
-                return Err(PackageError::Invalid(format!(
-                    "moduleId `{}` is shared by `{existing}` and `{package}`",
-                    locked.module_id
-                )));
-            }
-            for dependency in locked.dependencies.values() {
-                if !self.packages.contains_key(dependency) {
-                    return Err(PackageError::Invalid(format!(
-                        "locked package `{package}` points to unlocked dependency `{dependency}`"
-                    )));
-                }
-            }
-        }
-        for (path, locked) in &self.path_dependencies {
-            validate_relative_path(path, "locked path dependency")?;
-            if locked.path != *path {
-                return Err(PackageError::Invalid(format!(
-                    "path dependency key `{path}` does not match `{}`",
-                    locked.path
-                )));
-            }
-            validate_sha256(&locked.content_sha256, "path dependency content hash")?;
-            if locked.module_id.get_version_num() != 4 {
-                return Err(PackageError::Invalid(format!(
-                    "path dependency `{path}` has an invalid moduleId"
-                )));
-            }
-            if let Some(existing) = module_ids.insert(locked.module_id, format!("path:{path}")) {
-                return Err(PackageError::Invalid(format!(
-                    "moduleId `{}` is shared by `{existing}` and `path:{path}`",
-                    locked.module_id
-                )));
-            }
-            for dependency in locked.dependencies.values() {
-                match dependency {
-                    LockedDependency::Registry { package } => {
-                        if !self.packages.contains_key(package) {
-                            return Err(PackageError::Invalid(format!(
-                                "path dependency `{path}` points to unlocked package `{package}`"
-                            )));
-                        }
-                    }
-                    LockedDependency::Path {
-                        path: dependency_path,
-                    } => {
-                        if !self.path_dependencies.contains_key(dependency_path) {
-                            return Err(PackageError::Invalid(format!(
-                                "path dependency `{path}` points to unlocked path `{dependency_path}`"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-        for dependency in manifest.dependencies.values() {
-            match dependency {
-                Dependency::Registry { package, .. } => {
-                    if !self.packages.contains_key(package) {
-                        return Err(PackageError::Invalid(format!(
-                            "registry dependency `{package}` is not locked"
-                        )));
-                    }
-                }
-                Dependency::Path { path } => {
-                    if !self.path_dependencies.contains_key(path) {
-                        return Err(PackageError::Invalid(format!(
-                            "path dependency `{path}` is not locked"
-                        )));
-                    }
-                }
-            }
-        }
-        validate_lock_graph(manifest, self)?;
-        Ok(())
+        validation_result(self.validation_issues(manifest))
     }
 
     pub fn validate_local(

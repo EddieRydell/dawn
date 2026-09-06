@@ -28,8 +28,6 @@ export type EditedSequenceGradientStop = { time: number; value: string };
 
 type ParamAutomationControls = {
   target: SequenceAutomationTarget;
-  targetStartSeconds: number;
-  targetDurationSeconds: number;
   automationClips: SequenceAutomationClip[];
   canCreateAutomationClip: boolean;
   automationClipChooser: AutomationClipChooser;
@@ -64,8 +62,8 @@ export function TypedParamInput({
   };
   const commitAutomationMapping = async (mapping: SequenceAutomationMapping) => {
     if (automation === null || param.automation === null) return;
-    await runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    await runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "updateAutomationParamMapping",
         clipId: param.automation?.clipId ?? 0,
         target: automation.target,
@@ -94,11 +92,6 @@ export function TypedParamInput({
           automation.automationClipChooser,
           automation.setAutomationClipChooser
         );
-  const automationClip =
-    automation === null || param.automation === null
-      ? null
-      : automation.automationClips.find((clip) => clip.id === param.automation?.clipId) ?? null;
-
   switch (param.value.type) {
     case "int": {
       const mapping = param.automation?.mapping.type === "int" ? param.automation.mapping : null;
@@ -145,7 +138,7 @@ export function TypedParamInput({
           name={param.name}
           source={param.curveSource}
           sources={curveLibrary}
-          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.targetStartSeconds ?? 0, automation?.targetDurationSeconds ?? 1) : normalizeSequenceCurvePoints(param.value.points)}
+          points={normalizeSequenceCurvePoints(param.value.points)}
           commit={(points) => commit({ type: "curve", points })}
           disabled={automated}
           actions={automationActions}
@@ -292,8 +285,8 @@ function automationBindingControl(
         className="neutral-button icon-button"
         title="Unlink automation"
         onClick={() =>
-          void runGuiEditCommand(() =>
-            commands.applySequenceGuiEdit({
+          void runGuiEditCommand((request) =>
+            commands.applySequenceGuiEdit(request, {
               type: "unbindAutomationParam",
               clipId: param.automation?.clipId ?? 0,
               target
@@ -324,8 +317,8 @@ function automationBindingControl(
         title="Create automation"
         disabled={!canCreateAutomationClip}
         onClick={() =>
-          void runGuiEditCommand(() =>
-            commands.applySequenceGuiEdit({
+          void runGuiEditCommand((request) =>
+            commands.applySequenceGuiEdit(request, {
               type: "createAndBindAutomationClip",
               target,
               mapping
@@ -1299,66 +1292,6 @@ function normalizeSequenceCurvePoints(points: SequenceCurvePoint[]): EditedSeque
     .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value }));
   return normalized.length > 0 ? normalized : [{ time: 0, value: 0 }];
-}
-
-function automationClipWindowCurve(
-  clip: SequenceAutomationClip,
-  targetStartSeconds: number,
-  targetDurationSeconds: number
-): EditedSequenceCurvePoint[] {
-  const targetDuration = Math.max(0.000000001, targetDurationSeconds);
-  const clipDuration = Math.max(0.000000001, clip.durationSeconds);
-  const localTimes = new Set<number>([0, 1]);
-
-  for (const point of clip.curve) {
-    if (!Number.isFinite(point.time) || !Number.isFinite(point.value)) continue;
-    const seconds = clip.startSeconds + clamp(point.time, 0, 1) * clipDuration;
-    const localTime = (seconds - targetStartSeconds) / targetDuration;
-    if (localTime > 0 && localTime < 1) {
-      localTimes.add(roundCurveValue(localTime));
-    }
-  }
-
-  const points = [...localTimes]
-    .sort((left, right) => left - right)
-    .map((time) => {
-      const seconds = targetStartSeconds + time * targetDuration;
-      const clipTime = (seconds - clip.startSeconds) / clipDuration;
-      return {
-        time,
-        value: sampleCurve(clip.curve, clamp(clipTime, 0, 1))
-      };
-    });
-  return dedupeSequenceCurvePoints(points);
-}
-
-function sampleCurve(points: SequenceCurvePoint[], time: number): number {
-  const sorted = normalizeSequenceCurvePoints(points).sort((left, right) => left.time - right.time);
-  const first = sorted[0];
-  if (first === undefined) return 0;
-  if (time <= first.time) return first.value;
-  for (const [left, right] of sorted.slice(1).map((point, index) => [sorted[index], point] as const)) {
-    if (left === undefined) continue;
-    if (time <= right.time) {
-      const span = right.time - left.time;
-      const amount = span <= 0 ? 0 : (time - left.time) / span;
-      return left.value + (right.value - left.value) * amount;
-    }
-  }
-  return sorted[sorted.length - 1]?.value ?? first.value;
-}
-
-function dedupeSequenceCurvePoints(points: EditedSequenceCurvePoint[]): EditedSequenceCurvePoint[] {
-  const deduped: EditedSequenceCurvePoint[] = [];
-  for (const point of points) {
-    const previous = deduped[deduped.length - 1];
-    if (previous !== undefined && Math.abs(previous.time - point.time) < 0.000000001) {
-      deduped[deduped.length - 1] = point;
-    } else {
-      deduped.push(point);
-    }
-  }
-  return deduped.length > 0 ? deduped : [{ time: 0, value: 0 }];
 }
 
 function normalizeSequenceGradientStops(points: SequenceGradientStop[]): EditedSequenceGradientStop[] {

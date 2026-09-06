@@ -1,3 +1,4 @@
+use super::elements::OutputElements;
 use super::errors::SequenceOutputPrepareError;
 use super::frame::ControllerPortFrame;
 
@@ -21,6 +22,7 @@ pub(crate) fn prepare_patch(
     patch: &PatchGraph,
     profiles: &FixtureProfileStore,
     frames: &[ControllerPortFrame],
+    elements: &OutputElements,
 ) -> Result<PreparedPatch, SequenceOutputPrepareError> {
     let index32 = |value| {
         u32::try_from(value).map_err(|_| {
@@ -55,13 +57,6 @@ pub(crate) fn prepare_patch(
             }
         }
     }
-    let element_indexes = tree
-        .nodes
-        .iter()
-        .filter(|(_, node)| !matches!(node.kind, ElementNodeKind::Group { .. }))
-        .enumerate()
-        .map(|(index, (id, _))| (*id, index))
-        .collect::<HashMap<_, _>>();
     let mut outputs = HashMap::<(PatchNodeId, PatchPortId), u32>::new();
     let mut value_types = Vec::new();
     let mut steps = Vec::with_capacity(order.len());
@@ -108,15 +103,11 @@ pub(crate) fn prepare_patch(
                 }
                 let mut spans: Vec<PatchSourceSpan> = Vec::new();
                 for address in addresses {
-                    let element =
-                        u32::try_from(*element_indexes.get(&address.node).ok_or_else(|| {
-                            SequenceOutputPrepareError::InvalidPatch(
-                                "patch source references a group or missing element".to_string(),
-                            )
-                        })?)
-                        .map_err(|error| {
-                            SequenceOutputPrepareError::InvalidPatch(format!("{error:?}"))
-                        })?;
+                    let element = *elements.indexes.get(&address.node).ok_or_else(|| {
+                        SequenceOutputPrepareError::InvalidPatch(
+                            "patch source references a group or missing element".to_string(),
+                        )
+                    })?;
                     let end = address.cell.checked_add(1).ok_or_else(|| {
                         SequenceOutputPrepareError::InvalidPatch(
                             "patch cell index exceeds span range".into(),

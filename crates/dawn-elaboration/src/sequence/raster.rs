@@ -17,7 +17,7 @@ use crate::sequence::elements::{PreparedElement, prepare_elements};
 use crate::sequence::targets::PreparedTargetCache;
 use crate::sequence::targets::PreparedTargetPixel;
 use crate::sequence::timeline::{
-    first_frame_at_or_after, frame_at_or_before, frame_count, prepare_timing, sample_time_for_frame,
+    first_frame_at_or_after, frame_at_or_before, prepare_timing, sample_time_for_frame,
 };
 use dawn_language::dsl::{BytecodeProgram, DslBindCache, VmWorkspace};
 use dawn_language::effect::{EffectDefinitionId, EffectInstId};
@@ -254,7 +254,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
         validate_sequence(project, sequence).map_err(|error| RenderError::BadGraph {
             message: error.message,
         })?;
-        prepare_timing(sequence)?;
+        let timing = prepare_timing(sequence)?;
 
         let (elements, groups) = prepare_elements(project, tree)?;
         let element_ids = elements
@@ -262,7 +262,6 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             .map(|element| element.id)
             .collect::<IndexSet<_>>();
         let frame_rate = sequence.frame_rate;
-        let frame_count = frame_count(&sequence.duration, frame_rate)?;
 
         Ok(Self {
             project,
@@ -271,7 +270,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             element_ids,
             groups,
             frame_rate,
-            frame_count,
+            frame_count: timing.frame_count,
             bind_cache: DslBindCache::default(),
             sample_programs: IndexMap::new(),
             target_cache: PreparedTargetCache::default(),

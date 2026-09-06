@@ -124,7 +124,7 @@ pub(super) fn scale_value(scale: &Scale3) -> Result<Value, ExportProjectError> {
 
 pub(super) fn element_selection_value(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     target: &ElementSelection,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
@@ -149,18 +149,17 @@ pub(super) fn element_selection_value(
 
 pub(super) fn write_source_reference(
     session: &ProjectSession,
-    from_document: &Utf8Path,
+    from_document: &DocumentId,
     kind: SourceObjectKind,
     identity: &SourceIdentity,
 ) -> Result<String, ExportProjectError> {
-    let from_document_id = session.source.project_document(from_document.to_path_buf());
-    if identity.document_id() == &from_document_id {
+    if identity.document_id() == from_document {
         return Ok(identity.object().to_string());
     }
     let alias = session
         .source
         .documents
-        .get(&from_document_id)
+        .get(from_document)
         .into_iter()
         .flat_map(|document| &document.imports)
         .find(|edge| {
@@ -170,7 +169,7 @@ pub(super) fn write_source_reference(
         })
         .map(|edge| edge.alias.clone())
         .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
+            path: from_document.path().to_path_buf(),
             reference: identity.object().to_string(),
             message: format!(
                 "no import alias makes the {kind:?} target visible from this document"
@@ -203,9 +202,9 @@ pub(super) fn microseconds_string(microseconds: u128) -> String {
     )
 }
 
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use dawn_language::element::ElementSelection;
-use dawn_language::identity::SourceIdentity;
+use dawn_language::identity::{DocumentId, SourceIdentity};
 use dawn_language::preview::{PropGeometry, PropInstance};
 use dawn_language::values::{Curve, Gradient, Point3, Rotation3, Scale3};
 use yaml_serde::{Mapping, Value};

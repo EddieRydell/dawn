@@ -1,11 +1,20 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { AlertTriangle, Box, CheckCircle2, CircleX, FolderOpen } from "lucide-react";
+import { AlertTriangle, Box, CheckCircle2, CircleX, FolderOpen, Save } from "lucide-react";
 import { FOCUS_SIDEBAR_EVENT } from "../commandRegistry";
+import { effectiveEditorViewMode } from "../editorViewMode";
 import { THEME_METRICS } from "../theme";
-import type { AppStaticSnapshot } from "../store";
+import { useAppStore, type AppStaticSnapshot } from "../store";
 import type { AppSnapshot, SidebarView } from "../types";
 
 export function StatusBar({ snapshot }: { snapshot: AppStaticSnapshot }) {
+  const localText = useAppStore((store) => store.localText);
+  const buffer = snapshot.activeBuffer;
+  const saveState = buffer?.saveState;
+  const saveLabel = saveState?.type === "conflict" ? "File conflict"
+    : saveState?.type === "failed" ? "Save failed"
+    : effectiveEditorViewMode(snapshot) === "text" && buffer !== null && localText !== buffer.text ? "Unsaved"
+    : saveState?.type === "saving" ? "Saving"
+    : buffer?.dirty === true ? "Unsaved" : "Saved";
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
   const projectParts = snapshot.projectRoot?.replace(/\\/g, "/").split("/") ?? [];
@@ -14,11 +23,11 @@ export function StatusBar({ snapshot }: { snapshot: AppStaticSnapshot }) {
     <Tooltip.Provider delayDuration={THEME_METRICS.tooltipDelayMs}>
       <footer className="status-bar">
         <StatusChip
-          label={snapshot.projectHealth === "recovery" ? `${projectName} · Recovery` : projectName}
+          label={snapshot.projectHealth === "invalid" ? `${projectName} · Invalid` : snapshot.projectHealth === "checking" ? `${projectName} · Checking` : projectName}
           tooltip={projectHealthTooltip(snapshot)}
           icon={<FolderOpen size={THEME_METRICS.iconSizeSmall} />}
           tone={`project-health-${snapshot.projectHealth}`}
-          {...(snapshot.projectHealth === "recovery"
+          {...(snapshot.projectHealth === "invalid"
             ? { onClick: () => { focusSidebar("problems"); } }
             : {})}
         />
@@ -30,6 +39,10 @@ export function StatusBar({ snapshot }: { snapshot: AppStaticSnapshot }) {
           onClick={() => { focusSidebar("packages"); }}
         />
         <span className="status-spacer" title={snapshot.status}>{snapshot.status}</span>
+        {buffer !== null && (
+          <StatusChip label={saveLabel} tooltip={saveState?.type === "failed" ? saveState.message : `${buffer.path}: ${saveLabel}`}
+            icon={<Save size={THEME_METRICS.iconSizeSmall} />} />
+        )}
         <StatusChip
           label={String(errors)}
           tooltip={`${errors} errors`}
@@ -52,7 +65,7 @@ export function StatusBar({ snapshot }: { snapshot: AppStaticSnapshot }) {
 }
 
 function projectHealthTooltip(snapshot: AppStaticSnapshot): string {
-  if (snapshot.projectHealth === "recovery") {
+  if (snapshot.projectHealth === "invalid") {
     return "The project has model-blocking errors. Text, Search, Explorer, and Problems remain available.";
   }
   return snapshot.projectRoot ?? "No project is open";

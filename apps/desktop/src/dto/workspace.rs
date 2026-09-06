@@ -89,7 +89,7 @@ pub struct AppSettings {
     #[serde(default = "default_editor_view_mode")]
     pub editor_view_mode: EditorViewMode,
     pub reopen_preview_window: bool,
-    pub autosave_text_edits: bool,
+    pub autosave_project_edits: bool,
     pub sequence_initial_zoom_mode: SequenceInitialZoomMode,
     pub sequence_initial_px_per_second: f32,
     pub sequence_initial_lane_height_px: f32,
@@ -106,7 +106,7 @@ impl Default for AppSettings {
             reopen_last_project: true,
             editor_view_mode: EditorViewMode::Gui,
             reopen_preview_window: true,
-            autosave_text_edits: true,
+            autosave_project_edits: true,
             sequence_initial_zoom_mode: SequenceInitialZoomMode::FitToWidth,
             sequence_initial_px_per_second: 80.0,
             sequence_initial_lane_height_px: 42.0,
@@ -426,6 +426,9 @@ pub struct EditorBuffer {
     pub name: String,
     pub text: String,
     pub dirty: bool,
+    pub document_revision: u32,
+    pub saved_revision: u32,
+    pub save_state: DocumentSaveState,
     pub external_state: BufferExternalState,
 }
 

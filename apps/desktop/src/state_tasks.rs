@@ -1,7 +1,9 @@
 //! Background save/analysis/render schedulers and GUI history storage.
 
+mod filesystem_watcher;
 mod history;
 mod scheduler;
+pub(crate) use filesystem_watcher::watch_project;
 
 pub(crate) use history::*;
 pub(crate) use scheduler::*;

@@ -6,7 +6,7 @@ import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
 import { THEME_METRICS } from "../../../theme";
-import { sequenceRowLayout } from "./sequenceAutomationLayout";
+import type { SequenceRowLayout } from "./sequenceAutomationLayout";
 
 export type SequenceDraft = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
 
@@ -79,7 +79,8 @@ export function buildSequenceClipLayout(
   viewport: SequenceViewport,
   left: number,
   top: number,
-  bounds: SequenceClipLayoutBounds
+  bounds: SequenceClipLayoutBounds,
+  rows: SequenceRowLayout[]
 ): SequenceClipLayout[] {
   const laneIndexByTarget = new Map<ElementTarget["kind"], Map<string, number>>();
   document.lanes.forEach((lane, index) => {
@@ -113,25 +114,27 @@ export function buildSequenceClipLayout(
 
   const layouts: SequenceClipLayout[] = [];
   for (const [laneIndex, laneClips] of byLane) {
+    const row = rows.find((row) => row.laneIndex === laneIndex && row.rowIndex === 0);
+    if (row === undefined) throw new Error("Effect clip has no timeline row.");
     const groups = groupOverlappingClips(laneClips);
     for (const group of groups) {
       const assigned = assignOverlapSlots(group);
       const slotCount = Math.max(1, Math.max(...assigned.map((clip) => clip.slot)) + 1);
-      const laneHeight = viewport.rowHeights[laneIndex]?.[0] ?? 0;
+      const laneHeight = row.height;
       const slotHeight = laneHeight / slotCount;
       for (const clip of assigned) {
         const startSeconds = clip.effect.startSeconds;
         const endSeconds = startSeconds + clip.effect.durationSeconds;
         const x = left + (startSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
-      const width = Math.max(THEME_METRICS.sequenceClipMinWidth, (endSeconds - startSeconds) * viewport.pxPerSecond);
+        const width = Math.max(THEME_METRICS.sequenceClipMinWidth, (endSeconds - startSeconds) * viewport.pxPerSecond);
         layouts.push({
           effect: clip.effect,
           laneIndex,
           rect: {
             x,
-            y: top + (sequenceRowLayout(viewport.rowHeights.map((rows) => rows.length - 1), viewport.rowHeights, 0, 0).find((row) => row.laneIndex === laneIndex && row.rowIndex === 0)?.top ?? 0) - viewport.scrollY + clip.slot * slotHeight + 2,
+            y: top + row.top - viewport.scrollY + clip.slot * slotHeight + THEME_METRICS.sequenceClipSlotOffset,
             width,
-        height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
+            height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
           }
         });
       }

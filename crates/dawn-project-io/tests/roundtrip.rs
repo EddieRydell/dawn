@@ -9,6 +9,42 @@ use std::time::Duration;
 use common::{load_project_package, write_project_package};
 
 #[test]
+fn exact_text_writer_preserves_formatting_and_checks_all_disk_preconditions() {
+    use dawn_project_io::{SourceTextWrite, write_source_texts};
+    let temporary = tempfile::tempdir().unwrap();
+    let root = Utf8Path::from_path(temporary.path()).unwrap();
+    fs::write(root.join("one.dawn"), "original one").unwrap();
+    fs::write(root.join("two.dawn"), "external change").unwrap();
+    let mut writes = std::collections::BTreeMap::from([
+        (
+            Utf8PathBuf::from("one.dawn"),
+            SourceTextWrite {
+                text: "# preserve this comment\ninvalid: [\n".into(),
+                expected: Some(b"original one".to_vec()),
+            },
+        ),
+        (
+            Utf8PathBuf::from("two.dawn"),
+            SourceTextWrite {
+                text: "two changed".into(),
+                expected: Some(b"original two".to_vec()),
+            },
+        ),
+    ]);
+    assert!(write_source_texts(root, &writes).is_err());
+    assert_eq!(
+        fs::read_to_string(root.join("one.dawn")).unwrap(),
+        "original one"
+    );
+    writes.get_mut(Utf8Path::new("two.dawn")).unwrap().expected = Some(b"external change".to_vec());
+    write_source_texts(root, &writes).unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join("one.dawn")).unwrap(),
+        writes[Utf8Path::new("one.dawn")].text
+    );
+}
+
+#[test]
 fn audio_reference_cannot_escape_its_module() {
     let temp = tempfile::tempdir().unwrap();
     let temp_root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();

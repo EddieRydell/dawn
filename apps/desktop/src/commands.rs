@@ -7,9 +7,8 @@ use tauri_specta::{Builder, collect_commands};
 
 use crate::desktop_state::DesktopState;
 use crate::dto::{
-    AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, GuiDocument,
-    GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest,
-    OperatorRewriteResolution, OperatorRewriteValidation, ProjectSearchRequest,
+    AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest, ProjectSearchRequest,
     ProjectSearchResponse, SequenceAutomationMapping, SequenceAutomationTarget,
     SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
     SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceExplorerState,
@@ -23,7 +22,6 @@ use crate::persistence::{
 mod app;
 mod audio;
 mod editor;
-mod operator_rewrite;
 mod output;
 mod packages;
 mod preview;
@@ -34,7 +32,6 @@ mod workspace;
 pub(crate) use app::*;
 pub(crate) use audio::*;
 pub(crate) use editor::*;
-pub(crate) use operator_rewrite::*;
 pub(crate) use output::*;
 pub(crate) use packages::*;
 pub(crate) use preview::*;
@@ -59,15 +56,16 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         apply_workspace_path_change,
         get_restored_view_state,
         open_project_dialog,
-        open_project,
         choose_new_project_parent_directory,
-        create_new_project,
         create_sequence,
         open_file,
-        close_file,
         set_active_file,
-        update_active_text,
-        autosave_active_text,
+        update_document,
+        save_all,
+        request_transition,
+        complete_close,
+        reconcile_external_files,
+        resolve_external_conflict,
         set_editor_view_mode,
         save_editor_view_state,
         save_sequence_viewport_state,
@@ -82,15 +80,9 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         discard_detached_automation,
         apply_sequence_selection_edit,
         choose_sequence_audio,
-        flush_autosave,
-        validate_operator_rewrite,
-        apply_operator_rewrite,
-        cancel_operator_rewrite,
-        reload_active_buffer_from_disk,
         create_file,
         create_directory,
         delete_path,
-        reload_project,
         toggle_project_tree,
         load_sequence_audio,
         unload_audio,

@@ -202,6 +202,7 @@ export function useSequenceClipRasters(
 
     const pollResults = async (requestId: number, requestComplete: boolean, requestContexts: Map<number, ClipRasterKeyContext>): Promise<boolean> => {
       const batch = await commands.takeSequenceClipRasterResults({
+        projectRevision,
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey
@@ -240,6 +241,7 @@ export function useSequenceClipRasters(
       if (requestItems.length === 0) return true;
       const requestContexts = new Map<number, ClipRasterKeyContext>();
       const response = await commands.requestSequenceClipRasters({
+        projectRevision,
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey,

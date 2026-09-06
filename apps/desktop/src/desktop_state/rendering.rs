@@ -3,7 +3,7 @@ use std::sync::Arc;
 use dawn_project_io::ProjectSession;
 
 use super::{DesktopState, lock_unpoisoned};
-use crate::state_tasks::{RenderRefreshPayload, RenderRefreshResult};
+use crate::state_tasks::RenderRefreshPayload;
 
 impl DesktopState {
     pub(super) fn refresh_render_session(
@@ -19,7 +19,7 @@ impl DesktopState {
     }
 
     pub(super) fn schedule_render_refresh(&self, project: Arc<ProjectSession>) {
-        let target = lock_unpoisoned(&self.sequence_render).active_target();
+        let target = lock_unpoisoned(&self.workspace).render_target.clone();
         let Some((setup_id, sequence_id)) = target else {
             return;
         };
@@ -27,7 +27,10 @@ impl DesktopState {
             self.unload_render_session();
             return;
         }
+        let snapshot = self.snapshot();
         let request = RenderRefreshPayload {
+            project_epoch: snapshot.project_epoch,
+            project_revision: snapshot.project_revision,
             project,
             setup_id,
             sequence_id,
@@ -40,11 +43,16 @@ impl DesktopState {
         project: Arc<ProjectSession>,
         sequence_id: dawn_language::sequence::SequenceId,
     ) {
+        lock_unpoisoned(&self.workspace).render_target =
+            Some((project.project.root.setup.clone(), sequence_id.clone()));
         if !project.project.sequences.contains_key(&sequence_id) {
             self.unload_render_session();
             return;
         }
+        let snapshot = self.snapshot();
         let request = RenderRefreshPayload {
+            project_epoch: snapshot.project_epoch,
+            project_revision: snapshot.project_revision,
             setup_id: project.project.root.setup.clone(),
             project,
             sequence_id,
@@ -53,31 +61,42 @@ impl DesktopState {
     }
 
     pub(super) fn enqueue_render_refresh(&self, request: RenderRefreshPayload) {
-        let failed = !lock_unpoisoned(&self.render_refresh).schedule(request);
+        let failed = !self.render_refresh.schedule(request);
         if failed {
             self.set_render_error_if_changed("Render refresh worker is unavailable.".to_string());
         }
     }
 
-    pub(super) fn drain_render_refresh_results(&self) {
-        let results = lock_unpoisoned(&self.render_refresh).drain_current_results();
-        for result in results {
-            match result {
-                RenderRefreshResult::Refreshed {
-                    sequence: _,
-                    session,
-                } => {
-                    lock_unpoisoned(&self.sequence_render).apply_prepared(*session);
-                    self.clear_render_error_if_set();
-                    self.resume_live_output_after_prepare();
-                }
-                RenderRefreshResult::Failed {
-                    sequence: _,
-                    message,
-                } => {
-                    self.suspend_live_output();
-                    self.set_render_error_if_changed(format!("Render refresh failed: {message}"));
-                }
+    pub(super) fn complete_render_refresh(
+        &self,
+        request: RenderRefreshPayload,
+        result: Result<
+            crate::rendering::PreparedSequenceOutput,
+            dawn_elaboration::SequenceOutputPrepareError,
+        >,
+    ) {
+        let _authoring = lock_unpoisoned(&self.authoring);
+        let snapshot = self.snapshot();
+        if snapshot.project_epoch != request.project_epoch
+            || snapshot.project_revision != request.project_revision
+            || snapshot.project_health != crate::dto::ProjectHealth::Ready
+        {
+            return;
+        }
+        if lock_unpoisoned(&self.workspace).render_target.as_ref()
+            != Some(&(request.setup_id, request.sequence_id))
+        {
+            return;
+        }
+        match result {
+            Ok(session) => {
+                lock_unpoisoned(&self.sequence_render).apply_prepared(session);
+                self.clear_render_error_if_set();
+                self.resume_live_output_after_prepare();
+            }
+            Err(error) => {
+                self.suspend_live_output();
+                self.set_render_error_if_changed(format!("Render refresh failed: {error:?}"));
             }
         }
     }

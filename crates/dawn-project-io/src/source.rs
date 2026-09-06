@@ -63,20 +63,7 @@ impl SourceProject {
         &self,
         relative_path: &Utf8Path,
     ) -> Option<(Uuid, Utf8PathBuf)> {
-        let absolute = self.project_root().join(relative_path);
-        let (module_id, module) = self
-            .source_graph
-            .modules()
-            .iter()
-            .filter(|(_, module)| {
-                !matches!(
-                    module.origin,
-                    dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
-                ) && absolute.starts_with(&module.root)
-            })
-            .max_by_key(|(_, module)| module.root.components().count())?;
-        let module_relative = absolute.strip_prefix(&module.root).ok()?;
-        Some((*module_id, module_relative.to_path_buf()))
+        workspace_module_for_path(&self.source_graph, relative_path)
     }
 
     pub fn document_for_workspace_path(&self, relative_path: &Utf8Path) -> Option<DocumentId> {
@@ -132,6 +119,25 @@ impl SourceProject {
             Some(SourceOwnership::ProjectOwned | SourceOwnership::PathDependencyOwned { .. })
         )
     }
+}
+
+pub(crate) fn workspace_module_for_path(
+    graph: &dawn_package::ResolvedSourceGraph,
+    relative_path: &Utf8Path,
+) -> Option<(Uuid, Utf8PathBuf)> {
+    let absolute = graph.project_module().root.join(relative_path);
+    let (module_id, module) = graph
+        .modules()
+        .iter()
+        .filter(|(_, module)| {
+            !matches!(
+                module.origin,
+                dawn_package::ResolvedModuleOrigin::RegistryDependency { .. }
+            ) && absolute.starts_with(&module.root)
+        })
+        .max_by_key(|(_, module)| module.root.components().count())?;
+    let module_relative = absolute.strip_prefix(&module.root).ok()?;
+    Some((*module_id, module_relative.to_path_buf()))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

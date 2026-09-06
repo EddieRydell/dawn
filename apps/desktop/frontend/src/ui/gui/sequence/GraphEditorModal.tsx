@@ -24,8 +24,9 @@ import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
-import { runGuiEditCommand } from "../../../store";
+import { runGuiEditCommand, useAppStore } from "../../../store";
 import type {
+  GuiDocumentRequest,
   SequenceEditorDocument,
   SequenceEffect,
   SequenceGraphNode,
@@ -187,8 +188,8 @@ function GraphEditorWorkspace({
   );
 
   const addOperator = (operator: SequenceGraphOperator, x = nextNodeX(graph), y = 280) => {
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "addGraphOperatorNode",
         operator,
         x,
@@ -198,8 +199,8 @@ function GraphEditorWorkspace({
   };
   const addLayerAt = (x: number, y: number) => {
     const layerNumber = document.layers.length + 1;
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
+    void runGuiEditCommand((request) =>
+      commands.applySequenceGuiEdit(request, {
         type: "createLayerAt",
         name: `Layer ${layerNumber}`,
         color: layerColor(layerNumber - 1),
@@ -275,8 +276,8 @@ function GraphOperatorInspector({
               <TypedParamInput
                 param={param}
                 commitParam={(name, value) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "updateGraphOperatorParam",
                       nodeId: node.id,
                       name,
@@ -288,8 +289,8 @@ function GraphOperatorInspector({
                 gradientLibrary={document.gradientLibrary}
                 markCollections={document.markCollections}
                 linkCurve={(name, curve) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "linkGraphOperatorCurve",
                       nodeId: node.id,
                       name,
@@ -300,8 +301,8 @@ function GraphOperatorInspector({
                   ).then(() => undefined)
                 }
                 unlinkCurve={(name) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "unlinkGraphOperatorCurve",
                       nodeId: node.id,
                       name
@@ -309,8 +310,8 @@ function GraphOperatorInspector({
                   ).then(() => undefined)
                 }
                 linkGradient={(name, gradient) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "linkGraphOperatorGradient",
                       nodeId: node.id,
                       name,
@@ -321,8 +322,8 @@ function GraphOperatorInspector({
                   ).then(() => undefined)
                 }
                 unlinkGradient={(name) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
+                  runGuiEditCommand((request) =>
+                    commands.applySequenceGuiEdit(request, {
                       type: "unlinkGraphOperatorGradient",
                       nodeId: node.id,
                       name
@@ -331,8 +332,6 @@ function GraphOperatorInspector({
                 }
                 automation={{
                   target: { type: "compositionNodeParam", nodeId: node.id, param: param.name },
-                  targetStartSeconds: 0,
-                  targetDurationSeconds: document.durationSeconds,
                   automationClips: document.automationClips,
                   canCreateAutomationClip: document.lanes.length > 0,
                   automationClipChooser,
@@ -373,6 +372,7 @@ function GraphFlowCanvas({
   const [contextMenu, setContextMenu] = useState<GraphContextMenu>(null);
   const [pendingLayerDeletion, setPendingLayerDeletion] = useState<PendingLayerDeletion | null>(null);
   const flow = useRef<ReactFlowInstance<GraphFlowNode> | null>(null);
+  const gestureRequest = useRef<GuiDocumentRequest | null>(null);
 
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodes(nodes, current));
@@ -409,8 +409,8 @@ function GraphFlowCanvas({
     (nodeId: string) => {
       const node = flowNodes.find((candidate) => candidate.id === nodeId);
       if (node?.data.kind !== "operator") return;
-      void runGuiEditCommand(() =>
-        commands.applySequenceGuiEdit({
+      void runGuiEditCommand((request) =>
+        commands.applySequenceGuiEdit(request, {
           type: "deleteGraphNode",
           nodeId
         })
@@ -423,8 +423,8 @@ function GraphFlowCanvas({
 
   const deleteLayer = useCallback(
     (id: number, migrateToLayerId: number) => {
-      void runGuiEditCommand(() =>
-        commands.applySequenceGuiEdit({
+      void runGuiEditCommand((request) =>
+        commands.applySequenceGuiEdit(request, {
           type: "deleteLayer",
           id,
           migrateToLayerId
@@ -524,10 +524,11 @@ function GraphFlowCanvas({
         onNodesChange={onFlowNodesChange}
         onEdgesChange={onFlowEdgesChange}
         onNodeDragStart={() => {
+          gestureRequest.current = useAppStore.getState().guiRequest;
           closeContextMenu();
         }}
         onNodeDragStop={(_, node) => {
-          void persistNodePosition(node);
+          void persistNodePosition(node, gestureRequest.current);
         }}
         onNodeContextMenu={(event, node) => {
           event.preventDefault();
@@ -789,14 +790,14 @@ function mergeGraphNodes(sourceNodes: GraphFlowNode[], currentNodes: GraphFlowNo
   });
 }
 
-function persistNodePosition(node: GraphFlowNode) {
-  return runGuiEditCommand(() =>
-    commands.applySequenceGuiEdit({
+function persistNodePosition(node: GraphFlowNode, origin: GuiDocumentRequest | null) {
+  return runGuiEditCommand((request) =>
+    commands.applySequenceGuiEdit(request, {
       type: "moveGraphNode",
       nodeId: node.id,
       x: node.position.x,
       y: node.position.y
-    })
+    }), origin
   );
 }
 
@@ -829,8 +830,8 @@ function connectNodes(connection: Connection) {
   const fromPort = connection.sourceHandle;
   const toPort = connection.targetHandle;
   if (fromPort === null || toPort === null) return;
-  void runGuiEditCommand(() =>
-    commands.applySequenceGuiEdit({
+  void runGuiEditCommand((request) =>
+    commands.applySequenceGuiEdit(request, {
       type: "connectGraphNodes",
       fromNode,
       fromPort,
@@ -853,8 +854,8 @@ function deleteFlowEdge(edge: Edge) {
 }
 
 function deleteGraphEdge(edge: GraphEdgeIdParts) {
-  return runGuiEditCommand(() =>
-    commands.applySequenceGuiEdit({
+  return runGuiEditCommand((request) =>
+    commands.applySequenceGuiEdit(request, {
       type: "disconnectGraphNodes",
       fromNode: edge.fromNode,
       fromPort: edge.fromPort,
