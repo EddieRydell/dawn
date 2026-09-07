@@ -36,13 +36,13 @@ pub(crate) fn sample_time_for_frame(
 }
 
 pub(crate) fn first_frame_at_or_after(time: SampleTime, frame_rate: u32) -> u32 {
-    let whole = time.ticks() / dawn_language::values::MICROS_PER_SECOND;
-    let partial = time.ticks() % dawn_language::values::MICROS_PER_SECOND;
+    let whole = time.as_ticks() / dawn_language::values::MICROS_PER_SECOND;
+    let partial = time.as_ticks() % dawn_language::values::MICROS_PER_SECOND;
     whole * frame_rate + (partial * frame_rate).div_ceil(dawn_language::values::MICROS_PER_SECOND)
 }
 
 pub(crate) fn frame_at_or_before(time: SampleTime, frame_rate: u32) -> u32 {
-    let whole = time.ticks() / dawn_language::values::MICROS_PER_SECOND;
-    let partial = time.ticks() % dawn_language::values::MICROS_PER_SECOND;
+    let whole = time.as_ticks() / dawn_language::values::MICROS_PER_SECOND;
+    let partial = time.as_ticks() % dawn_language::values::MICROS_PER_SECOND;
     whole * frame_rate + partial * frame_rate / dawn_language::values::MICROS_PER_SECOND
 }

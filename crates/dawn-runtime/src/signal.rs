@@ -102,8 +102,8 @@ impl PreparedEffect {
     pub fn progress(&self, sample_time: SampleTime) -> f32 {
         let elapsed = sample_time
             .checked_duration_since(self.start_time)
-            .map_or(0, |duration| duration.ticks());
-        (elapsed as f32 / self.duration.ticks() as f32).clamp(0.0, 1.0)
+            .map_or(0, |duration| duration.as_ticks());
+        (elapsed as f32 / self.duration.as_ticks() as f32).clamp(0.0, 1.0)
     }
 }
 
@@ -146,11 +146,11 @@ impl PreparedAutomation {
     pub fn position(&self, sample_time: SampleTime) -> f32 {
         let elapsed = sample_time
             .checked_duration_since(self.start)
-            .map_or(0, |duration| duration.ticks());
-        if self.duration.ticks() == 0 {
+            .map_or(0, |duration| duration.as_ticks());
+        if self.duration.as_ticks() == 0 {
             0.0
         } else {
-            (elapsed as f32 / self.duration.ticks() as f32).clamp(0.0, 1.0)
+            (elapsed as f32 / self.duration.as_ticks() as f32).clamp(0.0, 1.0)
         }
     }
 }
@@ -523,7 +523,7 @@ impl PreparedSignalGraph {
         if workspace.workspace_key != Some(self.workspace_key) {
             return Err(EvaluationError::InvalidWorkspace);
         }
-        if sample_time.ticks() >= self.duration.ticks() {
+        if sample_time.as_ticks() >= self.duration.as_ticks() {
             let range = crate::evaluation::frame_range(self, self.plan.output_index)?;
             let output = &mut workspace.signal_buffers[range];
             output.fill(Color {

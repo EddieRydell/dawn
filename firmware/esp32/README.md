@@ -109,11 +109,11 @@ an error is evidence of a failed attempt, not a valid result; never repair it by
 silently dropping bytes. See `../../docs/execution_audit_2026-09-06.md` for
 accepted captures, exact image hashes and current measurement limitations.
 
-The root desktop toolchain remains Rust 1.96.0. Do not run desktop builds with
+The root desktop toolchain uses Rust 1.98.1. Do not run desktop builds with
 `+esp`. To check the firmware itself:
 
 ```powershell
-cargo +1.96.0 fmt --check
+cargo +1.98.1 fmt --check
 cargo +esp clippy --release --features pc-profile --bins --locked -- -D warnings
 cargo +esp clippy --release --features i2s-output --bin loader --locked -- -D warnings
 ```

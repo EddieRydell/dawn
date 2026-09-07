@@ -391,8 +391,8 @@ fn parent_progress(
 ) -> f32 {
     let elapsed = sample_time
         .checked_duration_since(parent_start)
-        .map_or(0, |duration| duration.ticks());
-    (elapsed as f32 / parent_duration.ticks().max(1) as f32).clamp(0.0, 1.0)
+        .map_or(0, |duration| duration.as_ticks());
+    (elapsed as f32 / parent_duration.as_ticks().max(1) as f32).clamp(0.0, 1.0)
 }
 pub fn parse_gradient_mode(value: &str) -> Result<GradientMode, RuntimeError> {
     match value {

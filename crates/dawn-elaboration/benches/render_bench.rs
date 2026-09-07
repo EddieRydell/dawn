@@ -252,7 +252,7 @@ fn bench_mark_playback(c: &mut Criterion) {
             PreparedEffectImplementation::Native { sample, .. }
                 if matches!((sample, pulse), (NativeSample::MarkPulseChild(_), true) | (NativeSample::MarkChaseChild(_), false))
         )).expect("constructed fixture must contain the intended generated mark children");
-        assert!(effect.duration.ticks() > 0);
+        assert!(effect.duration.as_ticks() > 0);
         assert!(
             sequence.effects.len() >= 32,
             "marks must expand into actual children"

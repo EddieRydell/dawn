@@ -500,7 +500,7 @@ async fn render_outputs(
         let mut active = playback.lock().await;
         let (sequence, workspace, buffers) = active.as_mut().unwrap();
         let sample_time = sample_time_from_frame(frame_index, OUTPUT_FRAME_RATE).unwrap();
-        if sample_time.ticks() >= sequence.signals.duration.ticks() {
+        if sample_time.as_ticks() >= sequence.signals.duration.as_ticks() {
             frame_index = 0;
         }
         let sample_time = sample_time_from_frame(frame_index, OUTPUT_FRAME_RATE).unwrap();

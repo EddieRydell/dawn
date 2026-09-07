@@ -391,8 +391,8 @@ pub fn time(frame: usize) -> SampleTime {
 
 pub fn context(count: usize, pixel: usize, frame: usize) -> RunContext {
     RunContext {
-        progress: time(frame).ticks() as f32 / 8_000_000.0,
-        time: SampleDuration::from_ticks(time(frame).ticks()),
+        progress: time(frame).as_ticks() as f32 / 8_000_000.0,
+        time: SampleDuration::from_ticks(time(frame).as_ticks()),
         duration: SampleDuration::from_ticks(8_000_000),
         pixel_index: pixel as i32,
         pixel_count: count as i32,

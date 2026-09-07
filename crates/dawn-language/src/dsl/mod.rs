@@ -214,7 +214,7 @@ fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
             5u8.hash(state);
             value.marks.len().hash(state);
             for mark in &value.marks {
-                mark.ticks().hash(state);
+                mark.as_ticks().hash(state);
             }
         }
         Value::Target(value) => {

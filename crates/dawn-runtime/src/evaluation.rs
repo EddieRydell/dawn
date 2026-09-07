@@ -386,10 +386,10 @@ fn sample_operator_frame(
         };
         let compiled = &renderer.programs[*program as usize];
         let duration = renderer.duration;
-        let progress = if duration.ticks() == 0 {
+        let progress = if duration.as_ticks() == 0 {
             0.0
         } else {
-            (sample_time.ticks() as f32 / duration.ticks() as f32).clamp(0.0, 1.0)
+            (sample_time.as_ticks() as f32 / duration.as_ticks() as f32).clamp(0.0, 1.0)
         };
         let output = &mut buffers[destination];
         let mut cache = core::mem::take(&mut workspace.signal_cache);
@@ -400,7 +400,7 @@ fn sample_operator_frame(
             cache.fill(None);
             let context = OperatorRunContext {
                 progress,
-                time: SampleDuration::from_ticks(sample_time.ticks()),
+                time: SampleDuration::from_ticks(sample_time.as_ticks()),
                 duration,
                 pixel_index: pixel.pixel_index() as i32,
                 pixel_count: pixel.pixel_count() as i32,
@@ -541,7 +541,7 @@ fn sample_echo_frame(
     let result = (|| {
         for repeat in 0..=repeats {
             let Some(delayed_time) = sample_time.checked_sub_duration(SampleDuration::from_ticks(
-                delay.ticks().saturating_mul(repeat as u32),
+                delay.as_ticks().saturating_mul(repeat as u32),
             )) else {
                 continue;
             };
@@ -644,8 +644,8 @@ fn sample_signal_pixel(
             let reuse_uniform = cached.is_some();
             let progress = cached.map_or_else(
                 || {
-                    if uses_vm && renderer.duration.ticks() != 0 {
-                        (sample_time.ticks() as f32 / renderer.duration.ticks() as f32)
+                    if uses_vm && renderer.duration.as_ticks() != 0 {
+                        (sample_time.as_ticks() as f32 / renderer.duration.as_ticks() as f32)
                             .clamp(0.0, 1.0)
                     } else {
                         0.0
@@ -828,7 +828,7 @@ fn sample_operator_pixel(
         let duration = renderer.duration;
         let context = OperatorRunContext {
             progress,
-            time: SampleDuration::from_ticks(sample_time.ticks()),
+            time: SampleDuration::from_ticks(sample_time.as_ticks()),
             duration,
             pixel_index: pixel.pixel_index() as i32,
             pixel_count: pixel.pixel_count() as i32,
@@ -905,7 +905,7 @@ fn sample_operator_pixel(
             let mut output = black();
             for repeat in 0..=repeats {
                 let Some(delayed_time) = sample_time.checked_sub_duration(
-                    SampleDuration::from_ticks(delay.ticks().saturating_mul(repeat as u32)),
+                    SampleDuration::from_ticks(delay.as_ticks().saturating_mul(repeat as u32)),
                 ) else {
                     continue;
                 };
@@ -939,7 +939,7 @@ impl SignalSampler for GraphSignalSampler<'_> {
         sample_time: SampleTime,
         frame_cache: Option<usize>,
     ) -> Result<Color, RuntimeError> {
-        if sample_time.ticks() >= self.duration.ticks() {
+        if sample_time.as_ticks() >= self.duration.as_ticks() {
             return Ok(black());
         }
         let node = self

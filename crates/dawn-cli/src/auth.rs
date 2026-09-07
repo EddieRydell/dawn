@@ -207,8 +207,23 @@ fn client_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
+
     use super::*;
-    use keyring::mock::MockCredential;
+    use keyring_core::mock::{Cred as MockCredential, CredData as MockCredentialData};
+
+    fn mock_entry() -> (Entry, Arc<MockCredential>) {
+        let credential = Arc::new(MockCredential {
+            specifiers: (
+                CREDENTIAL_SERVICE.to_string(),
+                CREDENTIAL_ACCOUNT.to_string(),
+            ),
+            inner: Mutex::new(RefCell::new(MockCredentialData::default())),
+        });
+        let inner = keyring_core::Entry::new_with_credential(credential.clone());
+        (Entry { inner }, credential)
+    }
 
     fn bundle() -> CredentialBundle {
         CredentialBundle {
@@ -222,11 +237,10 @@ mod tests {
 
     #[test]
     fn secure_storage_failure_has_no_plaintext_fallback() {
-        let credential = MockCredential::default();
+        let (entry, credential) = mock_entry();
         credential.set_error(keyring::Error::NoStorageAccess(Box::new(
             std::io::Error::other("locked credential store"),
         )));
-        let entry = Entry::new_with_credential(Box::new(credential));
 
         let error = store_bundle_with_entry(&entry, bundle()).expect_err("storage failure");
 
@@ -243,7 +257,7 @@ mod tests {
 
     #[test]
     fn credential_bundle_is_stored_as_one_secure_record() {
-        let entry = Entry::new_with_credential(Box::new(MockCredential::default()));
+        let (entry, _) = mock_entry();
         let expected = bundle();
 
         store_bundle_with_entry(&entry, expected.clone()).expect("store");

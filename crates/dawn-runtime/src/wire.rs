@@ -136,7 +136,7 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
     let signal = &sequence.signals;
     let plan = &signal.plan;
     if signal.frame_rate == 0
-        || signal.duration.ticks() == 0
+        || signal.duration.as_ticks() == 0
         || signal.frame_count == 0
         || plan.output_index >= plan.nodes.len()
         || plan.target as usize >= signal.targets.len()
@@ -306,11 +306,11 @@ fn validate_sequence(sequence: &PreparedSequence, limits: LoadLimits) -> Result<
     let mut automation_slot = 0;
     for effect in &signal.effects {
         if effect.target as usize >= signal.targets.len()
-            || effect.duration.ticks() == 0
+            || effect.duration.as_ticks() == 0
             || effect
                 .start_time
                 .checked_add_duration(effect.duration)
-                .is_none_or(|end| end.ticks() > signal.duration.ticks())
+                .is_none_or(|end| end.as_ticks() > signal.duration.as_ticks())
         {
             return Err(bad);
         }
@@ -542,7 +542,7 @@ macro_rules! archive_clock {
             type Archived = Archived<u32>;
             type Resolver = ();
             fn resolve_with(value: &$clock, _: (), out: Place<Self::Archived>) {
-                value.ticks().resolve((), out);
+                value.as_ticks().resolve((), out);
             }
         }
         impl<S: Fallible + ?Sized> SerializeWith<$clock, S> for Microseconds {

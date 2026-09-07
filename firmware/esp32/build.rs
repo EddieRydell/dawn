@@ -64,7 +64,12 @@ fn main() {
         .enumerate()
     {
         names.push(name);
-        let effect = compile_effects(source).unwrap().remove(0);
+        let compilation = compile_effects(source).unwrap().remove(0);
+        assert!(
+            compilation.emitted_references.is_empty(),
+            "firmware benchmark fixtures cannot emit child effects"
+        );
+        let effect = compilation.effect;
         assert_eq!(effect.name.as_str(), name);
         if name == "ArrayLifetimes" {
             assert!(
@@ -413,7 +418,7 @@ fn export_fixture(
         writeln!(
             checksums,
             "{} {}",
-            time.ticks(),
+            time.as_ticks(),
             crc32fast::hash(&output[0])
         )
         .unwrap();

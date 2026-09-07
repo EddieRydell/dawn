@@ -61,12 +61,16 @@ When reviewing or preparing dependency updates, inspect both Cargo workspaces
 and the pnpm workspace. The ESP32 workspace under `firmware/esp32` has its own
 manifest and lockfile and must be checked separately from the desktop
 workspace. Use read-only checks such as `pnpm outdated`, `pnpm audit`,
-`cargo outdated --workspace`, `cargo deny check advisories`, and
-`cargo tree -i <crate>`; run the corresponding Cargo commands with
-`--manifest-path firmware/esp32/Cargo.toml` for firmware dependencies. Check
-direct and transitive dependencies, including SDK and HAL packages. Do not
-update anything automatically, and do not update a lockfile or manifest as
-part of an inspection. Separate available upgrades from security advisories,
+`cargo outdated --workspace`, `cargo deny check advisories -W unmaintained`,
+and `cargo tree -i <crate>`. Use `--manifest-path
+firmware/esp32/Cargo.toml` for firmware `cargo outdated` and `cargo tree`
+checks; run `cargo deny check advisories -W unmaintained` from
+`firmware/esp32` because cargo-deny does not accept `--manifest-path`.
+Treating the unmaintained lint as a warning keeps vulnerability advisories
+fatal while still printing inherited packages that have no safe upgrade. Check direct and
+transitive dependencies, including SDK and HAL packages. Do not update
+anything automatically, and do not update a lockfile or manifest as part of an
+inspection. Separate available upgrades from security advisories,
 unmaintained transitive packages, upstream Git patches, and intentionally
 pinned hardware SDK revisions. Summarize those findings before making changes.
 

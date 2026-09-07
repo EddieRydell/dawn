@@ -19,6 +19,9 @@ tempfile.workspace = true
 uuid.workspace = true
 webbrowser.workspace = true
 
+[dev-dependencies]
+keyring-core.workspace = true
+
 [[bin]]
 name = "dawn"
 path = "src/main.rs"

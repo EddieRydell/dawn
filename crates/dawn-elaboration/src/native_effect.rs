@@ -253,7 +253,7 @@ impl MarkChase {
 fn positive_duration(seconds: f32, name: &str) -> Result<SampleDuration, RuntimeError> {
     let duration = sample_duration_from_seconds_f32(seconds)
         .map_err(|_| error(format!("native parameter `{name}` is out of range")))?;
-    if duration.ticks() == 0 {
+    if duration.as_ticks() == 0 {
         return Err(error(format!("native parameter `{name}` must be positive")));
     }
     Ok(duration)

@@ -197,8 +197,6 @@ export function useStaticAppSnapshot(): AppStaticSnapshot | null {
   return useAppStore(useShallow((store) => {
     if (store.snapshot === null) return null;
     const { audioTransport, liveOutput, ...snapshot } = store.snapshot;
-    void audioTransport;
-    void liveOutput;
     return snapshot;
   }));
 }

@@ -2093,7 +2093,7 @@ impl<'a> Vm<'a> {
             .map_err(|_| RuntimeError::new("emitted effect start is out of range"))?;
         let duration = sample_duration_from_seconds_f32(duration_seconds)
             .map_err(|_| RuntimeError::new("emitted effect duration is out of range"))?;
-        if duration.ticks() == 0 {
+        if duration.as_ticks() == 0 {
             return Err(RuntimeError::new(
                 "emitted effect duration must be positive",
             ));

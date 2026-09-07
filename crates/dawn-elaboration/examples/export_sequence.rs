@@ -46,7 +46,7 @@ fn main() {
         .map(|frame| sample_time_from_frame(frame, sequence.signals.frame_rate).unwrap())
         .to_vec();
     times.extend([
-        SampleTime::from_ticks(sequence.signals.duration.ticks()),
+        SampleTime::from_ticks(sequence.signals.duration.as_ticks()),
         SampleTime::from_ticks(0),
     ]);
     for time in times {
@@ -59,7 +59,7 @@ fn main() {
         for bytes in &output {
             crc.update(bytes);
         }
-        checksums.push_str(&format!("{} {}\n", time.ticks(), crc.finalize()));
+        checksums.push_str(&format!("{} {}\n", time.as_ticks(), crc.finalize()));
     }
     std::fs::write(&args[1], &bytes).unwrap();
     std::fs::write(format!("{}.checksums", args[1]), checksums).unwrap();

@@ -2,11 +2,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 pub const MICROS_PER_SECOND: u32 = 1_000_000;
+const MICROS_PER_SECOND_HZ: u64 = MICROS_PER_SECOND as u64;
 
 /// The clock used by the portable renderer. One tick is one microsecond and all
 /// arithmetic is 32-bit, matching the ESP32's native word size.
-pub type SampleTime = fugit::TimerInstantU32<MICROS_PER_SECOND>;
-pub type SampleDuration = fugit::TimerDurationU32<MICROS_PER_SECOND>;
+pub type SampleTime = fugit::MonotonicTimerInstantU32<MICROS_PER_SECOND_HZ>;
+pub type SampleDuration = fugit::TimerDurationU32<MICROS_PER_SECOND_HZ>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SampleTimeError {
@@ -91,11 +92,11 @@ pub fn sample_time_with_seconds_offset(
 }
 
 pub fn sample_time_seconds_f32(time: SampleTime) -> f32 {
-    time.ticks() as f32 / MICROS_PER_SECOND as f32
+    time.as_ticks() as f32 / MICROS_PER_SECOND as f32
 }
 
 pub fn sample_duration_seconds_f32(duration: SampleDuration) -> f32 {
-    duration.ticks() as f32 / MICROS_PER_SECOND as f32
+    duration.as_ticks() as f32 / MICROS_PER_SECOND as f32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

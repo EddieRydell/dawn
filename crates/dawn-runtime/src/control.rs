@@ -72,7 +72,7 @@ pub fn apply_controls(
         if elapsed >= prepared.duration {
             continue;
         }
-        let position = elapsed.ticks() as f32 / prepared.duration.ticks() as f32;
+        let position = elapsed.as_ticks() as f32 / prepared.duration.as_ticks() as f32;
         // Every selected cell receives the same sampled control value.
         let scalar = match (prepared.kind, &prepared.value) {
             (PreparedControlKind::Scalar, PreparedControlValue::NormalizedCurve(curve)) => {

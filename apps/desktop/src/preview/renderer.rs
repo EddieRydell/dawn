@@ -38,6 +38,7 @@ impl PreviewRenderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|error| error.to_string())?;
@@ -88,6 +89,7 @@ impl PreviewRenderer {
             present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: Vec::new(),
         };
         surface.configure(&device, &config);
@@ -135,7 +137,10 @@ impl PreviewRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[PreviewInstanceGpu::layout(), PreviewColorGpu::layout()],
+                buffers: &[
+                    Some(PreviewInstanceGpu::layout()),
+                    Some(PreviewColorGpu::layout()),
+                ],
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -249,7 +254,7 @@ impl PreviewRenderer {
             }
         }
         self.queue.submit([encoder.finish()]);
-        output.present();
+        self.queue.present(output);
     }
 
     fn resize(&mut self, size: PreviewSize) {

@@ -30,7 +30,7 @@ import {
 } from "react";
 import type { NodeApi, TreeApi } from "react-arborist";
 import { Tree } from "react-arborist";
-import useResizeObserver from "use-resize-observer";
+import { useResizeObserver } from "use-resize-observer";
 import { commands } from "../api";
 import { runSnapshotCommand } from "../store";
 import { THEME_METRICS } from "../theme";

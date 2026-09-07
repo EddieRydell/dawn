@@ -37,7 +37,7 @@ fn reused_show_buffers_match_fresh_buffers_across_seeks_and_effect_ends() {
         );
         times.extend([
             SampleTime::from_ticks(0),
-            SampleTime::from_ticks(show.signals.duration().ticks()),
+            SampleTime::from_ticks(show.signals.duration().as_ticks()),
         ]);
         for time in times {
             show.evaluate(time, &mut buffers, &mut workspace).unwrap();

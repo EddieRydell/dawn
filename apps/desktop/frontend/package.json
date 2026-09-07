@@ -10,7 +10,13 @@
     "knip": "knip"
   },
   "knip": {
-    "ignoreExportsUsedInFile": true
+    "ignoreExportsUsedInFile": true,
+    "ignoreIssues": {
+      "src/types.ts": ["types"]
+    },
+    "rules": {
+      "catalogReferences": "off"
+    }
   },
   "dependencies": {
     "@codemirror/commands": "catalog:",

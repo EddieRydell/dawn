@@ -50,7 +50,7 @@ fn compare(
         .flatten()
     }));
     times.extend([
-        SampleTime::from_ticks(full.sequence.signals.duration.ticks()),
+        SampleTime::from_ticks(full.sequence.signals.duration.as_ticks()),
         SampleTime::from_ticks(0),
     ]);
     for time in times {

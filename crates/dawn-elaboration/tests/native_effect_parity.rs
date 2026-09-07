@@ -194,7 +194,7 @@ fn chase_and_spin_integer_sections_match_reference_sampling() {
                                     sample
                                         .sample(
                                             &context,
-                                            SampleTime::from_ticks(context.time.ticks())
+                                            SampleTime::from_ticks(context.time.as_ticks())
                                         )
                                         .unwrap(),
                                     reference
@@ -289,7 +289,7 @@ fn mark_chase_matches_reference_schedule_and_samples() {
                         let sample = RunContext {
                             progress,
                             time: SampleDuration::from_ticks(
-                                (progress * native.duration.ticks() as f32) as u32,
+                                (progress * native.duration.as_ticks() as f32) as u32,
                             ),
                             duration: native.duration,
                             pixel_index: pixel.pixel_index,
@@ -386,7 +386,7 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
                     let context = RunContext {
                         progress,
                         time: SampleDuration::from_ticks(
-                            (progress * native.duration.ticks() as f32).round() as u32,
+                            (progress * native.duration.as_ticks() as f32).round() as u32,
                         ),
                         duration: native.duration,
                         pixel_index: pixel.pixel_index,

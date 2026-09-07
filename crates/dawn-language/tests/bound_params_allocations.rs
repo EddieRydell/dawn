@@ -91,7 +91,7 @@ fn borrowed_sequence_output_seeks_and_clears_without_allocating() {
     assert!(expected.iter().any(|&color| color != black));
     for time in [
         workload::time(4),
-        SampleTime::from_ticks(sequence.duration.ticks()),
+        SampleTime::from_ticks(sequence.duration.as_ticks()),
         SampleTime::from_ticks(u32::MAX),
         workload::time(4),
     ] {
@@ -102,7 +102,7 @@ fn borrowed_sequence_output_seeks_and_clears_without_allocating() {
         let colors = result.unwrap();
         assert_eq!(colors.len(), 200);
         assert_eq!(ALLOCATIONS.get(), 0);
-        if time.ticks() >= sequence.duration.ticks() {
+        if time.as_ticks() >= sequence.duration.as_ticks() {
             assert!(colors.iter().all(|&color| color == black));
         } else {
             assert_eq!(colors, expected);

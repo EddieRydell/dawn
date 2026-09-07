@@ -687,9 +687,9 @@ fn repeated_signal_reads_reuse_only_unchanged_values_in_one_block() {
             time: SampleTime,
             _frame_cache: Option<usize>,
         ) -> Result<Color, RuntimeError> {
-            self.0.push((input, time.ticks()));
+            self.0.push((input, time.as_ticks()));
             Ok(Color {
-                red: (time.ticks() / 1000).min(255) as u8,
+                red: (time.as_ticks() / 1000).min(255) as u8,
                 green: input as u8,
                 blue: 0,
             })
