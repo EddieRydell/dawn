@@ -1,4 +1,4 @@
-use super::GeneratedEffectRef;
+use super::GeneratedEffectSlot;
 use super::bytecode::{
     ArithmeticOp, BoolSlot, BytecodeProgram, ColorBinary, ColorSlot, CompareOp, ContextRead,
     FloatBinary, FloatSlot, FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot,
@@ -58,7 +58,7 @@ pub struct GeneratorContext {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeneratedEffect {
-    pub definition: GeneratedEffectRef,
+    pub definition: GeneratedEffectSlot,
     pub start_time: SampleTime,
     pub duration: SampleDuration,
     pub target: Arc<TargetItemValue>,
@@ -1617,15 +1617,14 @@ impl<'a> Vm<'a> {
                         .as_ref()
                         .ok_or_else(|| RuntimeError::new("emit is only valid in a generator"))?
                         .0;
-                    let effect = definition
-                        .generated_effects
-                        .get(*effect as usize)
-                        .ok_or_else(|| RuntimeError::new("invalid generated effect slot"))?;
+                    if effect.0 >= definition.generated_effect_count {
+                        return Err(RuntimeError::new("invalid generated effect slot"));
+                    }
                     let fields = definition
                         .emit_fields
                         .get(fields.range())
                         .ok_or_else(|| RuntimeError::new("invalid emit field span"))?;
-                    self.emit_generated(effect, fields)?;
+                    self.emit_generated(*effect, fields)?;
                 }
                 Instruction::Return(src) => return self.return_value(*src),
                 Instruction::ReturnColor(src) => return Ok(RuntimeValue::Color(self.color(*src)?)),
@@ -2063,7 +2062,7 @@ impl<'a> Vm<'a> {
 
     fn emit_generated(
         &mut self,
-        effect: &GeneratedEffectRef,
+        effect: GeneratedEffectSlot,
         fields: &[(Identifier, ValueSlot)],
     ) -> Result<(), RuntimeError> {
         let mut start_seconds = None;
@@ -2104,7 +2103,7 @@ impl<'a> Vm<'a> {
             .as_mut()
             .ok_or_else(|| RuntimeError::new("emit is only valid in a generator"))?;
         generated.push(GeneratedEffect {
-            definition: effect.clone(),
+            definition: effect,
             start_time,
             duration,
             target: target.ok_or_else(|| RuntimeError::new("emit missing target"))?,

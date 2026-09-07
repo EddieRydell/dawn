@@ -4,11 +4,7 @@ pub(super) struct DomainResolver<'a> {
 }
 
 impl DomainResolver<'_> {
-    pub(super) fn resolve_setup(
-        &mut self,
-        source_document: &dawn_language::identity::DocumentId,
-        id: &SetupId,
-    ) -> Result<(), LoadProjectError> {
+    pub(super) fn resolve_setup(&mut self, id: &SetupId) -> Result<(), LoadProjectError> {
         if self.project.setups.contains_key(id) {
             return Ok(());
         }
@@ -24,7 +20,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: document_path.clone(),
-                    range: None,
+                    range: source_range_for_scalar(&document_path, elements_ref),
                     reference: elements_ref.to_string(),
                 });
             }
@@ -34,7 +30,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: document_path.clone(),
-                    range: None,
+                    range: source_range_for_scalar(&document_path, preview_ref),
                     reference: preview_ref.to_string(),
                 });
             }
@@ -43,8 +39,8 @@ impl DomainResolver<'_> {
             ResolvedObject::Patch(patch) => patch,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
-                    path: source_document.path().to_path_buf(),
-                    range: None,
+                    path: document_path.clone(),
+                    range: source_range_for_scalar(&document_path, patch_ref),
                     reference: patch_ref.to_string(),
                 });
             }
@@ -232,7 +228,7 @@ impl DomainResolver<'_> {
                         _ => {
                             return Err(LoadProjectError::InvalidReference {
                                 path: document_path.clone(),
-                                range: None,
+                                range: source_range_for_scalar(&document_path, reference),
                                 reference: reference.to_string(),
                             });
                         }
@@ -277,7 +273,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
-                    range: None,
+                    range: source_range_for_scalar(path, prop_ref),
                     reference: prop_ref.to_string(),
                 });
             }
@@ -349,7 +345,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.clone(),
-                    range: None,
+                    range: source_range_for_scalar(&path, tree_ref),
                     reference: tree_ref.to_string(),
                 });
             }
@@ -391,7 +387,7 @@ impl DomainResolver<'_> {
                         _ => {
                             return Err(LoadProjectError::InvalidReference {
                                 path: document_path.clone(),
-                                range: None,
+                                range: source_range_for_scalar(&document_path, reference),
                                 reference: reference.to_string(),
                             });
                         }
@@ -470,7 +466,7 @@ impl DomainResolver<'_> {
                     _ => {
                         return Err(LoadProjectError::InvalidReference {
                             path: path.to_path_buf(),
-                            range: None,
+                            range: source_range_for_scalar(path, reference),
                             reference: reference.to_string(),
                         });
                     }
@@ -499,7 +495,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
-                    range: None,
+                    range: source_range_for_scalar(path, reference),
                     reference: reference.to_string(),
                 });
             }
@@ -632,7 +628,7 @@ impl DomainResolver<'_> {
                     _ => {
                         return Err(LoadProjectError::InvalidReference {
                             path: path.to_path_buf(),
-                            range: None,
+                            range: source_range_for_scalar(path, reference),
                             reference: reference.to_string(),
                         });
                     }
@@ -1036,27 +1032,24 @@ impl DomainResolver<'_> {
     ) -> Result<EffectRef, LoadProjectError> {
         let path = document_id.path();
         let effect_ref = string_field(path, value, "effect")?;
-        if let Some(name) = effect_ref.strip_prefix("builtins.") {
-            return dawn_language::effect::builtin_effect_from_source_name(name)
-                .map(EffectRef::Builtin)
-                .ok_or_else(|| LoadProjectError::InvalidReference {
-                    path: path.to_path_buf(),
-                    range: source_range_for_field_value(path, value, "effect"),
-                    reference: effect_ref.to_string(),
-                });
+        let reference = dawn_language::imports::SourceReference::parse(effect_ref)
+            .ok()
+            .and_then(|reference| {
+                crate::imports::lookup_effect_reference(
+                    &self.loader.visible_objects,
+                    document_id,
+                    &reference,
+                )
+            })
+            .ok_or_else(|| LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, "effect"),
+                reference: effect_ref.to_string(),
+            })?;
+        if let EffectRef::Custom(definition) = &reference {
+            self.resolve_effect_definition(definition)?;
         }
-        let definition = match self.loader.resolve_reference(document_id, effect_ref)? {
-            ResolvedObject::EffectDefinition(definition) => definition,
-            _ => {
-                return Err(LoadProjectError::InvalidReference {
-                    path: path.to_path_buf(),
-                    range: None,
-                    reference: effect_ref.to_string(),
-                });
-            }
-        };
-        self.resolve_effect_definition(&definition)?;
-        Ok(EffectRef::Custom(definition))
+        Ok(reference)
     }
 
     fn parse_param_overrides(
@@ -1146,7 +1139,23 @@ impl DomainResolver<'_> {
         value: &Value,
     ) -> Result<EffectParamValue, LoadProjectError> {
         let path = document_id.path();
-        match string_field(path, value, "type")? {
+        let kind = string_field(path, value, "type")?;
+        let fields: &[&str] = match kind {
+            "integer" | "float" | "bool" | "color" | "enum" => &["type", "value"],
+            "marks" => &["type", "key"],
+            "curve" => &["type", "curve"],
+            "gradient" => &["type", "gradient"],
+            "array" => &["type", "values"],
+            other => {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, "type"),
+                    message: format!("unsupported effect param type `{other}`"),
+                });
+            }
+        };
+        require_allowed_mapping_keys(path, value, fields, "effect parameter value")?;
+        match kind {
             "integer" => Ok(EffectParamValue::Int(i32_field(path, value, "value")?)),
             "float" => Ok(EffectParamValue::Float(f32_field(path, value, "value")?)),
             "bool" => Ok(EffectParamValue::Bool(bool_field(path, value, "value")?)),
@@ -1204,11 +1213,13 @@ impl DomainResolver<'_> {
             return self.parse_effect_param(document_id, value);
         }
         if let Some(curve) = optional_field(value, "curve") {
+            require_allowed_mapping_keys(path, value, &["curve"], "curve array item")?;
             return Ok(EffectParamValue::Curve(
                 self.parse_curve_source(document_id, curve)?,
             ));
         }
         let gradient = required_field(path, value, "gradient")?;
+        require_allowed_mapping_keys(path, value, &["gradient"], "gradient array item")?;
         Ok(EffectParamValue::Gradient(
             self.parse_gradient_source(document_id, gradient)?,
         ))
@@ -1226,7 +1237,7 @@ impl DomainResolver<'_> {
                 _ => {
                     return Err(LoadProjectError::InvalidReference {
                         path: path.to_path_buf(),
-                        range: None,
+                        range: source_range_for_scalar(path, reference),
                         reference: reference.to_string(),
                     });
                 }
@@ -1267,7 +1278,7 @@ impl DomainResolver<'_> {
                 _ => {
                     return Err(LoadProjectError::InvalidReference {
                         path: path.to_path_buf(),
-                        range: None,
+                        range: source_range_for_scalar(path, reference),
                         reference: reference.to_string(),
                     });
                 }

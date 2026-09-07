@@ -2,7 +2,7 @@ use super::preparation::prepare_sample_program;
 use crate::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect};
 use dawn_language::dsl::{
     BoundParams, BytecodeProgram, DslBindCache, EffectKind as RootEffectKind, GeneratedEffect,
-    GeneratedEffectRef, GeneratorContext, Identifier, ParamDecl, Type, Value, VmWorkspace,
+    GeneratorContext, Identifier, ParamDecl, Type, Value, VmWorkspace,
 };
 use dawn_language::effect::{
     EffectDefinitionId, EffectImplementation, EffectRef, builtin_effect_definition,
@@ -140,15 +140,22 @@ fn prepare_generated_child(
     definition_source: &SourceIdentity,
     child: GeneratedEffect,
 ) -> Result<(), RenderError> {
-    let effect_ref = match &child.definition {
-        GeneratedEffectRef::Local(name) => {
-            EffectRef::Custom(EffectDefinitionId(SourceIdentity::from_document(
-                definition_source.document_id().clone(),
-                name.as_str().to_string(),
-            )))
-        }
-        GeneratedEffectRef::Builtin(builtin) => EffectRef::Builtin(*builtin),
-    };
+    let parent = context
+        .project
+        .definitions
+        .effects
+        .get(&EffectDefinitionId(definition_source.clone()))
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: format!("generator definition is not linked in {definition_source:?}"),
+        })?;
+    let slot = child.definition.0 as usize;
+    let effect_ref = parent
+        .generated_effect_targets
+        .get(slot)
+        .cloned()
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: format!("invalid generated effect slot {slot}"),
+        })?;
     let definition = context
         .project
         .definitions

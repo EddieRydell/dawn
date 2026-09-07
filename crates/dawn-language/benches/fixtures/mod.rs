@@ -86,8 +86,9 @@ fn sample_effect(effect_name: &str, source: &str) -> CompiledEffect {
     compile_effects(source)
         .expect("effect source should compile")
         .into_iter()
-        .find(|effect| effect.name().as_str() == effect_name)
+        .find(|effect| effect.effect.name().as_str() == effect_name)
         .expect("compiled effect should exist")
+        .effect
 }
 
 fn sample_context() -> RunContext {

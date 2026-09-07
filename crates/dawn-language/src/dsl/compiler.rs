@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) fn compile_checked_effects(
     module: CheckedModule,
-) -> Result<Vec<CompiledEffect>, super::Diagnostic> {
+) -> Result<Vec<super::EffectCompilation>, super::Diagnostic> {
     module.effects.into_iter().map(compile_effect).collect()
 }
 
@@ -26,7 +26,9 @@ pub(crate) fn compile_checked_operators(
     module.operators.into_iter().map(compile_operator).collect()
 }
 
-fn compile_effect(effect: CheckedEffectDecl) -> Result<CompiledEffect, super::Diagnostic> {
+fn compile_effect(
+    effect: CheckedEffectDecl,
+) -> Result<super::EffectCompilation, super::Diagnostic> {
     let kind = if effect.entrypoint.name.as_str() == "generate" {
         EffectKind::Generator
     } else {
@@ -34,13 +36,16 @@ fn compile_effect(effect: CheckedEffectDecl) -> Result<CompiledEffect, super::Di
     };
     let mut compiler = FunctionCompiler::new(&effect.params, kind);
     let bytecode = compiler.compile(effect.body)?;
-    Ok(CompiledEffect {
-        name: effect.name,
-        params: effect.params,
-        kind,
-        bytecode,
-        emit_fields: compiler.emit_fields.into_boxed_slice(),
-        generated_effects: compiler.generated_effects.into_boxed_slice(),
+    Ok(super::EffectCompilation {
+        effect: CompiledEffect {
+            name: effect.name,
+            params: effect.params,
+            kind,
+            bytecode,
+            emit_fields: compiler.emit_fields.into_boxed_slice(),
+            generated_effect_count: compiler.generated_effects.len() as u32,
+        },
+        emitted_references: compiler.generated_effects.into_boxed_slice(),
     })
 }
 
@@ -60,7 +65,7 @@ struct FunctionCompiler {
     constants: Vec<Value>,
     value_operands: Vec<ValueSlot>,
     emit_fields: Vec<(Identifier, ValueSlot)>,
-    generated_effects: Vec<super::GeneratedEffectRef>,
+    generated_effects: Vec<super::EmittedReference>,
     scopes: Vec<IndexMap<Identifier, Binding>>,
     param_types: Vec<Type>,
     layout: SlotLayout,
@@ -1353,11 +1358,14 @@ impl FunctionCompiler {
         span
     }
 
-    fn add_generated_effect(&mut self, effect: super::GeneratedEffectRef) -> u32 {
+    fn add_generated_effect(
+        &mut self,
+        effect: super::EmittedReference,
+    ) -> super::GeneratedEffectSlot {
         debug_assert!(u32::try_from(self.generated_effects.len()).is_ok());
         let index = self.generated_effects.len() as u32;
         self.generated_effects.push(effect);
-        index
+        super::GeneratedEffectSlot(index)
     }
 
     fn current_target(&self) -> Target {

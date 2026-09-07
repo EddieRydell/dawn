@@ -496,7 +496,7 @@ pub enum Instruction {
     },
     CheckLoopLimit,
     Emit {
-        effect: u32,
+        effect: super::GeneratedEffectSlot,
         fields: PoolSpan,
     },
     Return(ValueSlot),

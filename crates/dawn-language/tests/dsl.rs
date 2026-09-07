@@ -1,8 +1,7 @@
 use dawn_language::dsl::{
-    Color, GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext, RuntimeError,
+    Color, GeneratedEffectSlot, GeneratorContext, Identifier, OperatorRunContext, RuntimeError,
     SignalSampler, TargetValue, Value, VmWorkspace, compile_effects, compile_operators,
 };
-use dawn_language::effect::BuiltinEffect;
 use dawn_language::values::{SampleDuration, SampleTime};
 use dawn_runtime::dsl::bytecode::Instruction;
 use indexmap::IndexMap;
@@ -47,7 +46,8 @@ fn assigned_parameters_are_invocation_local_across_branches_and_loops() {
     }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let mut workspace = VmWorkspace::default();
     for (progress, red) in [(0.0, 115), (1.0, 179), (0.0, 115)] {
@@ -81,14 +81,14 @@ fn compiler_tracks_pixel_dependency_including_branches_and_signal_samples() {
         ("rgb(section_position(4.0), 0.0, 0.0)", true),
     ] {
         let source = format!("effect Dependency {{ color sample() {{ return {expression}; }} }}");
-        let effect = compile_effects(&source).unwrap().remove(0);
+        let effect = compile_effects(&source).unwrap().remove(0).effect;
         assert_eq!(effect.bytecode.uses_pixel_context, expected, "{expression}");
     }
     let operator = compile_operators("operator Identity { input Signal source; color sample() { return source.at(seconds()); } }")
         .unwrap().remove(0);
     assert!(operator.bytecode.uses_pixel_context);
     let effect = compile_effects("effect Branch { color sample() { if (progress() > 0.5) { return rgb(pixel_index(), 0.0, 0.0); } return #000000; } }")
-        .unwrap().remove(0);
+        .unwrap().remove(0).effect;
     assert!(effect.bytecode.uses_pixel_context);
 }
 
@@ -158,7 +158,8 @@ fn constant_and_calculated_arrays_preserve_nested_values_and_assignment() {
         }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let context = OperatorRunContext {
         progress: 0.25,
@@ -198,10 +199,12 @@ fn operator_requires_a_signal_input() {
 fn array_aliases_survive_loops_nested_reassignment_and_workspace_reuse() {
     let effect = compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .effect;
     let small = compile_effects("effect Small { color sample() { return rgb(0.0, 0.0, 0.0); } }")
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .effect;
     let small_params = small.bind_params(&IndexMap::new()).unwrap();
     let mut workspace = VmWorkspace::default();
     for (progress, iterations, expected) in [
@@ -311,7 +314,7 @@ fn enum_identity_survives_subset_assignment_arrays_and_program_reuse() {
                     return rgb(0.25, 0.5, 0.75);
                 }}
             }}"
-        )).unwrap().remove(0);
+        )).unwrap().remove(0).effect;
         let params = effect.bind_params(&IndexMap::new()).unwrap();
         for _ in 0..3 {
             assert_eq!(
@@ -345,7 +348,8 @@ fn generator_emitted_arrays_and_enums_outlive_vm_registers() {
         }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let context = GeneratorContext {
         start_time: SampleTime::from_ticks(0),
@@ -446,7 +450,7 @@ fn signal_sampling_and_color_operations_execute() {
 }
 
 #[test]
-fn generator_emit_references_preserve_builtin_and_local_identity() {
+fn generator_emit_events_carry_only_ordered_numeric_slots() {
     let effect = compile_effects(
         "effect EmitAll {
           void generate() {
@@ -462,7 +466,8 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
     .expect("generator compiles")
     .into_iter()
     .next()
-    .expect("one effect");
+    .expect("one effect")
+    .effect;
     let generated = effect
         .generate_bound(
             &effect.bind_params(&IndexMap::new()).unwrap(),
@@ -478,15 +483,15 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
     assert_eq!(
         generated
             .iter()
-            .map(|effect| effect.definition.clone())
+            .map(|effect| effect.definition)
             .collect::<Vec<_>>(),
         vec![
-            GeneratedEffectRef::Builtin(BuiltinEffect::Pulse),
-            GeneratedEffectRef::Builtin(BuiltinEffect::Chase),
-            GeneratedEffectRef::Builtin(BuiltinEffect::Spin),
-            GeneratedEffectRef::Builtin(BuiltinEffect::MarkPulse),
-            GeneratedEffectRef::Builtin(BuiltinEffect::MarkChase),
-            GeneratedEffectRef::Local(Identifier::new("LocalChild".to_string()).unwrap()),
+            GeneratedEffectSlot(0),
+            GeneratedEffectSlot(1),
+            GeneratedEffectSlot(2),
+            GeneratedEffectSlot(3),
+            GeneratedEffectSlot(4),
+            GeneratedEffectSlot(5),
         ]
     );
     assert!(
@@ -499,18 +504,51 @@ fn generator_emit_references_preserve_builtin_and_local_identity() {
 }
 
 #[test]
+fn emitted_reference_spans_do_not_change_semantics_or_bytecode_hashes() {
+    use std::hash::Hasher;
+    let source = "effect Parent { void generate() { timeline.emit Local { start: 0.0, duration: 1.0, target: target }; } }";
+    let first = compile_effects(source).unwrap().remove(0);
+    let second = compile_effects(&format!("\n// diagnostic-only displacement\n{source}"))
+        .unwrap()
+        .remove(0);
+    assert_ne!(
+        first.emitted_references[0].span,
+        second.emitted_references[0].span
+    );
+    assert_eq!(first, second);
+    let hash = |effect| {
+        let mut state = std::collections::hash_map::DefaultHasher::new();
+        dawn_language::dsl::hash_compiled_effect(effect, &mut state);
+        state.finish()
+    };
+    assert_eq!(hash(&first.effect), hash(&second.effect));
+    let document = format!("import fx from [\"child.effect.dawn\"];\n{source}");
+    let first = dawn_language::dsl::compile_effect_document(&document).unwrap();
+    let second = dawn_language::dsl::compile_effect_document(&format!("\n{document}")).unwrap();
+    assert_ne!(first.imports[0].span, second.imports[0].span);
+    assert_eq!(first, second);
+}
+
+#[test]
+fn invalid_generated_effect_slot_is_rejected_by_the_vm() {
+    let mut effect = compile_effects("effect Parent { void generate() { timeline.emit Local { start: 0.0, duration: 1.0, target: target }; } }").unwrap().remove(0).effect;
+    effect.generated_effect_count = 0;
+    let result = effect.generate_bound(
+        &effect.bind_params(&IndexMap::new()).unwrap(),
+        &GeneratorContext {
+            start_time: SampleTime::from_ticks(0),
+            duration: SampleDuration::from_ticks(1_000_000),
+            target: Arc::new(TargetValue { groups: Vec::new() }),
+        },
+        &mut VmWorkspace::default(),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
 fn qualified_generator_emit_references_report_specific_diagnostics() {
-    for (reference, expected) in [
-        ("builtins.unknown", "unknown built-in effect `unknown`"),
-        (
-            "effects.pulse",
-            "unsupported generated effect namespace `effects`",
-        ),
-        (
-            "builtins.pulse.extra",
-            "generated effect reference must contain exactly two segments",
-        ),
-    ] {
+    for reference in ["builtins.pulse.extra", "fx.Child.extra"] {
+        let expected = "generated effect reference must contain exactly two segments";
         let source = format!(
             "effect Bad {{ void generate() {{ timeline.emit {reference} {{ start: 0.0, duration: 1.0, target: target }}; }} }}"
         );
@@ -522,6 +560,54 @@ fn qualified_generator_emit_references_report_specific_diagnostics() {
             "missing `{expected}` in {diagnostics:?}"
         );
     }
+}
+
+#[test]
+fn effect_document_compilation_retains_explicit_imports_and_source_spans() {
+    use dawn_language::dsl::compile_effect_document;
+    let source = "import bursts from [\"effects/child.effect.dawn\"];\nimport library from local-effects.child-effects;\neffect Parent { void generate() { timeline.emit bursts.Child { start: 0.0, duration: 1.0, target: target }; } }";
+    let compiled = compile_effect_document(source).unwrap();
+    let dawn_language::imports::ImportSource::LocalDocuments { documents } =
+        &compiled.imports[0].declaration.source
+    else {
+        panic!("document import")
+    };
+    assert_eq!(documents[0], "effects/child.effect.dawn");
+    let span = compiled.imports[0].source_spans[0];
+    assert_eq!(
+        &source[span.start..span.end],
+        "\"effects/child.effect.dawn\""
+    );
+    assert_eq!(
+        compiled.imports[1].declaration.source,
+        dawn_language::imports::ImportSource::DependencyExport {
+            dependency: "local-effects".into(),
+            export: "child-effects".into()
+        }
+    );
+    assert_eq!(
+        compiled.effects[0].emitted_references[0].reference,
+        dawn_language::imports::SourceReference::Qualified {
+            alias: dawn_language::imports::ImportAlias::new("bursts").unwrap(),
+            name: Identifier::new("Child".into()).unwrap(),
+        }
+    );
+    assert!(
+        compile_effects(source).is_err(),
+        "standalone callers cannot discard imports"
+    );
+    for invalid in [
+        source.replace("import bursts", "import builtins"),
+        format!("import bursts from [];{source}"),
+        format!("{source}\nimport late from [\"other.effect.dawn\"];"),
+        source.replace(
+            "[\"effects/child.effect.dawn\"]",
+            "\"effects/child.effect.dawn\"",
+        ),
+    ] {
+        assert!(compile_effect_document(&invalid).is_err());
+    }
+    assert!(compile_operators("import effects from [\"child.effect.dawn\"]; operator Gain { input Signal source; color sample() { return source.at(seconds()); } }").is_err());
 }
 
 #[test]
@@ -550,7 +636,7 @@ fn required_parameters_and_integer_remainder_fail_without_panicking() {
     .expect("effect compiles")
     .into_iter()
     .next()
-    .expect("one effect");
+    .expect("one effect").effect;
     let missing = effect
         .bind_params(&IndexMap::new())
         .expect_err("required parameters must not synthesize a default");

@@ -120,7 +120,7 @@ fn resource_hoisting_preserves_branches_and_earlier_errors() {
             false,
         ),
     ] {
-        let effect = compile_effects(source).unwrap().remove(0);
+        let effect = compile_effects(source).unwrap().remove(0).effect;
         assert!(
             !effect.bytecode.instructions[..effect.bytecode.pixel_entry as usize]
                 .iter()
@@ -162,7 +162,8 @@ fn recursive_operator_automation_matches_frame_sampling_after_seeks_and_edits() 
         "effect Source { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let gain = compile_operators("operator Gain { input Signal source; param float gain = 0.5; color sample() { return source.at(seconds()) * gain; } }").unwrap().remove(0);
     let mut show = workload::show(
         200,
@@ -271,7 +272,7 @@ fn recursive_operator_automation_matches_frame_sampling_after_seeks_and_edits() 
 fn upstream_prefix_reuse_matches_full_execution_across_effects_and_times() {
     use dawn_language::dsl::compile_operators;
     use dawn_runtime::values::{SampleDuration, SampleTime};
-    let effect = compile_effects("effect Source { color sample() { float gain = sin(seconds() * 7.0) * 0.5 + 0.5; return rgb(pixel_fraction(), progress() * gain, gain); } }").unwrap().remove(0);
+    let effect = compile_effects("effect Source { color sample() { float gain = sin(seconds() * 7.0) * 0.5 + 0.5; return rgb(pixel_fraction(), progress() * gain, gain); } }").unwrap().remove(0).effect;
     assert!(effect.bytecode.pixel_entry > 0);
     let operators = [
         workload::IDENTITY_SOURCE,
@@ -329,7 +330,8 @@ fn operator_uniform_reuse_matches_full_evaluation_with_nested_signals() {
         "effect Source { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     for source in [
         "operator Wave { input Signal source; color sample() {
             float gain = sin(seconds() * 7.0) * 0.5 + 0.5;
@@ -411,7 +413,8 @@ fn nested_prefix_reuse_tracks_sibling_parameters_and_temporal_revisits() {
         "effect Source { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let gain = compile_operators("operator Gain { input Signal source; param float gain = 0.5; color sample() { return source.at(seconds()) * (gain * progress()); } }").unwrap().remove(0);
     let mix = compile_operators(
         "operator Mix { input Signal a; input Signal b; color sample() {
@@ -523,7 +526,8 @@ fn uniform_frames_match_individual_samples_when_seeking() {
     }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     assert!(!effect.bytecode.uses_pixel_context);
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let identity = dawn_language::dsl::compile_operators(workload::IDENTITY_SOURCE)
@@ -564,7 +568,8 @@ fn uniform_empty_target_skips_sampling_but_nonempty_target_reports_errors() {
         "effect Uniform { param gradient colors; color sample() { return colors[progress()]; } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     assert!(!effect.bytecode.uses_pixel_context);
     let params = effect
         .bind_params(&IndexMap::from([(
@@ -591,7 +596,8 @@ fn identical_target_routing_matches_address_search() {
         "effect Ramp { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let operator = dawn_language::dsl::compile_operators(workload::OPERATOR_SOURCE)
         .unwrap()
         .remove(0);
@@ -662,7 +668,7 @@ fn mixed_pixel_and_time_expressions_match_scalar_sampling() {
             return rgb(values[pixel_index() % 3], phase, progress());
         } }",
     ] {
-        let effect = compile_effects(source).unwrap().remove(0);
+        let effect = compile_effects(source).unwrap().remove(0).effect;
         assert!(effect.bytecode.uses_pixel_context);
         assert!(
             effect.bytecode.instructions[..effect.bytecode.pixel_entry as usize]

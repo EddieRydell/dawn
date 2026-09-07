@@ -239,6 +239,8 @@ pub fn apply_path_change(
 
     let mut candidate = session.clone();
     remap_candidate(&mut candidate, plan)?;
+    crate::serialization::validate_source_inventory(&candidate)
+        .map_err(|error| error.to_string())?;
     let prepared = prepare_writes(&candidate)?;
 
     let temporary = Builder::new()
@@ -302,13 +304,34 @@ fn remap_candidate(candidate: &mut ProjectSession, plan: &PathChangePlan) -> Res
 
     let mut documents = IndexMap::new();
     for (old_id, mut document) in std::mem::take(&mut candidate.source.documents) {
+        if let crate::source::SourceDocumentKind::Effect { source } = &mut document.kind {
+            let imports = dawn_language::dsl::effect_source_imports(source)
+                .map_err(|errors| format!("Cannot remap effect imports: {errors:?}"))?;
+            // Only explicit import-path tokens change; the effect program stays intact.
+            for import in imports.into_iter().rev() {
+                if let dawn_language::imports::ImportSource::LocalDocuments { documents } =
+                    import.declaration.source
+                {
+                    for (path, span) in documents.into_iter().zip(import.source_spans).rev() {
+                        let target = DocumentId::new(old_id.module_id(), path);
+                        if let Some(next) = plan.document_remaps.get(&target) {
+                            let path = serde_json::to_string(next.path().as_str())
+                                .map_err(|error| error.to_string())?;
+                            source.replace_range(span.start..span.end, &path);
+                        }
+                    }
+                }
+            }
+        }
         for import in &mut document.imports {
             for target in &mut import.targets {
                 if let Some(next) = plan.document_remaps.get(target) {
                     *target = next.clone();
                 }
             }
-            if let ImportSource::LocalDocuments { documents: paths } = &mut import.source {
+            if let ImportSource::LocalDocuments { documents: paths } =
+                &mut import.declaration.source
+            {
                 for path in paths {
                     let target = DocumentId::new(old_id.module_id(), path.clone());
                     if let Some(next) = plan.document_remaps.get(&target) {

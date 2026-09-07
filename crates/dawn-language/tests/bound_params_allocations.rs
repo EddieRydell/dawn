@@ -205,7 +205,8 @@ fn warmed_curve_enum_automation_and_constant_arrays_do_not_allocate() {
         } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let mut workspace = dawn_language::dsl::VmWorkspace::default();
     let context = dawn_language::dsl::RunContext {
@@ -232,7 +233,8 @@ fn calculated_arrays_do_not_allocate_after_warmup() {
     let effect =
         dawn_language::dsl::compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
             .unwrap()
-            .remove(0);
+            .remove(0)
+            .effect;
     let mut workspace = dawn_language::dsl::VmWorkspace::default();
     let mut counts = [0; 3];
     let mut peaks = [0; 3];
@@ -306,7 +308,8 @@ fn prepared_calculated_arrays_do_not_allocate_on_the_first_frame() {
     let effect =
         dawn_language::dsl::compile_effects(include_str!("fixtures/array-lifetimes.effect.dawn"))
             .unwrap()
-            .remove(0);
+            .remove(0)
+            .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let show = workload::layered_show(200, effect.bytecode, params, 4);
     let mut workspace = show.workspace();
@@ -334,7 +337,8 @@ fn enum_local_assignment_and_constant_loads_do_not_allocate() {
     }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let mut workspace = dawn_language::dsl::VmWorkspace::default();
     let mut context = dawn_language::dsl::RunContext {
@@ -367,7 +371,8 @@ fn many_signal_times_use_fixed_storage_from_the_first_frame() {
         "effect Ramp { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let expected = workload::show(2, effect.bytecode.clone(), params.clone());
     let mut show = workload::show(2, effect.bytecode, params);
@@ -484,13 +489,14 @@ fn native_curve_automation_releases_previous_sample_before_update() {
         "effect Reference { color sample() { return rgb(0.0, 0.0, 0.0); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let mut show = workload::show(2, effect.bytecode, params);
     workload::apply_native_automation(&mut show, false);
     let reference = dawn_language::dsl::compile_effects(
         "effect Reference { param gradient ramp; param curve shape; color sample() { return ramp[progress()] * shape[progress()]; } }",
-    ).unwrap().remove(0);
+    ).unwrap().remove(0).effect;
     let dawn_runtime::signal::PreparedEffectImplementation::Native {
         params: Some((_, params)),
         ..
@@ -537,7 +543,8 @@ fn native_signal_nodes_do_not_displace_upstream_vm_storage() {
         "effect Ramp { color sample() { return rgb(pixel_fraction(), progress(), 0.25); } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let reference = workload::show(2, effect.bytecode.clone(), params.clone());
     let mut show = workload::show(2, effect.bytecode, params);
@@ -575,7 +582,7 @@ fn native_signal_nodes_do_not_displace_upstream_vm_storage() {
 fn empty_curve_automation_reserves_its_fallback_point() {
     use dawn_runtime::signal::{PreparedAutomation, PreparedEffectAutomation};
     use dawn_runtime::values::{Curve, SampleDuration, SampleTime};
-    let effect = dawn_language::dsl::compile_effects("effect Empty { param curve shape; color sample() { return rgb(shape[progress()], 0.0, 0.0); } }").unwrap().remove(0);
+    let effect = dawn_language::dsl::compile_effects("effect Empty { param curve shape; color sample() { return rgb(shape[progress()], 0.0, 0.0); } }").unwrap().remove(0).effect;
     let params = effect
         .bind_params(&IndexMap::from([(
             dawn_language::dsl::Identifier::new("shape".into()).unwrap(),

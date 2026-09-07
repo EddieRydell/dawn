@@ -25,7 +25,7 @@ pub(crate) fn parse_yaml_value(path: &Utf8Path, text: &str) -> Result<Value, Loa
 }
 
 pub(crate) fn effect_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
-    match compile_effects(text) {
+    match compile_effect_document(text) {
         Ok(_) => Vec::new(),
         Err(diagnostics) => diagnostics
             .into_iter()
@@ -124,11 +124,16 @@ pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
             detail: None,
             related: Vec::new(),
         },
-        LoadProjectError::InvalidEffect { path, diagnostics } => IoDiagnostic {
+        LoadProjectError::InvalidEffect { path, diagnostics }
+        | LoadProjectError::InvalidImports { path, diagnostics } => IoDiagnostic {
             path,
             range: None,
             severity: IoDiagnosticSeverity::Error,
-            code: IoDiagnosticCode::EffectCompile,
+            code: diagnostics
+                .first()
+                .map_or(IoDiagnosticCode::EffectCompile, |diagnostic| {
+                    diagnostic.code.clone()
+                }),
             message: diagnostics
                 .into_iter()
                 .map(|diagnostic| diagnostic.message)
@@ -164,7 +169,11 @@ pub(crate) fn push_load_error_diagnostics(
     error: LoadProjectError,
 ) {
     match error {
-        LoadProjectError::InvalidEffect {
+        LoadProjectError::InvalidImports {
+            diagnostics: effect_diagnostics,
+            ..
+        }
+        | LoadProjectError::InvalidEffect {
             diagnostics: effect_diagnostics,
             ..
         } => {
@@ -346,7 +355,7 @@ pub(crate) fn byte_position(text: &str, byte_offset: usize) -> TextPosition {
     }
 }
 use camino::Utf8Path;
-use dawn_language::dsl::{Diagnostic as DslDiagnostic, compile_effects, compile_operators};
+use dawn_language::dsl::{Diagnostic as DslDiagnostic, compile_effect_document, compile_operators};
 use marked_yaml::{LoadError as MarkedYamlError, Marker, Node};
 use yaml_serde::Value;
 

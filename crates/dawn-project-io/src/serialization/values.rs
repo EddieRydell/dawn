@@ -1,3 +1,4 @@
+pub(super) use crate::imports::write_source_reference;
 pub(super) fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("curve");
     value.insert(
@@ -147,37 +148,6 @@ pub(super) fn element_selection_value(
     Ok(Value::Mapping(value))
 }
 
-pub(super) fn write_source_reference(
-    session: &ProjectSession,
-    from_document: &DocumentId,
-    kind: SourceObjectKind,
-    identity: &SourceIdentity,
-) -> Result<String, ExportProjectError> {
-    if identity.document_id() == from_document {
-        return Ok(identity.object().to_string());
-    }
-    let alias = session
-        .source
-        .documents
-        .get(from_document)
-        .into_iter()
-        .flat_map(|document| &document.imports)
-        .find(|edge| {
-            edge.targets
-                .iter()
-                .any(|target| target == identity.document_id())
-        })
-        .map(|edge| edge.alias.clone())
-        .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.path().to_path_buf(),
-            reference: identity.object().to_string(),
-            message: format!(
-                "no import alias makes the {kind:?} target visible from this document"
-            ),
-        })?;
-    Ok(format!("{alias}.{}", identity.object()))
-}
-
 pub(super) fn typed_object(object_type: &str) -> Mapping {
     let mut value = Mapping::new();
     value.insert(string_value("type"), Value::String(object_type.to_string()));
@@ -204,7 +174,7 @@ pub(super) fn microseconds_string(microseconds: u128) -> String {
 
 use camino::Utf8PathBuf;
 use dawn_language::element::ElementSelection;
-use dawn_language::identity::{DocumentId, SourceIdentity};
+use dawn_language::identity::DocumentId;
 use dawn_language::preview::{PropGeometry, PropInstance};
 use dawn_language::values::{Curve, Gradient, Point3, Rotation3, Scale3};
 use yaml_serde::{Mapping, Value};

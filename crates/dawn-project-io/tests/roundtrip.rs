@@ -110,7 +110,7 @@ fn same_named_definitions_in_different_documents_keep_distinct_identities() {
     fs::write(
         &entrypoint,
         format!(
-            "imports:\n- from:\n    documents:\n    - identity-a/shared.effect.dawn\n  as: identity-a\n- from:\n    documents:\n    - identity-b/shared.effect.dawn\n  as: identity-b\n{}",
+            "imports:\n- from:\n    documents:\n    - identity-a/shared.effect.dawn\n  as: identity_a\n- from:\n    documents:\n    - identity-b/shared.effect.dawn\n  as: identity_b\n{}",
             project_text.strip_prefix("imports:\n").unwrap()
         ),
     )
@@ -135,6 +135,9 @@ fn same_named_definitions_in_different_documents_keep_distinct_identities() {
         .into_iter()
         .collect()
     );
+    save_project(&loaded).unwrap();
+    let reloaded = load_project_package(&root);
+    assert_eq!(loaded.project, reloaded.project);
 }
 
 #[test]

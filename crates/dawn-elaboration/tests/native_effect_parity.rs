@@ -155,7 +155,7 @@ fn chase_and_spin_integer_sections_match_reference_sampling() {
     ] {
         let reference = effects
             .iter()
-            .find(|effect| effect.name().as_str() == name)
+            .find(|effect| effect.effect.name().as_str() == name)
             .unwrap();
         for width in [-1, 0, 1, 3, 7, 65_535] {
             for mode in ["through_effect", "across_items", "per_pulse"] {
@@ -170,7 +170,7 @@ fn chase_and_spin_integer_sections_match_reference_sampling() {
                         (id("extend_to_start"), Value::Bool(reverse)),
                         (id("extend_to_end"), Value::Bool(!reverse)),
                     ]);
-                    let bound = reference.bind_params(&params).unwrap();
+                    let bound = reference.effect.bind_params(&params).unwrap();
                     let BoundNativeEffect::Sample { sample, .. } =
                         native_effect::bind(builtin, &params).unwrap()
                     else {
@@ -197,7 +197,10 @@ fn chase_and_spin_integer_sections_match_reference_sampling() {
                                             SampleTime::from_ticks(context.time.ticks())
                                         )
                                         .unwrap(),
-                                    reference.sample_bound(&bound, &context, &mut vm).unwrap(),
+                                    reference
+                                        .effect
+                                        .sample_bound(&bound, &context, &mut vm)
+                                        .unwrap(),
                                     "{name} width={width} mode={mode} reverse={reverse} count={count} pixel={pixel} progress={progress}"
                                 );
                             }
@@ -217,11 +220,11 @@ fn mark_chase_matches_reference_schedule_and_samples() {
     .unwrap();
     let generator = effects
         .iter()
-        .find(|effect| effect.name().as_str() == "MarkChase")
+        .find(|effect| effect.effect.name().as_str() == "MarkChase")
         .unwrap();
     let child = effects
         .iter()
-        .find(|effect| effect.name().as_str() == "MarkChaseChild")
+        .find(|effect| effect.effect.name().as_str() == "MarkChaseChild")
         .unwrap();
     let context = GeneratorContext {
         start_time: SampleTime::from_ticks(1_000_000),
@@ -263,8 +266,9 @@ fn mark_chase_matches_reference_schedule_and_samples() {
                 (id("offset_seconds"), Value::Float(0.125)),
             ]);
             let reference = generator
+                .effect
                 .generate_bound(
-                    &generator.bind_params(&params).unwrap(),
+                    &generator.effect.bind_params(&params).unwrap(),
                     &context,
                     &mut Default::default(),
                 )
@@ -278,7 +282,7 @@ fn mark_chase_matches_reference_schedule_and_samples() {
                 assert_eq!(native.start_time, reference.start_time);
                 assert_eq!(native.duration, reference.duration);
                 assert_eq!(native.target, reference.target);
-                let bound = child.bind_params_pairs(&reference.params).unwrap();
+                let bound = child.effect.bind_params_pairs(&reference.params).unwrap();
                 let mut vm = Default::default();
                 for pixel in native.target.pixels.iter() {
                     for progress in [0.0, 0.125, 0.5, 0.875, 1.0] {
@@ -295,7 +299,7 @@ fn mark_chase_matches_reference_schedule_and_samples() {
                         let time = native.start_time.checked_add_duration(sample.time).unwrap();
                         assert_eq!(
                             native.sample.sample(&sample, time).unwrap(),
-                            child.sample_bound(&bound, &sample, &mut vm).unwrap(),
+                            child.effect.sample_bound(&bound, &sample, &mut vm).unwrap(),
                             "width={width} mode={mode} pixel={} progress={progress}",
                             pixel.pixel_index
                         );
@@ -344,11 +348,11 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
         .unwrap();
         let generator = effects
             .iter()
-            .find(|effect| effect.name().as_str() == "MarkPulse")
+            .find(|effect| effect.effect.name().as_str() == "MarkPulse")
             .unwrap();
         let child = effects
             .iter()
-            .find(|effect| effect.name().as_str() == "MarkPulseChild")
+            .find(|effect| effect.effect.name().as_str() == "MarkPulseChild")
             .unwrap();
         let context = GeneratorContext {
             start_time: SampleTime::from_ticks(1_000_000),
@@ -356,8 +360,9 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
             target: target(),
         };
         let reference = generator
+            .effect
             .generate_bound(
-                &generator.bind_params(&params).unwrap(),
+                &generator.effect.bind_params(&params).unwrap(),
                 &context,
                 &mut Default::default(),
             )
@@ -375,7 +380,7 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
             assert_eq!(native.start_time, reference.start_time);
             assert_eq!(native.duration, reference.duration);
             assert_eq!(native.target, reference.target);
-            let bound = child.bind_params_pairs(&reference.params).unwrap();
+            let bound = child.effect.bind_params_pairs(&reference.params).unwrap();
             for pixel in native.target.pixels.iter() {
                 for progress in [0.0, 0.25, 0.75, 1.0] {
                     let context = RunContext {
@@ -395,6 +400,7 @@ fn mark_pulse_matches_reference_schedule_and_samples() {
                     assert_eq!(
                         native.sample.sample(&context, sample_time).unwrap(),
                         child
+                            .effect
                             .sample_bound(&bound, &context, &mut Default::default())
                             .unwrap()
                     );

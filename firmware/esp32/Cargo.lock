@@ -335,17 +335,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dawn-language"
-version = "0.1.0"
-dependencies = [
- "camino",
- "dawn-runtime",
- "fugit 0.3.9",
- "indexmap",
- "uuid",
-]
-
-[[package]]
 name = "dawn-esp32"
 version = "0.1.0"
 dependencies = [
@@ -369,6 +358,17 @@ dependencies = [
  "indexmap",
  "picoserve",
  "static_cell",
+]
+
+[[package]]
+name = "dawn-language"
+version = "0.1.0"
+dependencies = [
+ "camino",
+ "dawn-runtime",
+ "fugit 0.3.9",
+ "indexmap",
+ "uuid",
 ]
 
 [[package]]

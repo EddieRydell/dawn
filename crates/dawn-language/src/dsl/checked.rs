@@ -1,4 +1,4 @@
-use super::GeneratedEffectRef;
+use super::EmittedReference;
 use super::ast::{BinaryOp, Block, FunctionDecl, OperatorInputDecl, ParamDecl, UnaryOp};
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
@@ -55,7 +55,7 @@ pub(crate) enum CheckedStmt {
         body: CheckedBlock,
     },
     Emit {
-        effect: GeneratedEffectRef,
+        effect: EmittedReference,
         fields: Vec<(Identifier, CheckedExpr)>,
     },
     Return(CheckedExpr),

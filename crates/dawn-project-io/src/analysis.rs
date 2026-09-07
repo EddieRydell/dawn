@@ -1,3 +1,4 @@
+use crate::imports::parse_imports;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 
@@ -12,8 +13,7 @@ use crate::diagnostics::{
 };
 use crate::loader::parse::{
     bool_field, f32_field, mapping, optional_sequence, parse_color, parse_duration,
-    parse_duration_as_time, parse_imports, required_field, sequence_values, string_field,
-    u32_field,
+    parse_duration_as_time, required_field, sequence_values, string_field, u32_field,
 };
 use crate::{
     IoDiagnostic, IoDiagnosticCode, IoDiagnosticSeverity, LoadProjectError, SourceObjectKind,
@@ -300,48 +300,8 @@ fn analyze_imports(
     root: &yaml_serde::Mapping,
     diagnostics: &mut Vec<IoDiagnostic>,
 ) {
-    let Some(imports) = root.get(Value::String("imports".to_string())) else {
-        return;
-    };
-    let Some(imports) = imports.as_sequence() else {
-        push_schema_error(
-            diagnostics,
-            path,
-            source_range_for_value(path, imports),
-            "imports must be a sequence",
-            IoDiagnosticCode::DawnLoad,
-        );
-        return;
-    };
-    let mut aliases = BTreeMap::new();
-    for import in imports {
-        let mut isolated = yaml_serde::Mapping::new();
-        isolated.insert(
-            Value::String("imports".to_string()),
-            Value::Sequence(vec![import.clone()]),
-        );
-        match parse_imports(path, &isolated) {
-            Ok(parsed) => {
-                if let Some(parsed) = parsed.into_iter().next()
-                    && let Some(previous_range) =
-                        aliases.insert(parsed.alias.clone(), source_range_for_value(path, import))
-                {
-                    let mut diagnostic = schema_diagnostic(
-                        path,
-                        source_range_for_value(path, import),
-                        format!("duplicate import alias `{}`", parsed.alias),
-                        IoDiagnosticCode::DawnLoad,
-                    );
-                    diagnostic.related.push(crate::IoRelatedLocation {
-                        path: path.to_path_buf(),
-                        range: previous_range,
-                        message: "first import with this alias".to_string(),
-                    });
-                    push_diagnostic(diagnostics, diagnostic);
-                }
-            }
-            Err(error) => push_load_error(diagnostics, error, IoDiagnosticCode::DawnLoad),
-        }
+    if let Err(error) = parse_imports(path, root) {
+        push_load_error(diagnostics, error, IoDiagnosticCode::DawnLoad);
     }
 }
 

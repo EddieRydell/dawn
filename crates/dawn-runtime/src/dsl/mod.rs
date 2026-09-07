@@ -13,11 +13,10 @@ pub use vm::{
 };
 pub(crate) use vm::{PreparedCurveCrossings, prepared_curve_crossing};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum GeneratedEffectRef {
-    Local(Identifier),
-    Builtin(crate::BuiltinEffect),
-}
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+)]
+pub struct GeneratedEffectSlot(pub u32);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OperatorInputDecl {
@@ -45,7 +44,7 @@ pub struct CompiledEffect {
     pub bytecode: bytecode::BytecodeProgram,
     // Generator-only authoring tables are not retained in prepared playback bytecode.
     pub emit_fields: Box<[(Identifier, bytecode::ValueSlot)]>,
-    pub generated_effects: Box<[GeneratedEffectRef]>,
+    pub generated_effect_count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

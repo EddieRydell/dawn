@@ -17,6 +17,10 @@ pub mod effect;
 pub mod element;
 pub mod fixture_profile;
 pub mod identity;
+pub mod imports;
+pub use imports::{
+    ImportAlias, ImportDeclaration, ImportSource, SourceReference, is_valid_import_alias,
+};
 pub mod model;
 pub mod operator;
 pub mod patch;

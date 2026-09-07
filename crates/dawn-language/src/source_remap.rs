@@ -122,6 +122,11 @@ pub fn remap_document_paths(project: &mut DawnProject, remaps: &BTreeMap<Documen
         });
     for definition in project.definitions.effects.definitions.values_mut() {
         remap_effect_ref(&mut definition.id, remaps);
+        for target in &mut definition.generated_effect_targets {
+            if let crate::effect::EffectRef::Custom(identity) = target {
+                *identity = EffectDefinitionId(remap_identity(&identity.0, remaps));
+            }
+        }
     }
 
     project.definitions.props.definitions =

@@ -7,4 +7,4 @@ imports:
 - from:
     dependency: foundation
     export: effects
-  as: foundation-effects
+  as: foundation_effects

@@ -1,10 +1,12 @@
+use crate::imports::parse_imports;
+use dawn_language::imports::SourceReference;
 pub(crate) mod parse;
 mod resolve;
 
 pub(crate) use parse::mapping;
 use parse::{
-    AliasObjectKey, ParsedImportSource, ResolvedObject, SourceObjectValue, parse_curve,
-    parse_gradient, parse_imports, parse_prop_definition, sequence_field, string_field,
+    ResolvedObject, SourceObjectValue, parse_curve, parse_gradient, parse_prop_definition,
+    sequence_field, string_field,
 };
 use resolve::DomainResolver;
 
@@ -13,7 +15,9 @@ pub(super) struct Loader {
     pub(crate) entrypoint: Option<dawn_language::identity::DocumentId>,
     pub(crate) documents: IndexMap<dawn_language::identity::DocumentId, SourceDocument>,
     pub(crate) visible_objects:
-        IndexMap<dawn_language::identity::DocumentId, IndexMap<AliasObjectKey, ResolvedObject>>,
+        IndexMap<dawn_language::identity::DocumentId, IndexMap<SourceReference, ResolvedObject>>,
+    pub(crate) import_locations:
+        IndexMap<dawn_language::identity::DocumentId, Vec<crate::imports::ParsedImport>>,
     pub(crate) loading_documents: IndexSet<dawn_language::identity::DocumentId>,
     pub(crate) definitions: ProjectDefinitionStores,
     pub(crate) referenced_assets: Vec<ReferencedAsset>,
@@ -57,6 +61,7 @@ impl Loader {
             entrypoint,
             documents: IndexMap::new(),
             visible_objects: IndexMap::new(),
+            import_locations: IndexMap::new(),
             loading_documents: IndexSet::new(),
             definitions: ProjectDefinitionStores::default(),
             referenced_assets: Vec::new(),
@@ -108,6 +113,8 @@ impl Loader {
         for root in &roots {
             self.load_document(root)?;
         }
+        self.build_document_scopes()?;
+        self.link_generated_effects()?;
 
         let mut typed = if let Some(entrypoint) = self.entrypoint.clone() {
             self.resolve_project(&entrypoint)?
@@ -119,7 +126,7 @@ impl Loader {
                 )
             }))
         };
-        self.validate_exported_objects(&mut typed)?;
+        self.resolve_loaded_objects(&mut typed)?;
         if let Some(entrypoint) = &self.entrypoint {
             dawn_language::validation::validate_project(&typed).map_err(|error| {
                 LoadProjectError::InvalidDocument {
@@ -168,43 +175,29 @@ impl Loader {
         }
     }
 
-    fn validate_exported_objects(
+    fn resolve_loaded_objects(
         &mut self,
         project: &mut DawnProject,
     ) -> Result<(), LoadProjectError> {
-        let mut exported = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        for (module_id, module) in self.source_graph.modules() {
-            for group in module.manifest.exports.values() {
-                for document in &group.documents {
-                    let document_id = dawn_language::identity::DocumentId::new(
-                        *module_id,
-                        Utf8PathBuf::from(document),
-                    );
-                    let visible = self.visible_objects.get(&document_id).ok_or_else(|| {
-                        LoadProjectError::InvalidDocument {
-                            path: document_id.path().to_path_buf(),
-                            range: None,
-                            message: "export document was not compiled".to_string(),
-                        }
-                    })?;
-                    for (key, object) in visible {
-                        if key.alias.is_none()
-                            && seen.insert((document_id.clone(), key.object.clone()))
-                        {
-                            exported.push((document_id.clone(), object.clone()));
-                        }
-                    }
-                }
-            }
-        }
+        // Every indexed object needs typed state, including unused objects in imported
+        // documents. Saving never falls back to an unresolved original YAML value.
+        let objects: Vec<_> = self
+            .visible_objects
+            .iter()
+            .flat_map(|(document, visible)| {
+                visible
+                    .iter()
+                    .filter(|(key, _)| matches!(key, SourceReference::Local(_)))
+                    .map(|(_, object)| (document.clone(), object.clone()))
+            })
+            .collect();
 
         let active_entrypoint = self.entrypoint.clone();
         let mut resolver = DomainResolver {
             loader: self,
             project,
         };
-        for (document, object) in exported {
+        for (document, object) in objects {
             match object {
                 ResolvedObject::Project(id) => {
                     if active_entrypoint.as_ref() != Some(&document)
@@ -220,7 +213,7 @@ impl Loader {
                     }
                 }
                 ResolvedObject::Setup(id) => {
-                    resolver.resolve_setup(&document, &id)?;
+                    resolver.resolve_setup(&id)?;
                 }
                 ResolvedObject::Controller(id) => {
                     resolver.resolve_controller(&id)?;
@@ -348,8 +341,8 @@ impl Loader {
         if let Ok(path) = absolute.strip_prefix(&self.source_graph.project_module().root) {
             self.checked_dsl_documents.insert(path.to_path_buf());
         }
-        let compiled =
-            compile_effects(&source).map_err(|diagnostics| LoadProjectError::InvalidEffect {
+        let compiled = compile_effect_document(&source).map_err(|diagnostics| {
+            LoadProjectError::InvalidEffect {
                 path: relative.to_path_buf(),
                 diagnostics: diagnostics
                     .into_iter()
@@ -362,11 +355,33 @@ impl Loader {
                         )
                     })
                     .collect(),
-            })?;
+            }
+        })?;
         let mut visible = IndexMap::new();
         let mut objects = Vec::new();
-        for effect in compiled {
-            let name = effect.name().as_str().to_string();
+        let imports: Vec<_> = compiled
+            .imports
+            .iter()
+            .map(|import| crate::imports::ParsedImport {
+                declaration: import.declaration.clone(),
+                range: Some(crate::diagnostics::byte_range(
+                    &source,
+                    import.span.start,
+                    import.span.end,
+                )),
+                source_ranges: import
+                    .source_spans
+                    .iter()
+                    .map(|span| {
+                        Some(crate::diagnostics::byte_range(
+                            &source, span.start, span.end,
+                        ))
+                    })
+                    .collect(),
+            })
+            .collect();
+        for effect in compiled.effects {
+            let name = effect.effect.name().as_str().to_string();
             let id = EffectDefinitionId(self.source_identity(document_id, name.clone()));
             self.definitions
                 .effects
@@ -377,16 +392,20 @@ impl Loader {
             };
             objects.push(source_object);
             visible.insert(
-                AliasObjectKey {
-                    alias: None,
-                    object: name.clone(),
-                },
+                SourceReference::Local(Identifier::new(name.clone()).map_err(|_| {
+                    LoadProjectError::InvalidDocument {
+                        path: document_id.path().to_path_buf(),
+                        range: None,
+                        message: format!("invalid object name `{name}`"),
+                    }
+                })?),
                 ResolvedObject::EffectDefinition(id),
             );
         }
         self.visible_objects.insert(document_id.clone(), visible);
+        let import_edges = self.load_imports(document_id, &imports)?;
         let document =
-            SourceDocument::new(Vec::new(), objects, SourceDocumentKind::Effect { source })
+            SourceDocument::new(import_edges, objects, SourceDocumentKind::Effect { source })
                 .map_err(|message| LoadProjectError::InvalidDocument {
                     path: relative.to_path_buf(),
                     range: None,
@@ -435,10 +454,13 @@ impl Loader {
             };
             objects.push(source_object);
             visible.insert(
-                AliasObjectKey {
-                    alias: None,
-                    object: name.clone(),
-                },
+                SourceReference::Local(Identifier::new(name.clone()).map_err(|_| {
+                    LoadProjectError::InvalidDocument {
+                        path: document_id.path().to_path_buf(),
+                        range: None,
+                        message: format!("invalid object name `{name}`"),
+                    }
+                })?),
                 ResolvedObject::OperatorDefinition(id),
             );
         }
@@ -450,6 +472,8 @@ impl Loader {
                     range: None,
                     message,
                 })?;
+        self.import_locations
+            .insert(document_id.clone(), Vec::new());
         self.documents.insert(document_id.clone(), document);
         Ok(())
     }
@@ -558,101 +582,20 @@ impl Loader {
             };
             objects.push(source_object);
             visible.insert(
-                AliasObjectKey {
-                    alias: None,
-                    object: key.to_string(),
-                },
+                SourceReference::Local(Identifier::new(key.to_string()).map_err(|_| {
+                    LoadProjectError::InvalidDocument {
+                        path: document_id.path().to_path_buf(),
+                        range: None,
+                        message: format!("invalid object name `{key}`"),
+                    }
+                })?),
                 object,
             );
         }
 
         self.visible_objects.insert(document_id.clone(), visible);
 
-        let mut import_edges = Vec::new();
-        let mut imported_visible = Vec::new();
-        let mut import_aliases = IndexSet::new();
-        let mut imported_targets = IndexSet::new();
-        for import in &imports {
-            if import.alias == "builtins" {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: relative.to_path_buf(),
-                    range: None,
-                    message: "import alias `builtins` is reserved".to_string(),
-                });
-            }
-            if !import_aliases.insert(import.alias.clone()) {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: relative.to_path_buf(),
-                    range: None,
-                    message: format!("duplicate import alias `{}`", import.alias),
-                });
-            }
-            let targets = self.resolve_import(document_id, &import.source)?;
-            let mut names = IndexSet::new();
-            for target in &targets {
-                if !imported_targets.insert(target.clone()) {
-                    return Err(LoadProjectError::InvalidDocument {
-                        path: relative.to_path_buf(),
-                        range: None,
-                        message: format!(
-                            "document `{}:{}` is imported more than once; each target must have one alias",
-                            target.module_id(),
-                            target.path()
-                        ),
-                    });
-                }
-                self.load_document(target)?;
-                let target_visible = self.visible_objects.get(target).ok_or_else(|| {
-                    LoadProjectError::InvalidDocument {
-                        path: target.path().to_path_buf(),
-                        range: None,
-                        message: "loaded document had no visible object index".to_string(),
-                    }
-                })?;
-                for (key, object) in target_visible {
-                    if key.alias.is_some() {
-                        continue;
-                    }
-                    if !names.insert(key.object.clone()) {
-                        return Err(LoadProjectError::InvalidDocument {
-                            path: relative.to_path_buf(),
-                            range: None,
-                            message: format!(
-                                "duplicate exported object `{}` in import alias `{}`",
-                                key.object, import.alias
-                            ),
-                        });
-                    }
-                    imported_visible.push((
-                        AliasObjectKey {
-                            alias: Some(import.alias.clone()),
-                            object: key.object.clone(),
-                        },
-                        object.clone(),
-                    ));
-                }
-            }
-            import_edges.push(ImportEdge {
-                alias: import.alias.clone(),
-                source: match &import.source {
-                    ParsedImportSource::LocalDocuments { documents } => {
-                        ImportSource::LocalDocuments {
-                            documents: documents.clone(),
-                        }
-                    }
-                    ParsedImportSource::DependencyExport { dependency, export } => {
-                        ImportSource::DependencyExport {
-                            dependency: dependency.clone(),
-                            export: export.clone(),
-                        }
-                    }
-                },
-                targets,
-            });
-        }
-        if let Some(visible) = self.visible_objects.get_mut(document_id) {
-            visible.extend(imported_visible);
-        }
+        let import_edges = self.load_imports(document_id, &imports)?;
 
         let document = SourceDocument::new(
             import_edges,
@@ -668,73 +611,6 @@ impl Loader {
         })?;
         self.documents.insert(document_id.clone(), document);
         Ok(())
-    }
-
-    pub(super) fn resolve_import(
-        &self,
-        importer: &dawn_language::identity::DocumentId,
-        import_source: &ParsedImportSource,
-    ) -> Result<Vec<dawn_language::identity::DocumentId>, LoadProjectError> {
-        match import_source {
-            ParsedImportSource::LocalDocuments { documents } => documents
-                .iter()
-                .map(|path| {
-                    let target = dawn_language::identity::DocumentId::new(
-                        importer.module_id(),
-                        path.clone(),
-                    );
-                    let absolute = self.absolute_document_path(&target)?;
-                    if !absolute.is_file() && !self.source_overrides.contains_key(&target) {
-                        return Err(LoadProjectError::InvalidDocument {
-                            path: importer.path().to_path_buf(),
-                            range: None,
-                            message: format!("local import target does not exist: {path}"),
-                        });
-                    }
-                    Ok(target)
-                })
-                .collect(),
-            ParsedImportSource::DependencyExport { dependency, export } => {
-                let target_module = self
-                    .source_graph
-                    .dependency(importer.module_id(), dependency)
-                    .map_err(|error| LoadProjectError::InvalidDocument {
-                        path: importer.path().to_path_buf(),
-                        range: None,
-                        message: error.to_string(),
-                    })?;
-                let group = target_module.manifest.exports.get(export).ok_or_else(|| {
-                    LoadProjectError::InvalidDocument {
-                        path: importer.path().to_path_buf(),
-                        range: None,
-                        message: format!(
-                            "dependency `{dependency}` does not export group `{export}`"
-                        ),
-                    }
-                })?;
-                group
-                    .documents
-                    .iter()
-                    .map(|path| {
-                        let target = dawn_language::identity::DocumentId::new(
-                            target_module.manifest.module_id,
-                            Utf8PathBuf::from(path),
-                        );
-                        let absolute = self.absolute_document_path(&target)?;
-                        if !absolute.is_file() && !self.source_overrides.contains_key(&target) {
-                            return Err(LoadProjectError::InvalidDocument {
-                                path: importer.path().to_path_buf(),
-                                range: None,
-                                message: format!(
-                                    "dependency `{dependency}` export `{export}` is missing `{path}`"
-                                ),
-                            });
-                        }
-                        Ok(target)
-                    })
-                    .collect()
-            }
-        }
     }
 
     pub(super) fn resolve_project(
@@ -785,7 +661,7 @@ impl Loader {
                 loader: self,
                 project: &mut project,
             };
-            resolver.resolve_setup(entrypoint, &setup)?;
+            resolver.resolve_setup(&setup)?;
             for sequence in sequences {
                 resolver.resolve_sequence(&sequence)?;
             }
@@ -903,32 +779,6 @@ impl Loader {
         }
     }
 
-    pub(super) fn resolve_reference(
-        &self,
-        document_id: &dawn_language::identity::DocumentId,
-        reference: &str,
-    ) -> Result<ResolvedObject, LoadProjectError> {
-        let path = document_id.path();
-        let range = source_range_for_scalar(path, reference);
-        let (alias, object) = reference
-            .split_once('.')
-            .map_or((None, reference), |(alias, object)| (Some(alias), object));
-        self.visible_objects
-            .get(document_id)
-            .and_then(|visible| {
-                visible.get(&AliasObjectKey {
-                    alias: alias.map(ToString::to_string),
-                    object: object.to_string(),
-                })
-            })
-            .cloned()
-            .ok_or_else(|| LoadProjectError::InvalidReference {
-                path: path.to_path_buf(),
-                range,
-                reference: reference.to_string(),
-            })
-    }
-
     pub(super) fn reference_as_setup(
         &self,
         document_id: &dawn_language::identity::DocumentId,
@@ -977,7 +827,7 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::controller::ControllerId;
-use dawn_language::dsl::{Identifier, compile_effects, compile_operators};
+use dawn_language::dsl::{Identifier, compile_effect_document, compile_operators};
 use dawn_language::effect::{
     CurveDefinition, CurveId, EffectDefinition, EffectDefinitionId, GradientDefinition, GradientId,
 };
@@ -997,7 +847,7 @@ use crate::diagnostics::{
     source_range_for_value,
 };
 use crate::source::{
-    ImportEdge, ImportSource, ProjectSession, ReferencedAsset, SourceDocument, SourceDocumentKind,
-    SourceObjectId, SourceObjectKind, SourceProject,
+    ProjectSession, ReferencedAsset, SourceDocument, SourceDocumentKind, SourceObjectId,
+    SourceObjectKind, SourceProject,
 };
 use crate::{IoDiagnosticCode, LoadProjectError};

@@ -1,10 +1,11 @@
-use super::GeneratedEffectRef;
+use super::EmittedReference;
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
 pub use dawn_runtime::dsl::{OperatorInputDecl, ParamDecl};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Module {
+    pub imports: Vec<super::EffectImport>,
     pub effects: Vec<EffectDecl>,
     pub operators: Vec<OperatorDecl>,
 }
@@ -67,7 +68,7 @@ pub(crate) enum Stmt {
         body: Block,
     },
     Emit {
-        effect: GeneratedEffectRef,
+        effect: EmittedReference,
         fields: Vec<(Identifier, Expr)>,
     },
     Return(Expr),

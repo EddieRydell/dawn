@@ -25,14 +25,16 @@ fn fixed_array_syntax_compiles_to_the_same_program_as_scalar_syntax() {
     } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     let scalar = compile_effects(
         "effect Scalar { color sample() {
         return rgb(pixel_fraction(), progress(), 0.25);
     } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     assert_eq!(array.bytecode, scalar.bytecode);
     assert_eq!(array.bytecode.layout.refs, 0);
     assert_eq!(array.bytecode.layout.ints, 0);
@@ -48,7 +50,8 @@ fn removing_unused_arrays_does_not_remove_errors_in_their_items() {
     } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     assert_eq!(effect.bytecode.array_capacity, 0);
     let params = effect.bind_params(&IndexMap::new()).unwrap();
     let result = effect.sample_bound(&params, &context(0.25), &mut VmWorkspace::default());
@@ -71,7 +74,8 @@ fn fixed_indices_and_aliases_need_no_calculated_array_storage() {
     } }",
     )
     .unwrap()
-    .remove(0);
+    .remove(0)
+    .effect;
     assert_eq!(effect.bytecode.array_capacity, 0);
     assert!(!effect.bytecode.instructions.iter().any(|op| matches!(
         op,
@@ -146,7 +150,8 @@ fn mutable_values_branches_and_backedges_preserve_array_snapshots() {
             "effect Snapshot {{ color sample() {{ {body} }} }}"
         ))
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .effect;
         let params = effect.bind_params(&IndexMap::new()).unwrap();
         let mut vm = VmWorkspace::default();
         for (progress, red) in [
@@ -179,7 +184,8 @@ fn dynamic_indices_need_no_array_storage_and_preserve_index_errors() {
         }} }}"
         ))
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .effect;
         assert_eq!(effect.bytecode.array_capacity, 0);
         assert!(
             effect
@@ -211,7 +217,7 @@ fn dynamic_selection_preserves_aliases_and_typed_values() {
          return rgb(values[pixel_index()][0], 0.0, 0.0);",
     ] {
         let effect = compile_effects(&format!("effect Select {{ color sample() {{ {body} }} }}"))
-            .unwrap().remove(0);
+            .unwrap().remove(0).effect;
         let params = effect.bind_params(&IndexMap::new()).unwrap();
         let mut vm = VmWorkspace::default();
         for progress in [0.0, 0.5, 1.0, 0.0] {

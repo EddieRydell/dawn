@@ -101,6 +101,38 @@ fn moves_directories_with_documents_and_declared_assets() {
 }
 
 #[test]
+fn grouped_dsl_path_moves_replace_each_token_and_preserve_all_other_text() {
+    let (_temporary, root) = starter_copy();
+    let path = root.join("effects/mark-impact-burst.effect.dawn");
+    let original = fs::read_to_string(&path).unwrap();
+    fs::write(
+        root.join("effects/extra.effect.dawn"),
+        "effect Extra { color sample() { return hsv(0.0, 1.0, 1.0); } }",
+    )
+    .unwrap();
+    let grouped = original.replace(
+        "[\"effects/impact-burst.effect.dawn\"]",
+        "[ /* first */ \"effects/impact-burst.effect.dawn\",\n  \"effects/extra.effect.dawn\" /* second */ ]",
+    );
+    assert_ne!(original, grouped);
+    fs::write(&path, &grouped).unwrap();
+    let session = load_package(&root).unwrap().session;
+    dawn_project_io::save_project(&session).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), grouped);
+    let moved = move_path(&session, "effects", "renamed-effects");
+    let expected = grouped.replace("\"effects/", "\"renamed-effects/");
+    assert_eq!(
+        fs::read_to_string(root.join("renamed-effects/mark-impact-burst.effect.dawn")).unwrap(),
+        expected
+    );
+    let reloaded = load_package(&root).unwrap().session;
+    assert_eq!(moved.project, reloaded.project);
+    for (id, document) in &moved.source.documents {
+        assert_eq!(document.imports(), reloaded.source.documents[id].imports());
+    }
+}
+
+#[test]
 fn rejects_collisions_root_escapes_and_descendant_moves() {
     let (_temporary, root) = starter_copy();
     let session = load_package(&root).expect("load").session;
@@ -276,4 +308,151 @@ fn package_manifest(
         dependencies,
         assets: BTreeMap::new(),
     }
+}
+
+#[test]
+fn generator_dependency_exports_keep_module_identity_and_follow_path_changes() {
+    let (_temporary, root) = starter_copy();
+    let local_root = root.join("modules/local");
+    fs::create_dir_all(&local_root).unwrap();
+    let child = fs::read_to_string(root.join("effects/impact-burst.effect.dawn")).unwrap();
+    fs::write(local_root.join("child.effect.dawn"), &child).unwrap();
+    let module_id = Uuid::new_v4();
+    let mut dependency_manifest = package_manifest(module_id, "child.effect.dawn", BTreeMap::new());
+    let effects = dependency_manifest.exports.remove("effects").unwrap();
+    dependency_manifest
+        .exports
+        .insert("child-effects".into(), effects);
+    dependency_manifest.write(&local_root).unwrap();
+    let mut manifest = dawn_package::PackageManifest::read(&root).unwrap();
+    manifest.dependencies.insert(
+        "local-effects".into(),
+        dawn_package::Dependency::Path {
+            path: "modules/local".into(),
+        },
+    );
+    manifest.write(&root).unwrap();
+    let registry = dawn_package::Lockfile::read(&root).unwrap().registry;
+    dawn_package::Lockfile::from_directory(&manifest, &root, registry)
+        .unwrap()
+        .write(&root)
+        .unwrap();
+    let generator_path = root.join("effects/mark-impact-burst.effect.dawn");
+    let source = fs::read_to_string(&generator_path).unwrap().replace(
+        "[\"effects/impact-burst.effect.dawn\"]",
+        "local-effects.child-effects",
+    );
+    fs::write(&generator_path, &source).unwrap();
+    let session = load_package(&root).unwrap().session;
+    let generator = session
+        .project
+        .definitions
+        .effects
+        .definitions
+        .iter()
+        .find(|(id, _)| id.0.object() == "MarkImpactBurst")
+        .unwrap()
+        .1;
+    let dawn_language::effect::EffectRef::Custom(target) =
+        generator.generated_effect_targets.first().unwrap()
+    else {
+        panic!("expected custom generated target")
+    };
+    assert_eq!(target.0.document_id().module_id(), module_id);
+    assert_eq!(target.0.document(), Utf8Path::new("child.effect.dawn"));
+    let mut equivalent = dawn_project_io::project_source_texts(&root).unwrap();
+    let project = equivalent
+        .get_mut(&Utf8PathBuf::from("project.dawn"))
+        .unwrap();
+    *project = project.replacen(
+        "imports:\n",
+        "imports:\n- from: { dependency: local-effects, export: child-effects }\n  as: bursts\n",
+        1,
+    );
+    let report = dawn_project_io::check_package_with_overrides(&root, &equivalent);
+    assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
+    let equivalent = report.session.unwrap();
+    let root_module = equivalent.source.project_module_id();
+    let yaml = &equivalent.source.documents
+        [&dawn_language::identity::DocumentId::new(root_module, "project.dawn".into())]
+        .imports()[0];
+    let dsl = &equivalent.source.documents[&dawn_language::identity::DocumentId::new(
+        root_module,
+        "effects/mark-impact-burst.effect.dawn".into(),
+    )]
+        .imports()[0];
+    assert_eq!(yaml, dsl);
+    for (old, replacement) in [
+        ("child-effects", "unknown-export"),
+        ("local-effects", "Invalid_Name"),
+    ] {
+        let mut overrides = dawn_project_io::project_source_texts(&root).unwrap();
+        let invalid = source.replacen(old, replacement, 1);
+        overrides.insert(
+            "effects/mark-impact-burst.effect.dawn".into(),
+            invalid.clone(),
+        );
+        let report = dawn_project_io::check_package_with_overrides(&root, &overrides);
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.path == "effects/mark-impact-burst.effect.dawn")
+            .unwrap();
+        let range = diagnostic.range.as_ref().unwrap();
+        assert_eq!(range.start.line, 0);
+        assert_eq!(
+            range.start.character as usize,
+            invalid.find(replacement).unwrap()
+        );
+        assert_eq!(
+            range.end.character - range.start.character,
+            replacement.len() as u32
+        );
+    }
+    let mut no_declared_export = session.clone();
+    let from = dawn_language::identity::DocumentId::new(
+        session.source.project_module_id(),
+        "project.dawn".into(),
+    );
+    assert!(
+        dawn_project_io::ensure_document_can_reference_source(
+            &mut no_declared_export,
+            &from,
+            dawn_project_io::SourceObjectKind::EffectDefinition,
+            &target.0
+        )
+        .is_err()
+    );
+    dawn_project_io::save_project(&session).unwrap();
+    assert_eq!(
+        child,
+        fs::read_to_string(local_root.join("child.effect.dawn")).unwrap()
+    );
+    assert_eq!(source, fs::read_to_string(&generator_path).unwrap());
+    assert_eq!(
+        session.project,
+        load_package(&root).unwrap().session.project
+    );
+    let moved = move_path(
+        &session,
+        "modules/local/child.effect.dawn",
+        "modules/local/renamed.effect.dawn",
+    );
+    assert_eq!(source, fs::read_to_string(generator_path).unwrap());
+    assert_eq!(moved.project, load_package(&root).unwrap().session.project);
+    let generator = moved
+        .project
+        .definitions
+        .effects
+        .definitions
+        .iter()
+        .find(|(id, _)| id.0.object() == "MarkImpactBurst")
+        .unwrap()
+        .1;
+    let dawn_language::effect::EffectRef::Custom(target) =
+        generator.generated_effect_targets.first().unwrap()
+    else {
+        panic!("expected custom generated target")
+    };
+    assert_eq!(target.0.document(), Utf8Path::new("renamed.effect.dawn"));
 }

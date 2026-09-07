@@ -5,10 +5,14 @@
 This is a Rust workspace. Domain types and DSL compilation live in `crates/dawn-language`; project parsing, import/source ownership, diagnostics, and serialization live in `crates/dawn-project-io`; host-side generator expansion and preparation live in `crates/dawn-elaboration`; portable prepared-sequence evaluation lives in `crates/dawn-runtime`. The desktop service and UI state live under `apps/desktop/src`; ESP32 firmware lives in `firmware/esp32`. Example Dawn projects and fixtures are in `examples/`.
 
 The typed `DawnProject` is authoritative after loading. `SourceProject` records document ownership, imports, original source needed for non-YAML DSL documents, and referenced assets. Saving derives YAML directly from typed state; do not add a synchronization or typed-to-YAML mutation phase.
-Project/source metadata and project-owned/relative-path policy live in `crates/dawn-project-io/src/source.rs`. Loading, import resolution, parsing, diagnostics, and serialization live in their descriptive modules under `crates/dawn-project-io/src`; `lib.rs` is the public facade.
+The preservation contract is semantic, not lossless YAML editing: preserve typed meaning, meaningful list order, imports, document/object identity, ownership, and asset references. Comments, whitespace, quoting, mapping key order, and original YAML spelling are not requirements. Do not add CST round-tripping or per-scalar provenance without a concrete new requirement. See `docs/sequence_as_code.md` for the contract and current limitations.
+Project/source metadata and ownership live in `crates/dawn-project-io/src/source.rs`. Canonical import declarations, aliases, and symbolic references belong to `dawn-language::imports`; package names and safe document paths are validated by `dawn-package`. Project import expansion, scopes, linking, reverse reference formatting, and edit-time visibility belong to `crates/dawn-project-io/src/imports.rs`; `lib.rs` is the public facade.
 
 Desktop state orchestration is split by workflow under `apps/desktop/src/desktop_state`, and typed GUI behavior is split into projection, editing, selection, and model conversion under `apps/desktop/src/gui`. Keep new behavior with the owning workflow instead of growing the module roots.
 Mutual Dawn document imports are valid. The loader indexes a document's local objects before following imports; do not reject an in-progress document as a cycle error.
+Generator cross-file references use explicit imports in the effect document itself, resolved through the shared package import graph before elaboration. They never inherit the calling YAML document's scope. Keep import identity and path remapping out of per-frame evaluation.
+Generated events carry only a numeric child slot. Elaboration indexes the definition's ordered linked target table for local, imported, and built-in children; it must not reconstruct identities or look up names.
+DSL local imports use `from ["..."]` with a non-empty module-root-relative document list; YAML uses `from: { documents: [...] }`. Both use the shared identifier alias policy, while dependency and export-group names retain package naming rules.
 
 ## Testing Guidelines
 
@@ -24,6 +28,47 @@ Effect DSL VM and real-project render benchmarks use Criterion only. Use `pnpm b
 Do not reintroduce custom benchmark CLIs, JSON reporters, legacy aliases, or old render bench flags such as `--project`, `--frames`, `--iterations`, `--warmup`, or `--render-only`. Criterion output lives under `target/criterion` and must not be committed. Timing changes are advisory; checksum and active-effect-count assertion changes are behavior changes unless intentional.
 
 ## Agent-Specific Instructions
+
+### Development version policy
+
+Dawn is pre-release software with no users or compatibility obligations. Treat
+the Dawn product version and the current project/package/serialization formats
+as one moving development line, currently `0.1` / `0.1.0` where a full
+semantic version is required. Do not add migrations, compatibility layers,
+legacy aliases, version ranges, or support for intermediate versions that were
+created during local development. When an authored format or internal wire
+format changes, update the current implementation, fixtures, and documentation
+in place; old local data may be discarded or regenerated.
+
+Keep safeguards that detect malformed data, corruption, impossible values, or
+an actually incompatible current format. A numeric protocol/schema version may
+remain when it is needed to reject a mismatched payload, but it is a current
+format marker rather than a promise to support historical versions. Dependency
+versions in Cargo and pnpm manifests are third-party constraints and are not
+part of this policy. Revisit this policy only when Dawn is preparing for real
+external users or a deliberate compatibility commitment.
+
+### Dependency maintenance policy
+
+Dependency freshness is checked locally; do not depend on Dependabot or other
+external update PRs. Before adding a dependency, check its current upstream
+release and use the latest compatible release for the target platform and
+feature set. Do not knowingly add an older release unless an explicit upstream
+compatibility constraint, local patch, or measured regression requires it;
+record that reason beside the dependency.
+
+When reviewing or preparing dependency updates, inspect both Cargo workspaces
+and the pnpm workspace. The ESP32 workspace under `firmware/esp32` has its own
+manifest and lockfile and must be checked separately from the desktop
+workspace. Use read-only checks such as `pnpm outdated`, `pnpm audit`,
+`cargo outdated --workspace`, `cargo deny check advisories`, and
+`cargo tree -i <crate>`; run the corresponding Cargo commands with
+`--manifest-path firmware/esp32/Cargo.toml` for firmware dependencies. Check
+direct and transitive dependencies, including SDK and HAL packages. Do not
+update anything automatically, and do not update a lockfile or manifest as
+part of an inspection. Separate available upgrades from security advisories,
+unmaintained transitive packages, upstream Git patches, and intentionally
+pinned hardware SDK revisions. Summarize those findings before making changes.
 
 Do not write tests unless specifically requested.
 Never reinvent a pattern or solve a problem that has already been solved. Use dependencies (after asking the user) to solve problems rather than reinventing the wheel.

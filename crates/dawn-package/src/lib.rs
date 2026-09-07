@@ -10,6 +10,7 @@
     )
 )]
 
+mod validation;
 use camino::{Utf8Path, Utf8PathBuf};
 use semver::{Op, Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,8 @@ use std::fs;
 use std::io::{self, Cursor, Read, Write};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
+use validation::{require_dawn_document, valid_alias, validate_relative_path};
+pub use validation::{validate_module_relative_dawn_path, validate_package_reference_name};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -420,12 +423,12 @@ impl PackageManifest {
             let mut documents = BTreeSet::new();
             for (index, document) in export.documents.iter().enumerate() {
                 let field_path = format!("{group_path}.documents[{index}]");
-                collect_path_issue(&mut issues, &field_path, document, |value| {
-                    validate_relative_path(value, "export document")
-                });
-                collect_path_issue(&mut issues, &field_path, document, |value| {
-                    require_dawn_document(value, "export document")
-                });
+                collect_path_issue(
+                    &mut issues,
+                    &field_path,
+                    document,
+                    validate_module_relative_dawn_path,
+                );
                 if !documents.insert(document) {
                     push_package_validation_issue(
                         &mut issues,
@@ -617,18 +620,6 @@ fn valid_language_version(value: &str) -> bool {
         && (minor == "0" || !minor.starts_with('0'))
 }
 
-fn valid_alias(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 32
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && value
-            .as_bytes()
-            .first()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-}
-
 fn valid_object_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     bytes
@@ -647,62 +638,6 @@ fn valid_tag(value: &str) -> bool {
             .as_bytes()
             .first()
             .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-}
-
-fn validate_relative_path(value: &str, label: &str) -> Result<(), PackageError> {
-    let path = Utf8Path::new(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || value.starts_with('/')
-        || value.ends_with('/')
-        || value.contains('\\')
-        || value.contains(':')
-        || value.bytes().any(|byte| byte.is_ascii_control())
-        || value.split('/').any(|component| {
-            component.is_empty()
-                || component == "."
-                || component.ends_with('.')
-                || component.ends_with(' ')
-                || is_windows_reserved_component(component)
-        })
-        || path.components().any(|component| {
-            matches!(
-                component,
-                camino::Utf8Component::ParentDir
-                    | camino::Utf8Component::RootDir
-                    | camino::Utf8Component::Prefix(_)
-            )
-        })
-    {
-        return Err(PackageError::Invalid(format!(
-            "{label} must be a safe module-relative path"
-        )));
-    }
-    Ok(())
-}
-
-fn is_windows_reserved_component(component: &str) -> bool {
-    let basename = component
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    matches!(basename.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || basename.strip_prefix("COM").is_some_and(|suffix| {
-            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-        })
-        || basename.strip_prefix("LPT").is_some_and(|suffix| {
-            matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
-        })
-}
-
-fn require_dawn_document(path: &str, label: &str) -> Result<(), PackageError> {
-    if !path.ends_with(".dawn") {
-        return Err(PackageError::Invalid(format!(
-            "{label} `{path}` must be a Dawn document"
-        )));
-    }
-    Ok(())
 }
 
 fn require_file(root: &Utf8Path, path: &str, label: &str) -> Result<(), PackageError> {

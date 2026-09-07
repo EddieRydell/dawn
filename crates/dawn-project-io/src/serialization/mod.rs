@@ -13,6 +13,7 @@ pub(super) fn write_source_documents(
     session: &ProjectSession,
     output_root: &Utf8Path,
 ) -> Result<Vec<Utf8PathBuf>, ExportProjectError> {
+    validate_source_inventory(session)?;
     let mut writes = std::collections::BTreeMap::new();
     for (id, document) in &session.source.documents {
         if !session.source.is_project_owned(id) {
@@ -127,10 +128,8 @@ pub(super) fn document_text(
     document_id: &DocumentId,
     document: &SourceDocument,
 ) -> Result<String, ExportProjectError> {
-    let relative_path = document_id.path();
     match &document.kind {
-        SourceDocumentKind::Dawn { original_value } => {
-            let existing = mapping(original_value);
+        SourceDocumentKind::Dawn { .. } => {
             let mut root = Mapping::new();
             if !document.imports.is_empty() {
                 root.insert(
@@ -139,24 +138,12 @@ pub(super) fn document_text(
                 );
             }
             for object in &document.objects {
-                let value = if has_typed_object(session, document_id, object) {
-                    serialize_source_object(session, document_id, object)?
-                } else {
-                    existing
-                        .and_then(|mapping| mapping.get(string_value(&object.id)))
-                        .cloned()
-                        .ok_or_else(|| ExportProjectError::InvalidReference {
-                            path: relative_path.to_path_buf(),
-                            reference: object.id.clone(),
-                            message: "source object is missing from the source document"
-                                .to_string(),
-                        })?
-                };
+                let value = serialize_source_object(session, document_id, object)?;
                 root.insert(string_value(&object.id), value);
             }
             yaml_serde::to_string(&Value::Mapping(root)).map_err(|source| {
                 ExportProjectError::Serialize {
-                    path: relative_path.to_path_buf(),
+                    path: document_id.path().to_path_buf(),
                     source,
                 }
             })
@@ -166,110 +153,121 @@ pub(super) fn document_text(
     }
 }
 
-pub(super) fn has_typed_object(
+pub(super) fn validate_source_inventory(
     session: &ProjectSession,
-    document: &DocumentId,
-    id: &SourceObjectId,
-) -> bool {
-    match id.kind {
-        SourceObjectKind::Project => qualified_identity(session, document, id)
-            .is_some_and(|identity| session.project.root.id == ProjectId(identity)),
-        SourceObjectKind::Setup => qualified_identity(session, document, id)
-            .is_some_and(|identity| session.project.setups.contains_key(&SetupId(identity))),
-        SourceObjectKind::Controller => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .controllers
-                    .contains_key(&ControllerId(identity))
-            })
+) -> Result<(), ExportProjectError> {
+    let project = &session.project;
+    let identities = std::iter::once((SourceObjectKind::Project, &project.root.id.0))
+        .chain(
+            project
+                .setups
+                .keys()
+                .map(|id| (SourceObjectKind::Setup, &id.0)),
+        )
+        .chain(
+            project
+                .controllers
+                .keys()
+                .map(|id| (SourceObjectKind::Controller, &id.0)),
+        )
+        .chain(
+            project
+                .element_trees
+                .keys()
+                .map(|id| (SourceObjectKind::ElementTree, &id.0)),
+        )
+        .chain(
+            project
+                .preview_layouts
+                .keys()
+                .map(|id| (SourceObjectKind::PreviewLayout, &id.0)),
+        )
+        .chain(
+            project
+                .patches
+                .keys()
+                .map(|id| (SourceObjectKind::Patch, &id.0)),
+        )
+        .chain(
+            project
+                .sequences
+                .keys()
+                .map(|id| (SourceObjectKind::Sequence, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .props
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::PropDefinition, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .fixture_profiles
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::FixtureProfile, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .curves
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::Curve, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .gradients
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::Gradient, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .effects
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::EffectDefinition, &id.0)),
+        )
+        .chain(
+            project
+                .definitions
+                .operators
+                .definitions
+                .keys()
+                .map(|id| (SourceObjectKind::OperatorDefinition, &id.0)),
+        );
+    let mut typed: indexmap::IndexSet<_> = identities
+        .map(|(kind, identity)| {
+            (
+                identity.document_id().clone(),
+                SourceObjectId {
+                    kind,
+                    id: identity.object().to_string(),
+                },
+            )
+        })
+        .collect();
+    for (document_id, document) in &session.source.documents {
+        for object in &document.objects {
+            if !typed.swap_remove(&(document_id.clone(), object.clone())) {
+                return Err(missing_typed_object(document_id, object));
+            }
         }
-        SourceObjectKind::ElementTree => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .element_trees
-                    .contains_key(&ElementTreeId(identity))
-            })
-        }
-        SourceObjectKind::PreviewLayout => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .preview_layouts
-                    .contains_key(&PreviewLayoutId(identity))
-            })
-        }
-        SourceObjectKind::Patch => qualified_identity(session, document, id)
-            .is_some_and(|identity| session.project.patches.contains_key(&PatchId(identity))),
-        SourceObjectKind::PropDefinition => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .props
-                    .definitions
-                    .contains_key(&PropDefinitionId(identity))
-            })
-        }
-        SourceObjectKind::FixtureProfile => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .fixture_profiles
-                    .definitions
-                    .contains_key(&FixtureProfileId(identity))
-            })
-        }
-        SourceObjectKind::Curve => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .curves
-                    .definitions
-                    .contains_key(&CurveId(identity))
-            })
-        }
-        SourceObjectKind::Gradient => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .gradients
-                    .definitions
-                    .contains_key(&GradientId(identity))
-            })
-        }
-        SourceObjectKind::Sequence => {
-            qualified_identity(session, document, id).is_some_and(|identity| {
-                session
-                    .project
-                    .sequences
-                    .contains_key(&SequenceId(identity))
-            })
-        }
-        SourceObjectKind::EffectDefinition => qualified_identity(session, document, id)
-            .is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .effects
-                    .definitions
-                    .contains_key(&EffectDefinitionId(identity))
-            }),
-        SourceObjectKind::OperatorDefinition => qualified_identity(session, document, id)
-            .is_some_and(|identity| {
-                session
-                    .project
-                    .definitions
-                    .operators
-                    .definitions
-                    .contains_key(&OperatorDefinitionId(identity))
-            }),
-        SourceObjectKind::EffectInstance => false,
     }
+    if let Some((document, object)) = typed.first() {
+        return Err(ExportProjectError::InvalidReference {
+            path: document.path().to_path_buf(),
+            reference: object.id.clone(),
+            message: "typed project object is missing from the source inventory".to_string(),
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn qualified_identity(
@@ -428,7 +426,7 @@ pub(super) fn import_decls_value(imports: &[ImportEdge]) -> Value {
             .map(|import| {
                 let mut value = Mapping::new();
                 let mut from = Mapping::new();
-                match &import.source {
+                match &import.declaration.source {
                     ImportSource::LocalDocuments { documents } => {
                         from.insert(
                             string_value("documents"),
@@ -449,7 +447,10 @@ pub(super) fn import_decls_value(imports: &[ImportEdge]) -> Value {
                     }
                 };
                 value.insert(string_value("from"), Value::Mapping(from));
-                value.insert(string_value("as"), Value::String(import.alias.clone()));
+                value.insert(
+                    string_value("as"),
+                    Value::String(import.declaration.alias.to_string()),
+                );
                 Value::Mapping(value)
             })
             .collect(),
@@ -496,12 +497,10 @@ use std::{fs, io};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::controller::ControllerId;
-use dawn_language::effect::{CurveId, EffectDefinitionId, GradientId};
+use dawn_language::effect::{CurveId, GradientId};
 use dawn_language::element::ElementTreeId;
 use dawn_language::fixture_profile::FixtureProfileId;
 use dawn_language::identity::{DocumentId, SourceIdentity};
-use dawn_language::model::ProjectId;
-use dawn_language::operator::OperatorDefinitionId;
 use dawn_language::patch::PatchId;
 use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::SequenceId;
@@ -509,7 +508,6 @@ use dawn_language::setup::SetupId;
 use yaml_serde::{Mapping, Value};
 
 use crate::ExportProjectError;
-use crate::loader::mapping;
 use crate::source::{
     ImportEdge, ImportSource, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId,
     SourceObjectKind,

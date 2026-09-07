@@ -33,6 +33,8 @@ thread_local! {
 }
 
 mod analysis;
+mod imports;
+pub use imports::ensure_document_can_reference_source;
 mod package_update;
 mod path_refactor;
 mod source;
@@ -1218,96 +1220,11 @@ pub fn source_document_text(
     session: &ProjectSession,
     document_id: &dawn_language::identity::DocumentId,
 ) -> Result<Option<String>, ExportProjectError> {
+    serialization::validate_source_inventory(session)?;
     let Some(document) = session.source.documents.get(document_id) else {
         return Ok(None);
     };
     document_text(session, document_id, document).map(Some)
-}
-
-fn ensure_document_imports_target(
-    session: &mut ProjectSession,
-    from_document: &dawn_language::identity::DocumentId,
-    kind: &SourceObjectKind,
-    reference: &str,
-    target_document: dawn_language::identity::DocumentId,
-) -> Result<(), ExportProjectError> {
-    let from_path = from_document.path();
-    let alias_base =
-        canonical_reference_alias(kind).ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_path.to_path_buf(),
-            reference: reference.to_string(),
-            message: format!("no canonical import alias exists for {kind:?} references"),
-        })?;
-    let document = session
-        .source
-        .documents
-        .get_mut(from_document)
-        .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_path.to_path_buf(),
-            reference: reference.to_string(),
-            message: "source document is missing from the source project".to_string(),
-        })?;
-    if document
-        .imports
-        .iter()
-        .any(|edge| edge.targets.contains(&target_document))
-    {
-        return Ok(());
-    }
-    let alias = available_import_alias(document, alias_base).ok_or_else(|| {
-        ExportProjectError::InvalidReference {
-            path: from_path.to_path_buf(),
-            reference: reference.to_string(),
-            message: format!("no import alias remains for `{alias_base}`"),
-        }
-    })?;
-    if target_document.module_id() != from_document.module_id() {
-        return Err(ExportProjectError::InvalidReference {
-            path: from_path.to_path_buf(),
-            reference: reference.to_string(),
-            message:
-                "dependency objects must be exposed through an explicitly declared export import"
-                    .to_string(),
-        });
-    }
-    document.imports.push(ImportEdge {
-        alias: alias.clone(),
-        source: ImportSource::LocalDocuments {
-            documents: vec![target_document.path().to_path_buf()],
-        },
-        targets: vec![target_document],
-    });
-    Ok(())
-}
-
-pub fn ensure_document_can_reference_source(
-    session: &mut ProjectSession,
-    from_document: &dawn_language::identity::DocumentId,
-    kind: SourceObjectKind,
-    identity: &SourceIdentity,
-) -> Result<(), ExportProjectError> {
-    session
-        .source
-        .documents
-        .get(identity.document_id())
-        .and_then(|document| {
-            document
-                .objects
-                .iter()
-                .find(|object| object.kind == kind && object.id == identity.object())
-        })
-        .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.path().to_path_buf(),
-            reference: identity.object().to_string(),
-            message: "target is missing from its source document".to_string(),
-        })?;
-    ensure_document_imports_target(
-        session,
-        from_document,
-        &kind,
-        identity.object(),
-        identity.document_id().clone(),
-    )
 }
 
 pub fn insert_sequence(
@@ -1460,33 +1377,12 @@ fn is_module_relative_path(path: &Utf8Path) -> bool {
             .all(|component| matches!(component, camino::Utf8Component::Normal(_)))
 }
 
-fn available_import_alias(document: &SourceDocument, base: &str) -> Option<String> {
-    if document.imports.iter().all(|import| import.alias != base) {
-        return Some(base.to_string());
-    }
-    (2_u32..)
-        .map(|suffix| format!("{base}-{suffix}"))
-        .find(|candidate| {
-            document
-                .imports
-                .iter()
-                .all(|import| import.alias != *candidate)
-        })
-}
-
-fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
-    match kind {
-        SourceObjectKind::EffectDefinition => Some("effects"),
-        SourceObjectKind::OperatorDefinition => Some("operators"),
-        SourceObjectKind::Curve => Some("curves"),
-        SourceObjectKind::Gradient => Some("gradients"),
-        SourceObjectKind::Sequence => Some("sequences"),
-        _ => None,
-    }
-}
-
 #[derive(Debug)]
 pub enum LoadProjectError {
+    InvalidImports {
+        path: Utf8PathBuf,
+        diagnostics: Vec<IoDiagnostic>,
+    },
     InvalidEntrypoint {
         path: Utf8PathBuf,
     },
@@ -1551,10 +1447,11 @@ impl fmt::Display for LoadProjectError {
             } => {
                 write!(formatter, "{path}: invalid reference {reference}")
             }
-            Self::InvalidEffect { path, diagnostics } => {
+            Self::InvalidEffect { path, diagnostics }
+            | Self::InvalidImports { path, diagnostics } => {
                 write!(
                     formatter,
-                    "{path}: invalid effect: {}",
+                    "{path}: invalid document: {}",
                     diagnostics
                         .iter()
                         .map(|diagnostic| diagnostic.message.as_str())

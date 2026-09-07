@@ -1,3 +1,5 @@
+import bursts from ["effects/impact-burst.effect.dawn"];
+
 effect MarkImpactBurst {
   param marks beats;
   param array<gradient> gradients;
@@ -19,7 +21,7 @@ effect MarkImpactBurst {
     if (gradient_count > 0) {
       for (int mark = 0; mark < mark_count(beats); mark = mark + 1) {
         float hit_time = mark_at(beats, mark, -999.0);
-        timeline.emit ImpactBurst {
+        timeline.emit bursts.ImpactBurst {
           start: hit_time + offset_seconds,
           duration: max(0.000000001, burst_seconds),
           target: target,

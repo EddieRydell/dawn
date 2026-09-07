@@ -1,6 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
 use dawn_language::identity::DocumentId;
+pub use dawn_language::imports::ImportSource;
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::AssetId;
 use indexmap::{IndexMap, IndexSet};
@@ -206,22 +207,6 @@ impl SourceDocument {
         objects: Vec<SourceObjectId>,
         kind: SourceDocumentKind,
     ) -> Result<Self, String> {
-        let mut aliases = IndexSet::new();
-        let mut targets = IndexSet::new();
-        for import in &imports {
-            if !aliases.insert(import.alias.clone()) {
-                return Err(format!("duplicate import alias `{}`", import.alias));
-            }
-            for target in &import.targets {
-                if !targets.insert(target.clone()) {
-                    return Err(format!(
-                        "document `{}:{}` is imported more than once",
-                        target.module_id(),
-                        target.path()
-                    ));
-                }
-            }
-        }
         let mut object_ids = IndexSet::new();
         for object in &objects {
             if Identifier::new(object.id.clone()).is_err() {
@@ -278,29 +263,26 @@ pub enum SourceDocumentKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportEdge {
-    pub(crate) alias: String,
-    pub(crate) source: ImportSource,
+    pub(crate) declaration: dawn_language::imports::ImportDeclaration,
     pub(crate) targets: Vec<DocumentId>,
 }
 
 impl ImportEdge {
+    pub fn declaration(&self) -> &dawn_language::imports::ImportDeclaration {
+        &self.declaration
+    }
+
     pub fn alias(&self) -> &str {
-        &self.alias
+        self.declaration.alias.as_str()
     }
 
     pub fn source(&self) -> &ImportSource {
-        &self.source
+        &self.declaration.source
     }
 
     pub fn targets(&self) -> &[DocumentId] {
         &self.targets
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ImportSource {
-    LocalDocuments { documents: Vec<Utf8PathBuf> },
-    DependencyExport { dependency: String, export: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

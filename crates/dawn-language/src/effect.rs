@@ -97,6 +97,10 @@ pub enum GradientSource {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectDefinition {
+    /// Statically linked generator child targets, in the same order as the
+    /// compiled effect's emitted-child slots.
+    pub generated_effect_targets: Box<[EffectRef]>,
+    pub emitted_references: Box<[crate::dsl::EmittedReference]>,
     pub id: EffectRef,
     pub source_name: String,
     pub display_name: String,
@@ -112,8 +116,11 @@ pub enum EffectImplementation {
 }
 
 impl EffectDefinition {
-    pub fn custom(id: EffectDefinitionId, compiled: CompiledEffect) -> Self {
+    pub fn custom(id: EffectDefinitionId, compilation: crate::dsl::EffectCompilation) -> Self {
+        let compiled = compilation.effect;
         Self {
+            generated_effect_targets: Box::new([]),
+            emitted_references: compilation.emitted_references,
             id: EffectRef::Custom(id),
             source_name: compiled.name().as_str().to_string(),
             display_name: compiled.name().as_str().to_string(),
@@ -213,6 +220,8 @@ static BUILTIN_EFFECT_DEFINITIONS: LazyLock<[EffectDefinition; 5]> = LazyLock::n
         ]
     };
     let make = |builtin, source_name: &str, display_name: &str, kind, params| EffectDefinition {
+        generated_effect_targets: Box::new([]),
+        emitted_references: Box::new([]),
         id: EffectRef::Builtin(builtin),
         source_name: source_name.to_string(),
         display_name: display_name.to_string(),

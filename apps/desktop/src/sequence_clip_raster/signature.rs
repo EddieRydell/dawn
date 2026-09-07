@@ -379,6 +379,10 @@ pub(super) fn hash_optional_effect_definition<H: Hasher>(
 }
 
 pub(super) fn hash_effect_definition<H: Hasher>(definition: &EffectDefinition, state: &mut H) {
+    definition.generated_effect_targets.len().hash(state);
+    for target in &definition.generated_effect_targets {
+        target.hash(state);
+    }
     match &definition.implementation {
         dawn_language::effect::EffectImplementation::Native(builtin) => builtin.hash(state),
         dawn_language::effect::EffectImplementation::Dsl(compiled) => {

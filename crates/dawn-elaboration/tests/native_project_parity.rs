@@ -37,7 +37,7 @@ fn native_effects_match_reference_dsl_in_real_project_frames() {
     {
         let id = EffectDefinitionId(SourceIdentity::from_document(
             document.clone(),
-            compiled.name().as_str().to_string(),
+            compiled.effect.name().as_str().to_string(),
         ));
         reference_project
             .definitions

@@ -8,10 +8,11 @@ mod optimize;
 mod parser;
 mod typecheck;
 
+use crate::imports::ImportDeclaration;
 use compiler::{compile_checked_effects, compile_checked_operators};
 pub use dawn_runtime::dsl::{
     BoundParams, CompiledEffect, CompiledOperator, DslBindCache, EffectKind, GeneratedEffect,
-    GeneratedEffectRef, GeneratorContext, OperatorInputDecl, OperatorRunContext, ParamDecl,
+    GeneratedEffectSlot, GeneratorContext, OperatorInputDecl, OperatorRunContext, ParamDecl,
     RunContext, RuntimeError, SignalSampler, VmWorkspace, bytecode::BytecodeProgram,
 };
 pub use diagnostic::Diagnostic;
@@ -27,7 +28,45 @@ pub use types::{
     Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
 };
 
-pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
+#[derive(Clone, Debug)]
+pub struct EffectImport {
+    pub declaration: ImportDeclaration,
+    pub span: lexer::TextSpan,
+    pub source_spans: Vec<lexer::TextSpan>,
+}
+
+impl PartialEq for EffectImport {
+    fn eq(&self, other: &Self) -> bool {
+        self.declaration == other.declaration
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompiledEffectDocument {
+    pub imports: Vec<EffectImport>,
+    pub effects: Vec<EffectCompilation>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectCompilation {
+    pub effect: CompiledEffect,
+    pub emitted_references: Box<[EmittedReference]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmittedReference {
+    pub reference: crate::imports::SourceReference,
+    pub span: lexer::TextSpan,
+}
+
+impl PartialEq for EmittedReference {
+    fn eq(&self, other: &Self) -> bool {
+        self.reference == other.reference
+    }
+}
+
+/// Compile a source document, retaining imports for the project linker.
+pub fn compile_effect_document(source: &str) -> Result<CompiledEffectDocument, Vec<Diagnostic>> {
     let module = parse_module(source)?;
     if !module.operators.is_empty() {
         return Err(vec![Diagnostic::new(
@@ -35,12 +74,37 @@ pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnost
             "operator declarations are not allowed in effect sources",
         )]);
     }
+    let imports = module.imports.clone();
     let module = check_module(module)?;
-    compile_checked_effects(module).map_err(|error| vec![error])
+    let effects = compile_checked_effects(module).map_err(|error| vec![error])?;
+    Ok(CompiledEffectDocument { imports, effects })
+}
+
+/// Standalone compilation has no project context to resolve imports.
+pub fn compile_effects(source: &str) -> Result<Vec<EffectCompilation>, Vec<Diagnostic>> {
+    let document = compile_effect_document(source)?;
+    if let Some(import) = document.imports.first() {
+        return Err(vec![Diagnostic::new(
+            import.span,
+            "effect imports require document compilation and project linking",
+        )]);
+    }
+    Ok(document.effects)
+}
+
+/// Parse import spans for structural path edits without recompiling bytecode.
+pub fn effect_source_imports(source: &str) -> Result<Vec<EffectImport>, Vec<Diagnostic>> {
+    Ok(parse_module(source)?.imports)
 }
 
 pub fn compile_operators(source: &str) -> Result<Vec<CompiledOperator>, Vec<Diagnostic>> {
     let module = parse_module(source)?;
+    if let Some(import) = module.imports.first() {
+        return Err(vec![Diagnostic::new(
+            import.span,
+            "imports are only supported in effect documents",
+        )]);
+    }
     if !module.effects.is_empty() {
         return Err(vec![Diagnostic::new(
             lexer::TextSpan { start: 0, end: 0 },
@@ -87,7 +151,7 @@ pub fn hash_compiled_effect<H: Hasher>(effect: &CompiledEffect, state: &mut H) {
     effect.kind.hash(state);
     hash_bytecode(&effect.bytecode, state);
     effect.emit_fields.hash(state);
-    effect.generated_effects.hash(state);
+    effect.generated_effect_count.hash(state);
 }
 
 fn hash_bytecode<H: Hasher>(bytecode: &BytecodeProgram, state: &mut H) {
